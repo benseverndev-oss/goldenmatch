@@ -23,6 +23,7 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import combinations
+from typing import Any
 
 import numpy as np
 
@@ -2691,7 +2692,7 @@ def labels_from_memory_store(store, dataset: str | None = None) -> list[tuple[in
 
 
 def _build_tf_tables(
-    df: pl.DataFrame, mk: MatchkeyConfig,
+    df: Any, mk: MatchkeyConfig,
 ) -> tuple[dict[str, dict[str, float]] | None, dict[str, float] | None]:
     """Per-value relative frequencies for TF-adjustment fields.
 
@@ -2710,8 +2711,11 @@ def _build_tf_tables(
     tf_freqs: dict[str, dict[str, float]] = {}
     tf_collision: dict[str, float] = {}
     for f in tf_fields:
-        if f.field not in df.columns:
-            continue
+        # No column guard here: it was a second copy of the same
+        # polars-era `in df.columns` test, equally wrong on an Arrow
+        # table, and duplicating it gave the check two places to be
+        # wrong. `value_frequencies` owns the lookup and returns {} for
+        # a genuinely absent column, which the next line already skips.
         freqs = value_frequencies(df, f.field, f.transforms)
         if not freqs:
             continue
