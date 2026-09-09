@@ -2,6 +2,27 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-09-09 -- ADR 0065: the FS field-dependence correction cannot reach its target
+- Added **[ADR 0065](../decisions/0065-fs-field-dependence-cannot-reach-its-target.md)**.
+  The conditional-independence violation on `historical_50k` is real and reproduces
+  unchanged from July: `first_name x surname` co-agree **5.57x** independence among
+  non-matches, **+2.48 bits** over-counted, on **97%** of false merges -- despite
+  precision moving 0.75 -> 0.939 in between, because the other levers never touched the
+  independence assumption.
+- **But the correction cannot see it.** `_compute_joint_corrections` evaluates only
+  fields OUTSIDE the blocking conditioning, and on person data the blocking key IS the
+  correlated pair. The panel reports one eligible field, so ZERO pairs are evaluated.
+  Three A/B runs returned `+0.0000` on all five datasets; none was a verdict, because
+  the lever never executed. Shipped default-OFF (#2914) with the machinery intact.
+- **Silence was the real defect.** The lever logged only on a hit, so "enabled and found
+  nothing" and "never enabled" were indistinguishable -- the same shape that hid the TF
+  adjustment doing nothing. Both inert paths now warn. The first attempt used
+  `logger.info`, which these runs filter, so the fix for silence was itself silent.
+- Two findings carried out of it: the marginal lever (`GOLDENMATCH_FS_POST_BLOCKING_U`)
+  is the better candidate for this effect and is next to measure, and
+  `GOLDENMATCH_FS_CALIBRATED=posterior` collapses `historical_50k` precision
+  **0.939 -> 0.361** -- found by accident, unexplained, its own investigation.
+
 ## 2026-09-07 -- ADR 0064: the identity control plane stays on Postgres/SQLite
 - Added **[ADR 0064](../decisions/0064-identity-control-plane-stays-on-postgres-sqlite.md)**,
   closing the standing "should we build a custom Arrow-native relational store for the
