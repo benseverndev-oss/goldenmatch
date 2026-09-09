@@ -66,10 +66,37 @@ correction measures it over BLOCKED pairs across non-blocking fields.
   blocked population), and it is the next thing to measure rather than
   redesigning the joint correction.
 - The July spike's own open question — whether the correction survives
-  posterior calibration rather than min-max — is now moot, and separately,
-  **`GOLDENMATCH_FS_CALIBRATED=posterior` collapses `historical_50k` precision
-  0.939 → 0.361** (F1 0.832 → 0.512). Found by accident while holding it
-  constant across both arms. Unexplained, and its own investigation.
+  posterior calibration rather than min-max — is now moot.
+
+## Addendum: the posterior collapse is documented, not a defect
+Holding `GOLDENMATCH_FS_CALIBRATED=posterior` across both arms collapsed
+`historical_50k` precision **0.939 → 0.361** (F1 0.832 → 0.512), at 94.5–96.2%
+match rates. This was recorded here as "unexplained". **It is not.** The
+explanation was already in `probabilistic.py`, and the investigation's only
+real finding is that nobody read it before running the experiment — including
+me.
+
+The posterior score is `σ(prior_w + W)` where `W = Σ log2(m/u)` and
+`prior_w = log2(λ/(1-λ))` is the WITHIN-BLOCK prior. A fixed posterior cut is
+therefore an evidence bar that MOVES with λ: 0.99 is exactly `W ≥ 6.63 −
+prior_w`. `historical_50k` has λ≈0.92, so `prior_w ≈ 3.5` bits and the bar
+drops to `W ≥ ~3.1` bits — weak pairs clear it and precision collapses.
+`_fs_evidence_cut`'s docstring states this and predicts precision 0.48; the
+measurement here is 0.361, the same phenomenon at the same order.
+
+Two corrections to the record:
+- The run DID apply the calibrated 0.99 cut, not the fallback 0.50. An earlier
+  reading of this said otherwise, by carrying a `0.5000` warning over from a
+  DIFFERENT run where linear mode makes 0.50 correct. Check which run a log
+  line came from before reasoning from it.
+- This is why the calibration default is `linear`, and it is not a reason to
+  change that.
+
+The remedy also already ships and is default-off:
+`GOLDENMATCH_FS_EVIDENCE_CUT=c` makes the threshold `σ(c + prior_w)`, which is
+exactly `W ≥ c` — prior- AND endpoint-invariant, so blocking's λ cannot lower
+the bar. Measuring posterior WITH an evidence cut is the experiment worth
+running; posterior with a fixed cut is a known-bad configuration.
 
 ## Method note
 The diagnostic that establishes the premise lived only on a spike branch and was
