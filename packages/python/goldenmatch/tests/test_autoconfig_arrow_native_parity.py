@@ -114,6 +114,19 @@ def _config_matchkeys(cfg):
     )
 
 
+# Measured on this machine: [shared-email-switchboard] is 39.3s against an
+# UNMODIFIED main, and the CI lane runs pytest with --timeout=120
+# --timeout-method=thread. That method kills the WORKER, so a test that
+# exceeds it reports as "[gw1] node down: Not properly terminated" and a
+# crashed worker -- not as a timeout. Under xdist contention on a shared
+# runner this one tips over, which is how it dequeued a PR that had added
+# 9% to it (#2908). A third of the global budget is not enough headroom
+# for a test that configures the same shape twice, on two engines.
+#
+# Same remedy the other genuinely-slow tests here use
+# (test_zeroconfig_accuracy_floor). This does NOT loosen an assertion: the
+# test passes, it is the wall budget that was wrong.
+@pytest.mark.timeout(300)
 @pytest.mark.parametrize("shape", list(_SHAPES))
 def test_arrow_native_cluster_equivalence(shape):
     """Zero-config ``dedupe_df`` finds the same duplicate count on a pa.Table
