@@ -101,3 +101,55 @@ def test_emresult_roundtrip_carries_corrections():
     assert back.joint_corrections == [("first_name", "surname", 1.5)]
     # off -> not serialized
     assert "joint_corrections" not in _em(None).to_dict()
+
+
+def test_detects_a_pair_the_blocking_key_conditions():
+    """A BLOCKING-conditioned pair must be corrected too — the case that
+    matters, and the one this used to exclude.
+
+    `_neutral_u_for` gives a conditioned field a fixed u ([0.50, 0.50]) rather
+    than a random-pair estimate, which bounds its MARGINAL weight to about
+    log2(0.95/0.50) = +0.93 bits. That says nothing about the joint: two
+    conditioned fields each contribute ~0.93 bits SUMMED as independent, while
+    among blocked non-matches they co-agree far above the 0.25 independence
+    baseline their neutral priors imply.
+
+    On a name-blocked person shape both first_name and surname are conditioned,
+    so excluding them meant the dominant correlated pair — 5.57x lift, +2.48
+    bits, 97% of false merges (ADR 0065) — could never be evaluated, and the
+    panel measured +0.0000 three times over.
+
+    Same data as test_detects_correlated_pair; the ONLY difference is that both
+    fields are declared blocking-conditioned.
+    """
+    rows = [[1, 1, 0]] * 40 + [[0, 0, 0]] * 40 + [[1, 0, 0]] * 10 + [[0, 1, 0]] * 10
+    comp = np.array(rows, dtype=np.int64)
+    cond = np.zeros((len(comp), 3), dtype=bool)
+    m = {"first_name": [0.1, 0.9], "surname": [0.1, 0.9], "city": [0.5, 0.5]}
+    u = {"first_name": [0.5, 0.5], "surname": [0.5, 0.5], "city": [0.5, 0.5]}
+    jc = _compute_joint_corrections(
+        comp, _mk(), m, u, 0.05, cond, {"first_name", "surname"},
+    )
+    pair = [t for t in jc if {t[0], t[1]} == {"first_name", "surname"}]
+    assert pair, (
+        "a blocking-conditioned pair must still be corrected: the exclusion is "
+        "about MARGINAL information, not the joint double-count"
+    )
+    assert pair[0][2] >= P._FD_MIN_BITS
+
+
+def test_single_comparison_field_is_reported_not_silent():
+    """Fewer than two comparison fields cannot produce a pair. That must SAY so
+    rather than return an empty list, because 'enabled and found nothing' and
+    'never enabled' were indistinguishable for three panel runs."""
+    from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+
+    mk = MatchkeyConfig(
+        name="fs", type="probabilistic",
+        fields=[MatchkeyField(field="only", scorer="exact", levels=2)],
+    )
+    comp = np.array([[1]] * 20 + [[0]] * 20, dtype=np.int64)
+    cond = np.zeros((len(comp), 1), dtype=bool)
+    m = {"only": [0.1, 0.9]}
+    u = {"only": [0.5, 0.5]}
+    assert _compute_joint_corrections(comp, mk, m, u, 0.05, cond, set()) == []
