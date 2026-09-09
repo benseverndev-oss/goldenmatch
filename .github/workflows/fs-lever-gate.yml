@@ -149,6 +149,13 @@ jobs:
             echo "datasets=--datasets person,household_hardneg,cotenant_hardneg,ncvr_synthetic" >> "$GITHUB_OUTPUT"
             echo "label=synthetic over-merge panel" >> "$GITHUB_OUTPUT"
           fi
+      - name: Partition-fingerprint self-test
+        # The A/B reports whether the lever changed the CLUSTERING, not only
+        # the F1. That column's useful answer is "same", which is also what a
+        # broken digest returns -- so prove it can tell two partitions apart
+        # before trusting it to report an absence.
+        run: |
+          uv run python -m scripts.bench_er_headtohead.ab_lever             --env GOLDENMATCH_UNUSED --self-test
       - name: FS lever A/B (${{ steps.scope.outputs.label }})
         # `lever` reaches the script through env, never interpolated into
         # the shell: a `${{ }}` expansion inside `run:` is the
