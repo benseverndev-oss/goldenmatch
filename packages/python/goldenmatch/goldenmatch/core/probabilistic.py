@@ -144,6 +144,21 @@ def _fs_evidence_cut() -> float | None:
 def _fs_calibration_mode() -> str:
     """Return the active FS score-calibration mode: 'posterior' or 'linear'."""
     val = os.environ.get("GOLDENMATCH_FS_CALIBRATED")
+    # EMPTY means unset, not linear. A caller that exports the variable
+    # with an empty value -- `GOLDENMATCH_FS_CALIBRATED= cmd`, or a CI
+    # `env:` key fed by an unset workflow input, which GitHub renders as
+    # "" rather than omitting the key -- used to fall past the `is None`
+    # branch below and silently take the default. That branch is what
+    # makes an evidence cut imply posterior scoring, so the effect was to
+    # set GOLDENMATCH_FS_EVIDENCE_CUT and have it never consulted:
+    # `compute_thresholds` only reads it inside `if calibrated:`.
+    #
+    # Measured: fs-lever-gate run 34393285281 dispatched with
+    # evidence_cut=9 produced a historical_50k OFF arm byte-identical to
+    # the linear default (F1 0.8320, P 0.939, R 0.747) -- the tell that
+    # the cut never applied, since it moves BOTH arms.
+    if val is not None and not val.strip():
+        val = None
     if val is None:
         # An evidence cut is defined on the posterior (log-odds) axis, so it
         # forces posterior scoring unless the caller explicitly picked linear.
