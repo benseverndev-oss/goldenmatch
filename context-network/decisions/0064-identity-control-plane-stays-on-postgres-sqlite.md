@@ -96,13 +96,14 @@ processed (verified to fire, not assumed to).
 ## Addendum, 2026-09-08: follow-on item 2, first results
 
 The 12.6 GB figure above is superseded. Item 2 was attacked in four slices;
-the peak RSS at 5M cold is now **8,197.4 MB (sqlite) / 8,200.3 MB (postgres)**
-— **−35%** — measured against the same rungs, backends and
+the peak RSS at 5M cold is now **7,791.1 MB (sqlite) / 7,800.3 MB (postgres)**
+— **−38%** — measured against the same rungs, backends and
 `pair_scores=spanning` as the original
 ([run 34256747975](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34256747975)
 for #2903,
 [run 34266817099](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34266817099)
-and [run 34270540909](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34270540909)
+[run 34270540909](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34270540909)
+and [run 34274766982](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34274766982)
 for #2904). Wall is unchanged throughout: every slice is inside the ~19%
 run-to-run variance the store wall already carries, which is the point — this
 is a memory result, not a speed one.
@@ -115,6 +116,7 @@ is a memory result, not a speed one.
 | #2903 | streamed prep, row dicts bounded at O(chunk) | **8,996–9,010 MB (−28%)** |
 | #2904 | post-prep maps derived, not stored | **8,390–8,405 MB (−33% cumulative)** |
 | #2904 | one rowid index + dense lists, not four dicts | **8,197–8,200 MB (−35% cumulative)** |
+| #2904 | sha256 digest retained, not its 64-char hex | **7,791–7,800 MB (−38% cumulative)** |
 
 Three things worth carrying forward.
 
@@ -171,9 +173,31 @@ converted the reshape from a guess into a bounded estimate; had it returned
 It also came free on wall — prep fell ~3–5 s, one dict write per row instead
 of four.
 
-**Residual, and where the next slice has to go.** Of the 8.2 GB: ~2.1 GB before
-prep, ~0.4 GB the filtered frame, **~5.3 GB the derived structures**, ~0.35 GB
-the write loop. The 5.5 GB is five per-row Python maps over an identical
+**Representation change is the one that pays, and it is predictable.** The
+digest slice was sized at ~445 MB — a 64-char hex `str` is ~113 B of Python
+object against the 32 B of digest it encodes — and returned **−400 MB
+(postgres) / −406 MB (sqlite)**, ~91% of the estimate. That is the first
+prediction in this sequence to land, and the reason is that it was about
+REPRESENTATION of a known-size value rather than about allocator or container
+behaviour, which is where the other three estimates went wrong in both
+directions.
+
+It is not free either: the hex is regenerated on read, and non-store wall rose
+~8 s on both backends. The same trade as the post-prep views, at the same kind
+of rate.
+
+**Residual, and where the next slice has to go.** Of the 7.8 GB: ~2.1 GB before
+prep, ~0.45 GB the filtered frame, **~4.9 GB the derived structures**, ~0.35 GB
+the write loop. What remains is dominated by `rowid_to_payload`, and by more
+than its own dicts: each payload holds the row's field VALUES as Python
+objects, materialized out of Arrow by `select_dicts`. So the ~1.6 GB of dict
+containers is only part of it — the retained strings behind them are the rest,
+and no representation trick reaches them. Not storing dicts means not
+retaining the values at all, i.e. re-reading from Arrow at access time. The
+write loop touches members in CLUSTER order, not row order, so that is a
+random single-row Arrow access per member and a plausible wall regression;
+whether it is affordable is a measurement nobody has taken. That measurement,
+not the rewrite, is the correct next step. The 5.5 GB is five per-row Python maps over an identical
 5M-key set — payload 324 B/row, hash 157, primary 118, source 52 — where the
 container overhead is paid five times and the values are stored as individual
 Python objects. Streaming cannot touch it, because those values outlive the
