@@ -1614,6 +1614,68 @@ def _train_em_from_counts_native(
     )
 
 
+def _combine_calibrated_threshold(sessions) -> float | None:
+    """Pair-weighted mean calibrated link threshold over the passes that produced one.
+
+    Passes that did not calibrate are EXCLUDED rather than counted as zero: a
+    missing threshold means "this pass could not choose a cut", not "this pass
+    voted for 0.0", and averaging a zero in would drag the cut toward merging
+    everything. That is the opposite of the rule used for
+    :func:`_combine_joint_corrections`, where a missing entry genuinely does
+    mean "no excess here" -- the asymmetry is deliberate, and in both cases the
+    unsafe direction (over-merge) is the one being avoided.
+    """
+    have = [(em.calibrated_link_threshold, w) for _, em, w in sessions
+            if getattr(em, "calibrated_link_threshold", None) is not None and w > 0]
+    if not have:
+        return None
+    total = sum(w for _, w in have)
+    if total <= 0:
+        return None
+    return sum(t * w for t, w in have) / total
+
+
+def _combine_joint_corrections(sessions) -> list[tuple[str, str, float]] | None:
+    """Pair-weighted mean excess per corrected field pair across EM passes.
+
+    Each pass estimates the excess over its OWN non-match population, so passes
+    do not agree on which pairs clear ``_FD_MIN_BITS``: a pair the blocking key
+    conditions in one pass runs free in another. A session that did NOT report a
+    pair contributes 0 to that pair's mean rather than being skipped -- the mean
+    is over all the evidence, not only the evidence that agreed.
+
+    That biases the result DOWNWARD, deliberately. These bits are SUBTRACTED, so
+    over-stating them costs recall on true matches, and under-stating them only
+    leaves some of the double-count in place. Given this correction has never
+    once reached scoring, the first run that does should err toward doing too
+    little.
+
+    Returns None when nothing survives, which is exactly "no correction".
+    """
+    weight_all = sum(w for _, _, w in sessions)
+    if weight_all <= 0:
+        return None
+    totals: dict[tuple[str, str], float] = {}
+    for _, em, w in sessions:
+        for a, b, bits in (getattr(em, "joint_corrections", None) or []):
+            key = (a, b) if a <= b else (b, a)
+            totals[key] = totals.get(key, 0.0) + bits * w
+    if not totals:
+        return None
+    out = [(a, b, t / weight_all) for (a, b), t in totals.items()]
+    out = [t for t in out if t[2] >= _FD_MIN_BITS]
+    out.sort(key=lambda t: t[2], reverse=True)
+    if not out:
+        logger.warning(
+            "FS field-dependence: %d pair(s) were corrected in individual EM "
+            "passes but none survived the pair-weighted mean across passes at "
+            "_FD_MIN_BITS=%.2f -- no correction applied.",
+            len(totals), _FD_MIN_BITS,
+        )
+        return None
+    return out[:_FD_MAX_PAIRS]
+
+
 def _combine_em_sessions(
     mk: MatchkeyConfig,
     sessions: list[tuple[tuple[str, ...], EMResult, float]],
@@ -1695,6 +1757,24 @@ def _combine_em_sessions(
         proportion_matched=proportion,
         tf_freqs=base.tf_freqs,
         tf_collision=base.tf_collision,
+        # Hand-enumerated constructors are where a later field goes to die:
+        # `tf_freqs` is carried here precisely because forgetting it once made
+        # a model "look complete" while silently missing its TF tables, and
+        # `joint_corrections` -- added afterwards -- was never added to the
+        # list. Every panel measurement of the field-dependence lever, back to
+        # the original spike, scored a correction this function had already
+        # discarded: estimated correctly, logged, then dropped in transit.
+        joint_corrections=_combine_joint_corrections(sessions),
+        # Same drop, second victim. This one is behind a default-off flag, so
+        # it never reached the panel -- but a user who enables
+        # GOLDENMATCH_FS_CALIBRATE_THRESHOLD on a multi-pass run gets it
+        # computed, logged as "FS calibrated link threshold: X", and discarded
+        # here, leaving the fixed fallback cutoff and a message saying EM
+        # produced no calibrated cutoff. Pair-weighted like `m` above, and for
+        # the same reason: a pass contributing 10 pairs and one contributing
+        # 10,000 are not equal evidence about where the cut belongs.
+        calibrated_link_threshold=_combine_calibrated_threshold(sessions),
+        training_config=base.training_config,
     )
 
 

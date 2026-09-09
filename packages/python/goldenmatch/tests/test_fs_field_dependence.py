@@ -218,3 +218,117 @@ def test_probe_gated_by_its_own_env(monkeypatch, caplog, val, fires):
     with caplog.at_level("WARNING"):
         _compute_joint_corrections(comp, _mk(), m, u, 0.05, cond, set())
     assert ("field-dependence probe" in caplog.text) is fires
+
+
+# ---------------------------------------------------------------------------
+# _combine_em_sessions must not silently drop EMResult fields
+#
+# The correction was estimated correctly, logged, applied by every scoring
+# entry point -- and thrown away in transit by a hand-enumerated constructor
+# that predated it. Every panel measurement of this lever, back to the original
+# spike, scored a model the combine step had already stripped. The regression
+# tests below pin the behaviour; the LAST one pins the CLASS, so the next field
+# added to EMResult cannot repeat it silently.
+# ---------------------------------------------------------------------------
+
+def _sess_em(jc=None, thr=None):
+    return EMResult(
+        m_probs={f.field: [0.1, 0.9] for f in _mk().fields},
+        u_probs={f.field: [0.5, 0.5] for f in _mk().fields},
+        match_weights={f.field: [-2.3, 0.85] for f in _mk().fields},
+        converged=True, iterations=5, proportion_matched=0.05,
+        joint_corrections=jc, calibrated_link_threshold=thr,
+    )
+
+
+def test_combine_carries_joint_corrections():
+    jc = [("first_name", "surname", 2.48)]
+    out = P._combine_em_sessions(_mk(), [
+        (("first_name",), _sess_em(jc), 100.0),
+        (("surname",), _sess_em(jc), 100.0),
+    ])
+    assert out.joint_corrections == [("first_name", "surname", 2.48)]
+
+
+def test_combine_pair_weights_a_pair_only_one_pass_found():
+    """A pass that did not report the pair counts as 0 -- biased DOWNWARD on
+    purpose, because these bits are subtracted and over-stating costs recall."""
+    out = P._combine_em_sessions(_mk(), [
+        (("first_name",), _sess_em([("first_name", "surname", 2.48)]), 100.0),
+        (("surname",), _sess_em(None), 100.0),
+    ])
+    assert out.joint_corrections == [("first_name", "surname", pytest.approx(1.24))]
+
+
+def test_combine_normalises_pair_order():
+    out = P._combine_em_sessions(_mk(), [
+        (("first_name",), _sess_em([("first_name", "surname", 2.48)]), 100.0),
+        (("surname",), _sess_em([("surname", "first_name", 2.48)]), 100.0),
+    ])
+    assert out.joint_corrections == [("first_name", "surname", pytest.approx(2.48))]
+
+
+def test_combine_drops_a_pair_below_the_floor_and_says_so(caplog):
+    with caplog.at_level("WARNING"):
+        out = P._combine_em_sessions(_mk(), [
+            (("first_name",), _sess_em([("first_name", "surname", 0.6)]), 1.0),
+            (("surname",), _sess_em(None), 100.0),
+        ])
+    assert out.joint_corrections is None
+    assert "none survived the pair-weighted mean" in caplog.text
+
+
+def test_combine_carries_calibrated_link_threshold():
+    """Excluded, not zero-weighted: a pass that could not calibrate did not
+    vote for 0.0, and averaging one in would drag the cut toward over-merge."""
+    out = P._combine_em_sessions(_mk(), [
+        (("first_name",), _sess_em(thr=0.90), 300.0),
+        (("surname",), _sess_em(thr=None), 100.0),
+    ])
+    assert out.calibrated_link_threshold == pytest.approx(0.90)
+
+
+def test_no_emresult_field_is_silently_dropped_by_combine():
+    """THE CLASS GUARD.
+
+    Every field on EMResult must be either carried through the combine or
+    listed here as deliberately recomputed. `joint_corrections` was added to
+    EMResult long after this constructor was written and nothing forced anyone
+    to notice -- so the lever ran inert for months while its logs said it was
+    working. A new field now fails this test until it is classified.
+    """
+    import dataclasses
+
+    # Recomputed from the sessions rather than carried -- combining them IS the
+    # job of this function, so a distinctive input value must NOT survive.
+    RECOMPUTED = {
+        "m_probs", "u_probs", "match_weights",
+        "converged", "iterations", "proportion_matched",
+    }
+    # Internal provenance, not part of the trained model.
+    INTERNAL = {"_source_schema_version"}
+
+    fields = [f.name for f in dataclasses.fields(EMResult)]
+    sessions = [
+        (("first_name",), _sess_em([("first_name", "surname", 2.48)], 0.9), 100.0),
+        (("surname",), _sess_em([("first_name", "surname", 2.48)], 0.9), 100.0),
+    ]
+    sessions[0][1].tf_freqs = {"first_name": {"smith": 0.1}}
+    sessions[1][1].tf_freqs = {"first_name": {"smith": 0.1}}
+    sessions[0][1].tf_collision = {"first_name": 0.01}
+    sessions[1][1].tf_collision = {"first_name": 0.01}
+    sessions[0][1].training_config = {"marker": True}
+    sessions[1][1].training_config = {"marker": True}
+
+    out = P._combine_em_sessions(_mk(), sessions)
+    dropped = [
+        n for n in fields
+        if n not in RECOMPUTED and n not in INTERNAL
+        and getattr(sessions[0][1], n) is not None
+        and getattr(out, n) is None
+    ]
+    assert not dropped, (
+        f"_combine_em_sessions drops {dropped} -- carry them, or add them to "
+        f"RECOMPUTED/INTERNAL with a reason. This is the bug that made the "
+        f"field-dependence correction inert."
+    )
