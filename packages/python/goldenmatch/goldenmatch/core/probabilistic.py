@@ -394,8 +394,32 @@ def _compute_joint_corrections(
     if W <= 0:
         return []
 
-    # Top-level agreement mask per regular (non-blocking) field.
-    fields = [(j, f) for j, f in enumerate(mk.fields) if f.field not in always_conditioned]
+    # Top-level agreement mask per field -- INCLUDING blocking-conditioned
+    # ones, which this deliberately no longer excludes.
+    #
+    # The exclusion was defensible and aimed at the wrong quantity. A
+    # conditioned field carries no MARGINAL information inside the block, so
+    # `_neutral_u_for` gives it a fixed u ([0.50, 0.50] at 2 levels) instead
+    # of a random-pair estimate -- a bounded agreement weight, roughly
+    # log2(0.95/0.50) = +0.93 bits, plus a disagreement penalty. That fixes
+    # the marginal explosion. It says nothing about the JOINT.
+    #
+    # On a name-blocked person shape both first_name and surname are
+    # conditioned, each contributing ~0.93 bits, SUMMED as independent --
+    # while among blocked non-matches they co-agree at ~0.97 against an
+    # independence baseline of 0.50*0.50 = 0.25. That is log2(0.97/0.25) =
+    # ~+1.96 bits over-counted on 97% of false merges (ADR 0065), almost
+    # exactly the pair's whole summed contribution -- which is the right
+    # answer, because inside the block name agreement is not merely
+    # uninformative but ANTI-informative: false merges agree on first_name
+    # 98.5% of the time against 83.7% for true merges.
+    #
+    # Excluding them is why this correction measured nothing on the panel
+    # three times: the dominant correlated pair IS the blocking key, so
+    # zero pairs were ever evaluated. The neutral prior is what makes the
+    # arithmetic well-defined here -- it is a known independence baseline
+    # rather than an estimate conditioned on the same population.
+    fields = list(enumerate(mk.fields))
     top = {}
     for j, f in fields:
         lv = comp_matrix[:, j]
@@ -416,21 +440,14 @@ def _compute_joint_corrections(
             out.append((fa.field, fb.field, excess))
     out.sort(key=lambda t: t[2], reverse=True)
     if len(fields) < 2:
-        # The correction only considers fields NOT conditioned by blocking.
-        # When the blocking key covers most comparison fields, fewer than
-        # two remain and NO pair is ever evaluated -- so it returns empty
-        # for a structural reason, not because it measured low excess.
-        # Measured on a name-blocked person shape: always_conditioned =
-        # {dob, first_name, surname}, leaving one eligible field. The pair
-        # the field-dependence DIAGNOSTIC names (first_name x surname, 5.57x
-        # lift over random pairs) is inside that exclusion by construction.
+        # Reachable only on a matchkey with fewer than two comparison fields
+        # now that blocking-conditioned fields are included. It used to fire
+        # constantly on person shapes, where the exclusion left one field.
         logger.warning(
-            "FS field-dependence: enabled, but only %d comparison field(s) "
-            "are outside the blocking conditioning (%s), so no field PAIR "
-            "can be evaluated. Excluded as blocking-conditioned: %s.",
+            "FS field-dependence: enabled, but the matchkey has only %d "
+            "comparison field(s) (%s), so no field PAIR can be evaluated.",
             len(fields),
             ", ".join(f.field for _, f in fields) or "none",
-            ", ".join(sorted(always_conditioned)) or "none",
         )
         return []
 
