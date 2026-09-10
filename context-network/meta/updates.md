@@ -2,6 +2,21 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-09-10 -- ADR 0066: the FS field-dependence correction runs, and loses to a higher bar
+- Added **[ADR 0066](../decisions/0066-fs-field-dependence-runs-and-loses-to-a-higher-bar.md)**,
+  superseding 0065. The panel's `+0.0000` hid THREE stacked defects, each alone enough to
+  keep the correction out of scoring: blocking-conditioned pairs excluded (#2918), the EM
+  combine rebuilding `EMResult` without `joint_corrections`, and three of four native
+  routes gating on a matchkey-only check that cannot see a model-carried adjustment.
+- **Once it ran, a single-bar A/B could not judge it, in either direction** -- the
+  correction shrinks the evidence scale, so c=9 read -0.7630 on cotenant and c=3 read
+  +0.0342, both artifacts. Best-achievable per arm: ties on person and ncvr, loses on
+  historical_50k, household and cotenant. Stays default-OFF.
+- The durable output is instrumentation: a partition digest in `ab_lever` (flat F1 now
+  says inert vs absorbed), one native routing gate with a guard test, and a guard test on
+  `_combine_em_sessions` dropping fields. `GOLDENMATCH_FS_CALIBRATE_THRESHOLD` was found
+  inert on multi-pass runs by the same constructor bug and is fixed too.
+
 ## 2026-09-09 -- ADR 0065: the FS field-dependence correction cannot reach its target
 - Added **[ADR 0065](../decisions/0065-fs-field-dependence-cannot-reach-its-target.md)**.
   The conditional-independence violation on `historical_50k` is real and reproduces
