@@ -55,6 +55,23 @@ def _split_edge_work_budget(n_rows: int, override: int | None = None) -> int:
     return max(_DEFAULT_SPLIT_EDGE_WORK_BUDGET, int(n_rows) * _SPLIT_EDGE_BUDGET_PER_ROW)
 
 
+#: Scores within this of a component's weakest tree edge count as tied with it.
+_SPLIT_TIE_EPS = 1e-9
+
+
+def _split_ties_level() -> bool:
+    """``GOLDENMATCH_CLUSTER_SPLIT_TIES=level``: cut every tied weakest tree edge at once.
+
+    Default OFF: ``split_oversized_cluster_to_size`` cuts ONE weakest edge, the first in
+    canonical endpoint order (#2935). That removed the insertion-order dependence, but
+    which tied edge goes is still arbitrary, and on historical_50k the canonical choice
+    scored F1 0.8274 where the old insertion order happened to score 0.8320. A level cut
+    is single-linkage at that height: the components it leaves do not depend on which
+    tied edge sorts first, nor on which of several equal-weight spanning trees Kruskal
+    built. Measurement lever until the panel says otherwise."""
+    return os.environ.get("GOLDENMATCH_CLUSTER_SPLIT_TIES", "").strip().lower() == "level"
+
+
 def _record_unmerge_corrections(
     pairs: list[tuple[int, int]],
     memory_store: MemoryStore | None,
@@ -279,6 +296,7 @@ def split_oversized_cluster_to_size(
                  "oversized": size > max_size, "pair_scores": pair_scores,
                  **_confidence_fields(pair_scores, size)}]
 
+    level_ties = _split_ties_level()
     out_order: list[frozenset[int]] = []
     work: list[tuple[set[int], list]] = [(set(members), list(tree_edges))]
     while work:
@@ -286,13 +304,23 @@ def split_oversized_cluster_to_size(
         if len(node_set) <= max_size or not edges:
             out_order.append(frozenset(node_set))
             continue
-        weakest = min(edges, key=lambda e: e[2])   # first-minimum, same as today
-        remaining = [e for e in edges if e is not weakest]
+        remaining = None
+        if level_ties:
+            floor = min(e[2] for e in edges) + _SPLIT_TIE_EPS
+            remaining = [e for e in edges if e[2] > floor]
+            if not remaining:
+                # Every tree edge ties: the tree carries no split information, and a
+                # level cut would shatter the component into singletons (a block of
+                # exact duplicates all scoring 1.0). Peel one edge instead.
+                remaining = None
+        if remaining is None:
+            weakest = min(edges, key=lambda e: e[2])   # first-minimum, same as today
+            remaining = [e for e in edges if e is not weakest]
         uf = UnionFind()
         uf.add_many(list(node_set))
         for a, b, _s in remaining:
             uf.union(a, b)
-        comps = uf.get_clusters()                   # 2 components
+        comps = uf.get_clusters()                   # 2 components (more under a level cut)
         node_to_rep = {n: uf.find(n) for n in node_set}
         rep_to_edges: dict[int, list] = {}
         for e in remaining:
