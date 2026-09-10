@@ -7277,8 +7277,10 @@
             "aliases_of",
             "are_equivalent",
             "canonical_form",
+            "canonicals_of",
             "export_alias_forms",
-            "is_available"
+            "is_available",
+            "normalize_given_name"
           ]
         },
         {
