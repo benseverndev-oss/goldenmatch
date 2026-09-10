@@ -79,7 +79,75 @@ def _f1(name: str) -> dict | None:
     res = goldenmatch.dedupe_df(df, config=cfg)
     wall = time.perf_counter() - t0
     ev = evaluate_clusters(res.clusters, gt).summary()
-    return {"f1": ev["f1"], "p": ev["precision"], "r": ev["recall"], "wall": wall}
+    pairs, digest = _partition_fingerprint(res.clusters)
+    return {
+        "f1": ev["f1"], "p": ev["precision"], "r": ev["recall"], "wall": wall,
+        "pairs": pairs, "digest": digest,
+    }
+
+
+def _partition_fingerprint(clusters) -> tuple[int, str]:
+    """Predicted-pair count + a stable digest of the multi-member partition.
+
+    F1/P/R are the headline, and a lever that leaves them flat to four decimals
+    reads as "did nothing" -- which is TWO different findings wearing the same
+    face. Either the lever never reached scoring, or it reached it and the
+    clustering absorbed the change (an edge alters connected components only
+    when it was a BRIDGE; cutting a redundant one inside a dense cluster is
+    real work with no visible effect).
+
+    The digest separates them without a debugger: identical means the partition
+    is byte-identical and the lever is INERT; different-with-flat-F1 means it is
+    ACTIVE and absorbed. Built from the same expansion ``evaluate_clusters``
+    scores, so it measures the object the metric is computed from, not a proxy.
+    """
+    import hashlib
+    from itertools import combinations
+
+    groups = []
+    pairs = 0
+    for info in clusters.values():
+        members = info.get("members", [])
+        if len(members) < 2:
+            continue
+        ms = sorted(map(str, members))
+        pairs += sum(1 for _ in combinations(ms, 2))
+        groups.append(",".join(ms))
+    h = hashlib.sha256("|".join(sorted(groups)).encode("utf-8")).hexdigest()
+    return pairs, h[:12]
+
+
+def _self_test() -> int:
+    """Prove the partition fingerprint can tell two partitions apart.
+
+    A digest that always reports "same" would silently convert every result into
+    "the lever is inert" -- the exact false negative this column exists to
+    prevent. So the instrument asserts a KNOWN-POSITIVE before it is trusted to
+    report an absence, and the gate runs this before it measures anything.
+    """
+    def cl(*groups):
+        return {i: {"members": list(g)} for i, g in enumerate(groups)}
+
+    checks = []
+    # Same partition -> same digest, and singletons are ignored by both.
+    a_pairs, a = _partition_fingerprint(cl([1, 2, 3], [4, 5], [6]))
+    b_pairs, b = _partition_fingerprint(cl([4, 5], [3, 2, 1], [7]))
+    checks.append(("stable under cluster/member order", a == b))
+    checks.append(("pair count = sum C(n,2)", a_pairs == 4 and b_pairs == 4))
+    # One edge cut -> different digest. This is the known-positive.
+    c_pairs, c = _partition_fingerprint(cl([1, 2], [3], [4, 5]))
+    checks.append(("KNOWN-POSITIVE: split cluster changes digest", a != c))
+    checks.append(("split cluster lowers pair count", c_pairs < a_pairs))
+    # Empty partition must not collide with a populated one.
+    _, d = _partition_fingerprint(cl([1]))
+    checks.append(("empty partition distinct", d != a))
+
+    ok = True
+    for label, passed in checks:
+        print(f"  [{'ok' if passed else 'FAIL'}] {label}")
+        ok = ok and passed
+    print("partition fingerprint self-test: " + ("PASS" if ok else "FAIL"))
+    return 0 if ok else 1
 
 
 def main() -> int:
@@ -90,7 +158,13 @@ def main() -> int:
     ap.add_argument("--datasets", default=",".join(_PANEL), help="comma list")
     ap.add_argument("--tol", type=float, default=0.005,
                     help="max allowed per-dataset F1 regression before FAIL")
+    ap.add_argument("--self-test", action="store_true",
+                    help="verify the partition fingerprint distinguishes partitions, then exit")
     args = ap.parse_args()
+
+    if args.self_test:
+        return _self_test()
+
 
     # Isolate the measurement from cross-run auto-config memory.
     os.environ["GOLDENMATCH_AUTOCONFIG_MEMORY"] = "0"
@@ -123,20 +197,34 @@ def main() -> int:
 
     print(f"\nA/B lever: {args.env}  (OFF={args.off}  ON={args.on})  tol={args.tol}")
     print(f"{'dataset':18s} {'F1 off':>8s} {'F1 on':>8s} {'dF1':>8s} "
-          f"{'P off':>7s} {'P on':>7s} {'R off':>7s} {'R on':>7s}  verdict")
+          f"{'P off':>7s} {'P on':>7s} {'R off':>7s} {'R on':>7s} "
+          f"{'pairs off':>10s} {'pairs on':>9s} {'partition':>10s}  verdict")
     worst = 0.0
     any_regress = False
+    moved = False
     for name, off, on in rows:
         d = on["f1"] - off["f1"]
         worst = min(worst, d)
         regress = d < -args.tol
         any_regress = any_regress or regress
         verdict = "REGRESS" if regress else ("win" if d > args.tol else "flat")
+        part = "same" if off["digest"] == on["digest"] else "DIFFERS"
+        moved = moved or part == "DIFFERS"
         print(f"{name:18s} {off['f1']:8.4f} {on['f1']:8.4f} {d:+8.4f} "
-              f"{off['p']:7.3f} {on['p']:7.3f} {off['r']:7.3f} {on['r']:7.3f}  {verdict}")
+              f"{off['p']:7.3f} {on['p']:7.3f} {off['r']:7.3f} {on['r']:7.3f} "
+              f"{off['pairs']:10d} {on['pairs']:9d} {part:>10s}  {verdict}")
 
     print(f"\nGATE: {'FAIL' if any_regress else 'PASS'} "
           f"(worst dF1 {worst:+.4f}, tol {args.tol}); {len(rows)} datasets measured")
+    if moved:
+        print("PARTITION: differs on at least one dataset -- the lever IS "
+              "active, so a flat dF1 means the clustering ABSORBED it.")
+    else:
+        # Not a failure: a default-OFF lever SHOULD be byte-identical. It is
+        # said out loud because "flat dF1" and "changed nothing at all" are
+        # different claims, and only this one licenses the second.
+        print("PARTITION: identical on every dataset -- the lever altered no "
+              "cluster anywhere, so a flat dF1 says INERT, not neutral.")
     return 1 if any_regress else 0
 
 

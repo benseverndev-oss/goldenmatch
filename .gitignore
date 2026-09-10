@@ -133,3 +133,9 @@ packages/jvm/goldenmatch-spark/build/
 # scripts/stage4_coverage_retriage.py's default --out-dir: downloaded CI
 # coverage artifacts + combined .coverage db, regenerated per run.
 .stage4-scratch/
+
+# Pipeline output written into CWD by tests/CLI smoke runs (YYYYMMDD_HHMMSS_*.csv).
+# Untracked and easy to sweep into a commit with `git add -A` -- that happened.
+[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9]_dupes.csv
+[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9]_golden.csv
+[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9]_unique.csv

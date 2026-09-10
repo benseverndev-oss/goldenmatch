@@ -60,7 +60,7 @@ def _fs_bucket_native_enabled() -> bool:
     ``GOLDENMATCH_FS_BUCKET_NATIVE=0`` forces the per-block ``prob_scorer`` loop
     inside ``_score_one_bucket`` (the parity escape hatch — byte-identical to the
     per-block native path). Only gates the BATCHED bucket call; whether the
-    per-block loop itself is native still follows ``_fs_native_eligible`` /
+    per-block loop itself is native still follows ``_fs_native_route_eligible`` /
     ``GOLDENMATCH_FS_NATIVE``."""
     return os.environ.get("GOLDENMATCH_FS_BUCKET_NATIVE", "1").strip().lower() not in (
         "0", "false", "no", "off", "disabled",
@@ -1230,7 +1230,7 @@ def score_probabilistic_external_blocks(
     """
     from goldenmatch.core.blocker import _auto_split_block
     from goldenmatch.core.probabilistic import (
-        _fs_native_eligible,
+        _fs_native_route_eligible,
         probabilistic_block_scorer,
         score_probabilistic_bucket_native,
     )
@@ -1245,7 +1245,7 @@ def score_probabilistic_external_blocks(
     max_block_size = blocking_config.max_block_size
     skip_oversized = blocking_config.skip_oversized
 
-    use_native = _fs_bucket_native_enabled() and _fs_native_eligible(mk)
+    use_native = _fs_bucket_native_enabled() and _fs_native_route_eligible(mk, em_result)
     prob_scorer = None if use_native else probabilistic_block_scorer(mk, em_result)
 
     # The #552/#688 fix, FS side: build the Rust exclude set ONCE, not per
@@ -1671,7 +1671,7 @@ def score_buckets(
     fs_bucket_batch = False
     if is_probabilistic:
         from goldenmatch.core.probabilistic import (
-            _fs_native_eligible,
+            _fs_native_route_eligible,
             _fs_vectorized_enabled,
             _fs_vectorized_supported,
             probabilistic_block_scorer,
@@ -1683,7 +1683,7 @@ def score_buckets(
         # score_probabilistic_native call per block. Byte-identical to the
         # per-block loop by construction (the kernel isolates blocks by the
         # sizes list). GOLDENMATCH_FS_BUCKET_NATIVE=0 forces the per-block loop.
-        fs_bucket_native = _fs_bucket_native_enabled() and _fs_native_eligible(mk)
+        fs_bucket_native = _fs_bucket_native_enabled() and _fs_native_route_eligible(mk, em_result)
         # When the native kernel is DECLINED (e.g. missing="disagree" on
         # null-heavy data) the numpy scorer otherwise runs once per block. Batch
         # the small blocks into one row-capped score_probabilistic_vectorized_

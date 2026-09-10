@@ -396,7 +396,7 @@ def score_fs_out_of_core(
         to_frame as _tf,
     )
     from goldenmatch.core.probabilistic import (
-        _fs_native_eligible,
+        _fs_native_route_eligible,
         _fs_vectorized_enabled,
         _fs_vectorized_supported,
         probabilistic_block_scorer,
@@ -442,7 +442,7 @@ def score_fs_out_of_core(
                   flush=True)
 
         # Choose the FS scorer once (native kernel vs vectorized), like score_buckets.
-        use_native = _fs_native_eligible(mk)
+        use_native = _fs_native_route_eligible(mk, em_result)
         prob_scorer = None if use_native else probabilistic_block_scorer(mk, em_result)
         frozen_exclude = frozenset(matched_pairs)
 

@@ -144,6 +144,21 @@ def _fs_evidence_cut() -> float | None:
 def _fs_calibration_mode() -> str:
     """Return the active FS score-calibration mode: 'posterior' or 'linear'."""
     val = os.environ.get("GOLDENMATCH_FS_CALIBRATED")
+    # EMPTY means unset, not linear. A caller that exports the variable
+    # with an empty value -- `GOLDENMATCH_FS_CALIBRATED= cmd`, or a CI
+    # `env:` key fed by an unset workflow input, which GitHub renders as
+    # "" rather than omitting the key -- used to fall past the `is None`
+    # branch below and silently take the default. That branch is what
+    # makes an evidence cut imply posterior scoring, so the effect was to
+    # set GOLDENMATCH_FS_EVIDENCE_CUT and have it never consulted:
+    # `compute_thresholds` only reads it inside `if calibrated:`.
+    #
+    # Measured: fs-lever-gate run 34393285281 dispatched with
+    # evidence_cut=9 produced a historical_50k OFF arm byte-identical to
+    # the linear default (F1 0.8320, P 0.939, R 0.747) -- the tell that
+    # the cut never applied, since it moves BOTH arms.
+    if val is not None and not val.strip():
+        val = None
     if val is None:
         # An evidence cut is defined on the posterior (log-odds) axis, so it
         # forces posterior scoring unless the caller explicitly picked linear.
@@ -468,7 +483,69 @@ def _compute_joint_corrections(
             _FD_MIN_BITS,
             ", ".join(f"{a}x{b}={e:+.2f}b" for a, b, e in observed[:3]),
         )
-    return out[:_FD_MAX_PAIRS]
+
+    corrections = out[:_FD_MAX_PAIRS]
+    if corrections and os.environ.get("GOLDENMATCH_FS_FD_PROBE", "").strip() not in ("", "0"):
+        _log_fd_reach_probe(corrections, top, log_m, log_u)
+    return corrections
+
+
+def _log_fd_reach_probe(corrections, top, log_m, log_u) -> None:
+    """Answer one question: can the correction reach a pair whose decision is open?
+
+    The correction fires only where BOTH fields agree at their TOP level. Those
+    pairs are overwhelming matches. If none of them sits within ``excess_bits``
+    of the decision bar, subtracting those bits cannot flip a single pair, and a
+    flat A/B is a targeting property rather than a wiring fault -- which is a
+    different finding, and a fixable one.
+
+    Reports, per corrected pair, how many pairs it touches, where their evidence
+    sits relative to the bar, and how many fall in the flippable band
+    ``[cut, cut + bits)`` -- the only pairs whose classification the subtraction
+    can change.
+
+    CAVEAT, stated in the output because it changes how to read it: ``log_m`` and
+    ``log_u`` here accumulate over NON-conditioned fields only (that is what the
+    estimator above needs), so these weights are LOWER BOUNDS on what the engine
+    actually scores -- each blocking-conditioned field adds roughly +0.93 b on
+    agreement. The bias runs toward reporting MORE near-cut pairs than exist, so
+    an empty flippable band here is the stronger form of the result.
+
+    Diagnostic only -- never changes the correction it measures.
+    """
+    cut = _fs_evidence_cut()
+    if cut is None:
+        logger.warning(
+            "FS field-dependence probe: no GOLDENMATCH_FS_EVIDENCE_CUT is set, so "
+            "there is no prior-invariant bar to measure distance to. Re-run with "
+            "GOLDENMATCH_FS_EVIDENCE_CUT set; skipping the probe."
+        )
+        return
+    weights = (log_m - log_u) / math.log(2)  # per-pair FS evidence, bits
+    n_pairs = int(weights.size)
+    for fa, fb, bits in corrections:
+        mask = top[fa] & top[fb]
+        touched = int(mask.sum())
+        if not touched:
+            logger.warning(
+                "FS field-dependence probe %sx%s: touches 0 of %d pairs.", fa, fb, n_pairs
+            )
+            continue
+        tw = weights[mask]
+        band = (weights >= cut) & (weights < cut + bits)
+        flippable = int((band & mask).sum())
+        in_band = int(band.sum())
+        logger.warning(
+            "FS field-dependence probe %sx%s (-%.2fb, cut=%.2fb): touches %d/%d "
+            "pairs; their evidence spans %.1f..%.1f b (median %.1f), closest is "
+            "%+.1f b above the cut. FLIPPABLE band [%.2f, %.2f): %d touched of "
+            "%d pairs there. NOTE weights exclude blocking-conditioned fields, "
+            "so they UNDERSTATE the engine's -- a near-cut count here is an "
+            "upper bound.",
+            fa, fb, bits, cut, touched, n_pairs,
+            float(tw.min()), float(tw.max()), float(np.median(tw)),
+            float(tw.min() - cut), cut, cut + bits, flippable, in_band,
+        )
 
 
 def enforce_weight_monotonicity(
@@ -1537,6 +1614,68 @@ def _train_em_from_counts_native(
     )
 
 
+def _combine_calibrated_threshold(sessions) -> float | None:
+    """Pair-weighted mean calibrated link threshold over the passes that produced one.
+
+    Passes that did not calibrate are EXCLUDED rather than counted as zero: a
+    missing threshold means "this pass could not choose a cut", not "this pass
+    voted for 0.0", and averaging a zero in would drag the cut toward merging
+    everything. That is the opposite of the rule used for
+    :func:`_combine_joint_corrections`, where a missing entry genuinely does
+    mean "no excess here" -- the asymmetry is deliberate, and in both cases the
+    unsafe direction (over-merge) is the one being avoided.
+    """
+    have = [(em.calibrated_link_threshold, w) for _, em, w in sessions
+            if getattr(em, "calibrated_link_threshold", None) is not None and w > 0]
+    if not have:
+        return None
+    total = sum(w for _, w in have)
+    if total <= 0:
+        return None
+    return sum(t * w for t, w in have) / total
+
+
+def _combine_joint_corrections(sessions) -> list[tuple[str, str, float]] | None:
+    """Pair-weighted mean excess per corrected field pair across EM passes.
+
+    Each pass estimates the excess over its OWN non-match population, so passes
+    do not agree on which pairs clear ``_FD_MIN_BITS``: a pair the blocking key
+    conditions in one pass runs free in another. A session that did NOT report a
+    pair contributes 0 to that pair's mean rather than being skipped -- the mean
+    is over all the evidence, not only the evidence that agreed.
+
+    That biases the result DOWNWARD, deliberately. These bits are SUBTRACTED, so
+    over-stating them costs recall on true matches, and under-stating them only
+    leaves some of the double-count in place. Given this correction has never
+    once reached scoring, the first run that does should err toward doing too
+    little.
+
+    Returns None when nothing survives, which is exactly "no correction".
+    """
+    weight_all = sum(w for _, _, w in sessions)
+    if weight_all <= 0:
+        return None
+    totals: dict[tuple[str, str], float] = {}
+    for _, em, w in sessions:
+        for a, b, bits in (getattr(em, "joint_corrections", None) or []):
+            key = (a, b) if a <= b else (b, a)
+            totals[key] = totals.get(key, 0.0) + bits * w
+    if not totals:
+        return None
+    out = [(a, b, t / weight_all) for (a, b), t in totals.items()]
+    out = [t for t in out if t[2] >= _FD_MIN_BITS]
+    out.sort(key=lambda t: t[2], reverse=True)
+    if not out:
+        logger.warning(
+            "FS field-dependence: %d pair(s) were corrected in individual EM "
+            "passes but none survived the pair-weighted mean across passes at "
+            "_FD_MIN_BITS=%.2f -- no correction applied.",
+            len(totals), _FD_MIN_BITS,
+        )
+        return None
+    return out[:_FD_MAX_PAIRS]
+
+
 def _combine_em_sessions(
     mk: MatchkeyConfig,
     sessions: list[tuple[tuple[str, ...], EMResult, float]],
@@ -1618,6 +1757,24 @@ def _combine_em_sessions(
         proportion_matched=proportion,
         tf_freqs=base.tf_freqs,
         tf_collision=base.tf_collision,
+        # Hand-enumerated constructors are where a later field goes to die:
+        # `tf_freqs` is carried here precisely because forgetting it once made
+        # a model "look complete" while silently missing its TF tables, and
+        # `joint_corrections` -- added afterwards -- was never added to the
+        # list. Every panel measurement of the field-dependence lever, back to
+        # the original spike, scored a correction this function had already
+        # discarded: estimated correctly, logged, then dropped in transit.
+        joint_corrections=_combine_joint_corrections(sessions),
+        # Same drop, second victim. This one is behind a default-off flag, so
+        # it never reached the panel -- but a user who enables
+        # GOLDENMATCH_FS_CALIBRATE_THRESHOLD on a multi-pass run gets it
+        # computed, logged as "FS calibrated link threshold: X", and discarded
+        # here, leaving the fixed fallback cutoff and a message saying EM
+        # produced no calibrated cutoff. Pair-weighted like `m` above, and for
+        # the same reason: a pass contributing 10 pairs and one contributing
+        # 10,000 are not equal evidence about where the cut belongs.
+        calibrated_link_threshold=_combine_calibrated_threshold(sessions),
+        training_config=base.training_config,
     )
 
 
@@ -2537,7 +2694,13 @@ def train_em(
             conditioned_mask, always_conditioned,
         ) or None
         if joint_corrections:
-            logger.info(
+            # WARNING, not info, while this lever is opt-in and under
+            # evaluation. Both inert paths already warn; leaving the
+            # SUCCESS path at info meant a correction that fired and one
+            # that found nothing produced the same empty log, which is
+            # exactly the ambiguity the other two warnings were added to
+            # remove. A run that changes scoring should say so.
+            logger.warning(
                 "FS field-dependence: correcting %d field pair(s): %s",
                 len(joint_corrections),
                 ", ".join(f"{a}x{b}(-{bits:.2f}b)" for a, b, bits in joint_corrections),
@@ -5072,8 +5235,12 @@ def score_probabilistic_blocks_batched(
     if cap is None:
         cap = _fs_batch_rows()
 
+    # Inverted polarity, same trap: when the kernel is eligible this path goes
+    # native and a model-carried post-adjustment is lost. Asking the route
+    # check instead makes a correction FORCE the vectorized batch scorer, which
+    # is the path that applies it.
     use_vec = (
-        not _fs_native_eligible(mk)
+        not _fs_native_route_eligible(mk, em_result)
         and _fs_vectorized_enabled()
         and _fs_vectorized_supported(mk)
     )
@@ -5405,6 +5572,30 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
         return True
     except Exception:
         return False
+
+
+def _fs_native_route_eligible(mk: MatchkeyConfig, em_result) -> bool:
+    """Whether the native FS kernel may score THIS (mk, em_result).
+
+    ``_fs_native_eligible`` answers a question about the MATCHKEY only, so it
+    structurally cannot see a post-adjustment carried on the trained model. The
+    kernel returns pre-normalized, pre-thresholded scores, so any Python
+    weight adjustment applied after scoring is silently lost when it runs.
+
+    That decline existed in exactly one of the four routes. The per-block
+    chooser (``probabilistic_block_scorer``) declined correctly; the bucket
+    kernel, the bucket-batch path and the out-of-core path each gated on
+    ``_fs_native_eligible(mk)`` alone and scored natively anyway -- which is
+    why the field-dependence correction stayed inert on the panel even after
+    it was carried through the EM combine. Estimated, logged, carried, and
+    then bypassed by the scorer that actually ran.
+
+    Every route asks THIS function now, so a future post-adjustment is declined
+    everywhere or nowhere, never in three places out of four.
+    """
+    if getattr(em_result, "joint_corrections", None):
+        return False
+    return _fs_native_eligible(mk)
 
 
 def _fs_arrow_column(native_df, f, n: int):
@@ -5874,9 +6065,7 @@ def probabilistic_block_scorer(mk: MatchkeyConfig, em_result: EMResult):
     # Field-dependence correction is a Python post-adjustment; the native kernel
     # returns pre-normalized/thresholded scores, so decline it to the numpy path
     # when a correction is present (mirrors the tf-on-old-wheel decline).
-    _decline_native = bool(getattr(em_result, "joint_corrections", None))
-
-    if not _decline_native and _fs_native_eligible(mk):
+    if _fs_native_route_eligible(mk, em_result):
         def _native(block_df, exclude_pairs=None):
             return score_probabilistic_native(block_df, mk, em_result, exclude_pairs)
         return _native

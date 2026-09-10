@@ -1,6 +1,6 @@
 # 0065 — The FS field-dependence correction cannot reach the effect it was built for
 
-**Status:** accepted (2026-09-09, Ben) • **Measured:** [run 34358803727](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34358803727) (diagnostic), [34372003892](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34372003892) and [34381649670](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34381649670) (A/B) • **Code:** #2914, shipped default-OFF • **Frame:** decision [0064](0064-identity-control-plane-stays-on-postgres-sqlite.md)
+**Status:** superseded by [0066](0066-fs-field-dependence-runs-and-loses-to-a-higher-bar.md) (2026-09-10) — the zero-pairs observation below was correct, the conclusion was not; accepted 2026-09-09, Ben • **Measured:** [run 34358803727](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34358803727) (diagnostic), [34372003892](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34372003892) and [34381649670](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34381649670) (A/B) • **Code:** #2914, shipped default-OFF • **Frame:** decision [0064](0064-identity-control-plane-stays-on-postgres-sqlite.md)
 
 ## Context
 Fellegi-Sunter sums per-field weights `log2(m_i/u_i)` assuming the comparison

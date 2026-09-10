@@ -8,6 +8,8 @@ it when both agree. Default OFF = byte-identical.
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
@@ -153,3 +155,237 @@ def test_single_comparison_field_is_reported_not_silent():
     m = {"only": [0.1, 0.9]}
     u = {"only": [0.5, 0.5]}
     assert _compute_joint_corrections(comp, mk, m, u, 0.05, cond, set()) == []
+
+
+# ---------------------------------------------------------------------------
+# Reach probe (GOLDENMATCH_FS_FD_PROBE)
+#
+# The probe exists to answer whether the correction can touch a pair whose
+# decision is still open. Its useful answer is "none" -- which is exactly the
+# answer a BROKEN probe also gives, so these tests pin the known-positive first
+# and the empty case second. An empty verification is not a pass.
+# ---------------------------------------------------------------------------
+
+def _probe_arrays(weight_bits: float, n: int = 10):
+    """log_m/log_u whose implied FS evidence is exactly ``weight_bits`` per pair."""
+    log_u = np.zeros(n, dtype=np.float64)
+    log_m = np.full(n, weight_bits * math.log(2), dtype=np.float64)
+    top = {"a": np.ones(n, dtype=bool), "b": np.ones(n, dtype=bool)}
+    return top, log_m, log_u
+
+
+def test_probe_reports_flippable_pairs_when_they_exist(monkeypatch, caplog):
+    """KNOWN-POSITIVE: pairs sitting inside [cut, cut+bits) are reported."""
+    monkeypatch.setenv("GOLDENMATCH_FS_EVIDENCE_CUT", "10")
+    top, log_m, log_u = _probe_arrays(11.0, n=10)
+    with caplog.at_level("WARNING"):
+        P._log_fd_reach_probe([("a", "b", 2.0)], top, log_m, log_u)
+    msg = caplog.text
+    assert "FLIPPABLE band [10.00, 12.00): 10 touched of 10" in msg, msg
+
+
+def test_probe_reports_none_when_pairs_are_far_above_the_cut(monkeypatch, caplog):
+    """The real-panel shape: touched pairs are overwhelming matches, band empty."""
+    monkeypatch.setenv("GOLDENMATCH_FS_EVIDENCE_CUT", "9")
+    top, log_m, log_u = _probe_arrays(40.0, n=10)
+    with caplog.at_level("WARNING"):
+        P._log_fd_reach_probe([("a", "b", 5.0)], top, log_m, log_u)
+    msg = caplog.text
+    assert "touches 10/10 pairs" in msg, msg
+    assert "0 touched of 0" in msg, msg
+    assert "+31.0 b above the cut" in msg, msg
+
+
+def test_probe_skips_without_an_evidence_cut(monkeypatch, caplog):
+    """No prior-invariant bar means no distance to measure -- say so, don't guess."""
+    monkeypatch.delenv("GOLDENMATCH_FS_EVIDENCE_CUT", raising=False)
+    top, log_m, log_u = _probe_arrays(11.0)
+    with caplog.at_level("WARNING"):
+        P._log_fd_reach_probe([("a", "b", 2.0)], top, log_m, log_u)
+    assert "no GOLDENMATCH_FS_EVIDENCE_CUT is set" in caplog.text
+
+
+@pytest.mark.parametrize("val,fires", [("1", True), ("0", False), ("", False)])
+def test_probe_gated_by_its_own_env(monkeypatch, caplog, val, fires):
+    monkeypatch.setenv(FLAG, "1")
+    monkeypatch.setenv("GOLDENMATCH_FS_FD_PROBE", val)
+    monkeypatch.setenv("GOLDENMATCH_FS_EVIDENCE_CUT", "1")
+    rows = [[1, 1, 0]] * 40 + [[0, 0, 0]] * 40 + [[1, 0, 0]] * 10 + [[0, 1, 0]] * 10
+    comp = np.array(rows, dtype=np.int64)
+    cond = np.zeros((len(comp), 3), dtype=bool)
+    m = {"first_name": [0.1, 0.9], "surname": [0.1, 0.9], "city": [0.5, 0.5]}
+    u = {"first_name": [0.5, 0.5], "surname": [0.5, 0.5], "city": [0.5, 0.5]}
+    with caplog.at_level("WARNING"):
+        _compute_joint_corrections(comp, _mk(), m, u, 0.05, cond, set())
+    assert ("field-dependence probe" in caplog.text) is fires
+
+
+# ---------------------------------------------------------------------------
+# _combine_em_sessions must not silently drop EMResult fields
+#
+# The correction was estimated correctly, logged, applied by every scoring
+# entry point -- and thrown away in transit by a hand-enumerated constructor
+# that predated it. Every panel measurement of this lever, back to the original
+# spike, scored a model the combine step had already stripped. The regression
+# tests below pin the behaviour; the LAST one pins the CLASS, so the next field
+# added to EMResult cannot repeat it silently.
+# ---------------------------------------------------------------------------
+
+def _sess_em(jc=None, thr=None):
+    return EMResult(
+        m_probs={f.field: [0.1, 0.9] for f in _mk().fields},
+        u_probs={f.field: [0.5, 0.5] for f in _mk().fields},
+        match_weights={f.field: [-2.3, 0.85] for f in _mk().fields},
+        converged=True, iterations=5, proportion_matched=0.05,
+        joint_corrections=jc, calibrated_link_threshold=thr,
+    )
+
+
+def test_combine_carries_joint_corrections():
+    jc = [("first_name", "surname", 2.48)]
+    out = P._combine_em_sessions(_mk(), [
+        (("first_name",), _sess_em(jc), 100.0),
+        (("surname",), _sess_em(jc), 100.0),
+    ])
+    assert out.joint_corrections == [("first_name", "surname", 2.48)]
+
+
+def test_combine_pair_weights_a_pair_only_one_pass_found():
+    """A pass that did not report the pair counts as 0 -- biased DOWNWARD on
+    purpose, because these bits are subtracted and over-stating costs recall."""
+    out = P._combine_em_sessions(_mk(), [
+        (("first_name",), _sess_em([("first_name", "surname", 2.48)]), 100.0),
+        (("surname",), _sess_em(None), 100.0),
+    ])
+    assert out.joint_corrections == [("first_name", "surname", pytest.approx(1.24))]
+
+
+def test_combine_normalises_pair_order():
+    out = P._combine_em_sessions(_mk(), [
+        (("first_name",), _sess_em([("first_name", "surname", 2.48)]), 100.0),
+        (("surname",), _sess_em([("surname", "first_name", 2.48)]), 100.0),
+    ])
+    assert out.joint_corrections == [("first_name", "surname", pytest.approx(2.48))]
+
+
+def test_combine_drops_a_pair_below_the_floor_and_says_so(caplog):
+    with caplog.at_level("WARNING"):
+        out = P._combine_em_sessions(_mk(), [
+            (("first_name",), _sess_em([("first_name", "surname", 0.6)]), 1.0),
+            (("surname",), _sess_em(None), 100.0),
+        ])
+    assert out.joint_corrections is None
+    assert "none survived the pair-weighted mean" in caplog.text
+
+
+def test_combine_carries_calibrated_link_threshold():
+    """Excluded, not zero-weighted: a pass that could not calibrate did not
+    vote for 0.0, and averaging one in would drag the cut toward over-merge."""
+    out = P._combine_em_sessions(_mk(), [
+        (("first_name",), _sess_em(thr=0.90), 300.0),
+        (("surname",), _sess_em(thr=None), 100.0),
+    ])
+    assert out.calibrated_link_threshold == pytest.approx(0.90)
+
+
+def test_no_emresult_field_is_silently_dropped_by_combine():
+    """THE CLASS GUARD.
+
+    Every field on EMResult must be either carried through the combine or
+    listed here as deliberately recomputed. `joint_corrections` was added to
+    EMResult long after this constructor was written and nothing forced anyone
+    to notice -- so the lever ran inert for months while its logs said it was
+    working. A new field now fails this test until it is classified.
+    """
+    import dataclasses
+
+    # Recomputed from the sessions rather than carried -- combining them IS the
+    # job of this function, so a distinctive input value must NOT survive.
+    RECOMPUTED = {
+        "m_probs", "u_probs", "match_weights",
+        "converged", "iterations", "proportion_matched",
+    }
+    # Internal provenance, not part of the trained model.
+    INTERNAL = {"_source_schema_version"}
+
+    fields = [f.name for f in dataclasses.fields(EMResult)]
+    sessions = [
+        (("first_name",), _sess_em([("first_name", "surname", 2.48)], 0.9), 100.0),
+        (("surname",), _sess_em([("first_name", "surname", 2.48)], 0.9), 100.0),
+    ]
+    sessions[0][1].tf_freqs = {"first_name": {"smith": 0.1}}
+    sessions[1][1].tf_freqs = {"first_name": {"smith": 0.1}}
+    sessions[0][1].tf_collision = {"first_name": 0.01}
+    sessions[1][1].tf_collision = {"first_name": 0.01}
+    sessions[0][1].training_config = {"marker": True}
+    sessions[1][1].training_config = {"marker": True}
+
+    out = P._combine_em_sessions(_mk(), sessions)
+    dropped = [
+        n for n in fields
+        if n not in RECOMPUTED and n not in INTERNAL
+        and getattr(sessions[0][1], n) is not None
+        and getattr(out, n) is None
+    ]
+    assert not dropped, (
+        f"_combine_em_sessions drops {dropped} -- carry them, or add them to "
+        f"RECOMPUTED/INTERNAL with a reason. This is the bug that made the "
+        f"field-dependence correction inert."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Every native route must consult the model, not just the matchkey
+#
+# `_fs_native_eligible(mk)` answers a question about the MATCHKEY, so it cannot
+# see a post-adjustment carried on the trained model. The decline was taught to
+# ONE of four routes; the bucket kernel, the bucket-batch path and the
+# out-of-core path each gated on it alone and scored natively anyway. That is
+# why the correction stayed inert on the panel even after it was carried
+# through the EM combine: estimated, logged, carried, then bypassed by the
+# scorer that actually ran.
+# ---------------------------------------------------------------------------
+
+def test_native_route_declines_when_a_correction_is_present():
+    em = _sess_em([("first_name", "surname", 2.48)])
+    assert P._fs_native_route_eligible(_mk(), em) is False
+
+
+def test_native_route_defers_to_matchkey_eligibility_without_corrections(monkeypatch):
+    """KNOWN-POSITIVE: with no correction the wrapper must be transparent, or
+    it would silently disable the native kernel for everyone."""
+    monkeypatch.setattr(P, "_fs_native_eligible", lambda mk: True)
+    assert P._fs_native_route_eligible(_mk(), _sess_em(None)) is True
+    monkeypatch.setattr(P, "_fs_native_eligible", lambda mk: False)
+    assert P._fs_native_route_eligible(_mk(), _sess_em(None)) is False
+
+
+def test_no_routing_decision_calls_the_matchkey_only_check_directly():
+    """THE CLASS GUARD.
+
+    A route that asks `_fs_native_eligible(mk)` cannot know a post-adjustment
+    exists. Exactly one place is allowed to call it: the wrapper that adds the
+    model half. A new scoring route calling it directly fails here rather than
+    silently discarding whatever the model carries.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(P.__file__).resolve().parent.parent
+    offenders = []
+    for path in sorted(root.rglob("*.py")):
+        for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if not re.search(r"(?<!_route)_fs_native_eligible\(", line):
+                continue
+            if line.lstrip().startswith(("#", "*", '"')) or "``" in line:
+                continue          # prose, not a call
+            if "def _fs_native_eligible(" in line:
+                continue          # the definition itself
+            if "return _fs_native_eligible(mk)" in line:
+                continue          # the ONE allowed call, inside the wrapper
+            offenders.append(f"{path.relative_to(root)}:{i}: {line.strip()}")
+    assert not offenders, (
+        "these call the matchkey-only check directly and so cannot see a "
+        "model-carried post-adjustment; route them through "
+        "_fs_native_route_eligible(mk, em_result):\n  " + "\n  ".join(offenders)
+    )
