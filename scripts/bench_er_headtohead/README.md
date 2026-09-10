@@ -263,6 +263,42 @@ python scripts/bench_er_headtohead/orchestrate.py \
 | `orchestrate.py` | Lane x shape x scale sweep; subprocess-per-datapoint; `{header, results}` aggregate; per-shape/lane markdown. |
 | `merge_results.py` | Union N dispatch artifacts (later-timestamp-wins); render final tables. |
 | `../../.github/workflows/bench-er-headtohead.yml` | CI lane (64 GB runner shape matrix, builds native, pinned splink, merge job). |
+| `measure_meta_blocking.py` | Standard meta-blocking (CBS/JS/ECBS weights x WEP/CEP/WNP/CNP pruning) over the pipeline's own multi-pass candidate set; pair completeness vs candidates. |
+| `measure_blocking_signatures.py` | Pass-signature pruning: label oracle, unsupervised EM over pass co-fire bits, and EM over phi-grouped passes. |
+
+## Meta-blocking measurement (historical_50k, 2026-09-10)
+
+Both scripts rebuild the candidate set with `build_blocks`, one static pass at a
+time, and refuse to report unless the rebuilt comparison count equals
+`measure_blocking_profile` for the same passes. They measure **pair completeness
+(PC) against candidate count**, not end-to-end F1. Run locally on the vendored
+parquet: `python scripts/bench_er_headtohead/measure_blocking_signatures.py
+[--extra surname:lowercase,soundex] [--phi 0.5] [--out f.json]`; `--signatures-json
+f.json` reruns the analysis without the rebuild.
+
+Current operating point: auto-config's 8 passes, **11,977,484 candidates, PC 0.8793**.
+
+- **Standard meta-blocking loses about 20 PC points** at any useful pruning level.
+  Five of the eight passes derive from name fields, so namesakes share several
+  blocks from one fact: pairs sharing exactly 4 blocks are 1.1% true.
+- **The pass signature carries the signal, with labels.** With one added
+  `surname` soundex pass (reachable PC 0.9379 over 13.61M), ranking signatures by
+  true purity reaches PC 0.8793 at 4.06M candidates and 0.93 at 9.53M.
+- **Unsupervised EM over the raw pass bits fails** (PC 0.6327 within 12M). It fits
+  a match prior of 0.24 where the true share is 0.021 and learns name passes as
+  strong match evidence.
+- **Merging correlated passes first recovers most of it without labels.** Passes
+  whose phi over the candidate pairs is at least 0.5 become one feature. EM then
+  finds two modes. The textbook maximum-likelihood mode is the wrong one (prior
+  0.54), and **the smallest-prior mode** (0.0073) reaches PC 0.8793 at 7.29M, 0.93
+  at 9.61M and 0.9319 within 12M, against 0.8793 today.
+- **Fixing u from random record pairs, Splink-style, does not help**: PC 0.8793
+  needs 12.17M.
+- On auto-config's 8 passes alone, the same rule matches the grouped oracle
+  (PC 0.85 at 7.07M) but cannot exceed the 0.8793 those passes allow.
+
+Open: one dataset; the phi threshold and mode rule were chosen after seeing these
+curves (phi 0.7 fails on the 8-pass set); PC is not F1.
 
 ## Honest caveats (carried into the results doc)
 
