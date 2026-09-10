@@ -353,6 +353,62 @@ case for shipping it.
     it is not the rule this harness measured: on historical_50k it sees 27.2M
     candidates against 11.98M.
 
+## Scale-safe surname pass (historical_50k, 2026-09-10)
+
+`measure_surname_passes.py [--candidate spec ...]` measures candidate passes on
+`build_blocks` at full N, reporting true-pair coverage and the marginal gain over
+auto-config's passes. It also measures growth across nested **entity** samples:
+connected components of the true pairs, keeping every record of a sampled entity.
+`ab_lever --on-extra-passes` / `fs-lever-gate on_extra_passes` A/B a pass on the ON arm
+only. Specs: `field:t1,t2`, compound `field:t1,t2+field:t3`, and a leading `~` for
+`additive=True`.
+
+- **A name pass hurts FS by DEMOTING its fields, not by adding candidates.** Every
+  field a non-additive pass keys on reaches `train_em`'s `always_conditioned` through
+  `collect_blocking_fields(for_em=True)`. That gives it a fixed neutral weight for
+  EVERY pair, not only the pass's own.
+  - Surname soundex x birth year, non-additive: historical_50k 0.8320 -> 0.7689 at
+    the per-arm best cutoff.
+  - The first-initial compound LOST recall (0.747 -> 0.679) while only adding
+    candidates.
+  - `additive=True` keeps the fields EM-trained.
+- **Measure scale on entities, not rows.** Sampling rows shrinks each entity's
+  duplicate count too, and made all five candidates look like they grow in proportion
+  to N. With entities x4:
+
+  | pass | extra true pairs | pairs/row growth | largest group growth |
+  |---|---|---|---|
+  | surname soundex | 17,823 | x2.91 | x3.66 |
+  | surname soundex x first initial | 9,152 | x1.76 | x3.55 |
+  | surname soundex x birth year | 3,849 | x1.17 | x1.90 |
+  | surname soundex x first initial x birth decade | 2,620 | x1.24 | x3.75 |
+
+  The first-initial growth is mostly ONE artifact block, "Baronet" as surname with
+  "Sir" as first name (571 rows, ~163k of 461k comparisons). Dropping groups over
+  200 rows gives x1.14 and costs 5 of its 9,152 extra true pairs.
+- **End-to-end F1, each arm at its own best evidence cut** (default, 3, 5, 9, 12).
+  historical_50k baseline best 0.8320:
+
+  | pass (ON arm only) | ON best | dF1 | worst single cut |
+  |---|---|---|---|
+  | surname soundex x birth year | 0.7689 | -0.0631 | all lower |
+  | `GOLDENMATCH_FS_ATOMIC_NAME_BLOCKING=1` | 0.8165 | -0.0155 | -0.0267 (c9) |
+  | `~` surname soundex x birth year | 0.8359 | +0.0039 | -0.0064 (c9) |
+  | **`~` surname soundex x first initial** | **0.8417** | **+0.0097** | **-0.0703 (c9)** |
+  | `~` surname soundex (default only) | 0.8345 | +0.0025 | |
+
+  Every other available panel dataset ties at its best in every additive run.
+  - The additive first-initial compound is the first per-arm-best improvement. It is
+    one dataset, and it loses precision hard at cut 9.
+  - The existing atomic-name lever reproduces its documented -0.0148. Plain additive
+    surname soundex alone is +0.0025, so its first-name soundex pass is the likely
+    cause.
+  - Runs: non-additive 34510170513/34510174182/34510177687/34510181443/34510184656/
+    34510187829; additive year 34511165021/34511167779/34511171018/34511174495/
+    34511177550; additive initial 34511181174/34511907514/34511911235/34511915287/
+    34511919186; additive soundex 34511184594; atomic-name lever 34512434367/
+    34512438140/34512442554/34512446637/34512450531.
+
 ## Honest caveats (carried into the results doc)
 
 - **Blocking asymmetry is reported, not hidden.** GoldenMatch's bucket path does

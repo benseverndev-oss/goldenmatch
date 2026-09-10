@@ -360,8 +360,8 @@ def _load_or_build(args):
         return sigs, data["passes"], int(data["total_pairs"]), int(data["gt_pairs"]), n_records
 
     os.environ.setdefault("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
-    from goldenmatch.config.schemas import BlockingKeyConfig
     from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
+    from measure_surname_passes import pass_from_spec
 
     from scripts.autoconfig_quality import datasets as D
 
@@ -372,9 +372,8 @@ def _load_or_build(args):
     cfg = auto_configure_probabilistic_df(df)
     df_rowid = df.with_row_index("__row_id__") if "__row_id__" not in df.columns else df
     keys = list(cfg.blocking.resolved_keys())
-    for spec in args.extra:
-        field, _, tr = spec.partition(":")
-        keys.append(BlockingKeyConfig(fields=[field], transforms=[t for t in tr.split(",") if t]))
+    # "field:t1,t2" or a compound "field:t1,t2+field:t3" with per-field transforms.
+    keys.extend(pass_from_spec(spec) for spec in args.extra)
     sigs, per_pass, rebuilt, total_pairs = _signatures(df_rowid, cfg, keys, gt)
     print(f"passes={len(keys)}  comparisons rebuilt {rebuilt:,} == profile (known-positive OK)")
     return sigs, per_pass, total_pairs, len(gt), df.height

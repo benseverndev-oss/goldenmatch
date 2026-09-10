@@ -68,28 +68,29 @@ def _load(name: str):
 
 
 def _with_extra_passes(cfg, df, specs: list[str]):
-    """Append blocking passes (``field:t1,t2``) to an auto-configured config.
+    """Append blocking passes to an auto-configured config.
 
-    Measurement-only: applied identically to BOTH arms, after auto-config, so an
-    extra pass is a held constant rather than a second variable. Auto-config's own
-    guards (``_is_scale_safe``) are deliberately bypassed -- that is the point of
-    forcing a pass in. A spec naming a column the dataset lacks is skipped and
-    reported, not silently dropped.
+    Specs are ``field:t1,t2``, or a compound ``field:t1,t2+field:t3`` with
+    per-field transforms. Measurement-only, after auto-config: ``--extra-passes``
+    applies them to BOTH arms (a held constant), ``--on-extra-passes`` to the ON
+    arm only (the pass IS the variable). Auto-config's own guards
+    (``_is_scale_safe``) are deliberately bypassed -- that is the point of forcing
+    a pass in. A spec naming a column the dataset lacks is skipped and reported,
+    not silently dropped.
     """
     if not specs or cfg.blocking is None:
         return cfg, []
-    from goldenmatch.config.schemas import BlockingKeyConfig
+    from scripts.bench_er_headtohead.measure_surname_passes import pass_from_spec
 
     keys = list(cfg.blocking.resolved_keys())
     added = []
     for spec in specs:
-        field, _, transforms = spec.partition(":")
-        if field not in df.columns:
-            print(f"  [extra pass] skipped {spec!r}: no column {field!r}", file=sys.stderr)
+        key = pass_from_spec(spec)
+        missing = [f for f in key.fields if f not in df.columns]
+        if missing:
+            print(f"  [extra pass] skipped {spec!r}: no column(s) {missing}", file=sys.stderr)
             continue
-        keys.append(
-            BlockingKeyConfig(fields=[field], transforms=[t for t in transforms.split(",") if t])
-        )
+        keys.append(key)
         added.append(spec)
     if not added:
         return cfg, []
@@ -204,6 +205,12 @@ def main() -> int:
         "--tol", type=float, default=0.005, help="max allowed per-dataset F1 regression before FAIL"
     )
     ap.add_argument(
+        "--on-extra-passes",
+        default="",
+        help='blocking passes added to the ON arm only, ";"-separated specs -- A/B a pass '
+        "itself (pair with a lever env nothing reads, e.g. --env GOLDENMATCH_UNUSED)",
+    )
+    ap.add_argument(
         "--extra-passes",
         default="",
         help='blocking passes added to BOTH arms after auto-config, ";"-separated '
@@ -223,6 +230,9 @@ def main() -> int:
     os.environ["GOLDENMATCH_AUTOCONFIG_MEMORY"] = "0"
     datasets = [d.strip() for d in args.datasets.split(",") if d.strip()]
     extra_passes = [s.strip() for s in args.extra_passes.split(";") if s.strip()]
+    on_extra_passes = [s.strip() for s in args.on_extra_passes.split(";") if s.strip()]
+    if on_extra_passes:
+        print(f"extra blocking passes on the ON arm only: {on_extra_passes}", file=sys.stderr)
     if extra_passes:
         print(f"extra blocking passes on BOTH arms: {extra_passes}", file=sys.stderr)
 
@@ -237,7 +247,7 @@ def main() -> int:
             skipped.append(name)
             continue
         os.environ[args.env] = args.on
-        on = _f1(name, extra_passes)
+        on = _f1(name, extra_passes + on_extra_passes)
         assert on is not None, f"{name}: measurable OFF but unmeasurable ON"
         rows.append((name, off, on))
 

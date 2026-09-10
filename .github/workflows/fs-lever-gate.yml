@@ -131,6 +131,16 @@ on:
           the column skips that pass. Empty adds nothing.
         type: string
         default: ""
+      on_extra_passes:
+        description: >-
+          Like extra_passes, but applied to the ON arm only, so the pass itself
+          is what the A/B measures. Point `lever` at an env var nothing reads
+          (e.g. GOLDENMATCH_UNUSED) to hold everything else equal. Compound
+          keys use "+": "surname:lowercase,soundex+first_name:lowercase,substring:0:1".
+          A leading "~" marks the pass additive, so its fields stay EM-trained
+          instead of being demoted to fixed neutral weights for every pair.
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -150,7 +160,7 @@ concurrency:
   # branch used to cancel itself down to its last run. PR / push / schedule runs
   # carry empty inputs and keep one cancel-in-progress group per ref.
   group: >-
-    fs-lever-gate-${{ github.ref }}-${{ inputs.tier }}-${{ inputs.lever }}-${{ inputs.on_value }}-${{ inputs.extra_passes }}-${{ inputs.calibrated }}-${{ inputs.evidence_cut }}-${{ inputs.fd_probe }}-${{ inputs.tf_clamp }}-${{ inputs.fd_classes }}
+    fs-lever-gate-${{ github.ref }}-${{ inputs.tier }}-${{ inputs.lever }}-${{ inputs.on_value }}-${{ inputs.extra_passes }}-${{ inputs.on_extra_passes }}-${{ inputs.calibrated }}-${{ inputs.evidence_cut }}-${{ inputs.fd_probe }}-${{ inputs.tf_clamp }}-${{ inputs.fd_classes }}
   cancel-in-progress: true
 
 jobs:
@@ -212,8 +222,10 @@ jobs:
           GOLDENMATCH_FS_FD_CLASSES: ${{ inputs.fd_classes }}
           ON_VALUE: ${{ inputs.on_value || '1' }}
           EXTRA_PASSES: ${{ inputs.extra_passes }}
+          ON_EXTRA_PASSES: ${{ inputs.on_extra_passes }}
         run: |
           uv run python -m scripts.bench_er_headtohead.ab_lever \
             --env "$LEVER" --off 0 --on "$ON_VALUE" \
             --extra-passes "$EXTRA_PASSES" \
+            --on-extra-passes "$ON_EXTRA_PASSES" \
             ${{ steps.scope.outputs.datasets }}
