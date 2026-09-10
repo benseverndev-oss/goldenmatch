@@ -37,15 +37,31 @@ import time
 # 0.50 cutoff over-merges and a lever (the threshold-refit loop) can actually
 # move F1. Including them means a lever A/B is measured on both the at-ceiling
 # regime (must-not-regress) AND the has-headroom regime (can-it-win).
+#
+# febrl4, dblp_scholar and amazon_google widen the real panel beyond the one
+# dataset (historical_50k) where a lever could show headroom: a person LINKAGE
+# set, a larger and noisier bibliographic set, and a different domain (products).
+# The full CI tier provisions every real dataset here and passes
+# --require-datasets, so a failed fetch fails the run instead of quietly
+# shrinking the panel.
 _PANEL = [
     "person",
     "febrl3",
+    "febrl4",
     "ncvr_synthetic",
     "dblp_acm",
+    "dblp_scholar",
+    "amazon_google",
     "historical_50k",
     "household_hardneg",
     "cotenant_hardneg",
 ]
+
+
+def _missing_required(required: str, measured: set[str]) -> list[str]:
+    """Datasets named in ``required`` (comma list) that were not measured."""
+    wanted = [d.strip() for d in required.split(",") if d.strip()]
+    return [d for d in wanted if d not in measured]
 
 
 def _load(name: str):
@@ -217,6 +233,12 @@ def main() -> int:
         '"field:t1,t2" specs (e.g. "surname:lowercase,soundex")',
     )
     ap.add_argument(
+        "--require-datasets",
+        default="",
+        help="comma list of datasets that MUST be measured; the run fails if any was "
+        "not (the full CI tier provisions them, so a skip means a broken fetch)",
+    )
+    ap.add_argument(
         "--self-test",
         action="store_true",
         help="verify the partition fingerprint distinguishes partitions, then exit",
@@ -256,6 +278,7 @@ def main() -> int:
             f"[skipped] {len(skipped)} unavailable dataset(s): {', '.join(skipped)}",
             file=sys.stderr,
         )
+    missing_required = _missing_required(args.require_datasets, {name for name, _, _ in rows})
     # A regression gate that measured NOTHING must FAIL, never PASS -- an empty
     # panel is a broken environment, not a clean bill of health.
     if not rows:
@@ -305,6 +328,14 @@ def main() -> int:
             "PARTITION: identical on every dataset -- the lever altered no "
             "cluster anywhere, so a flat dF1 says INERT, not neutral."
         )
+    if missing_required:
+        # After the table, so the datasets that WERE measured still get reported.
+        print(
+            f"\nREQUIRED: FAIL -- {len(missing_required)} required dataset(s) were not "
+            f"measured: {', '.join(missing_required)}. A panel that silently shrank is "
+            f"not the panel the verdict claims to cover."
+        )
+        return 1
     return 1 if any_regress else 0
 
 

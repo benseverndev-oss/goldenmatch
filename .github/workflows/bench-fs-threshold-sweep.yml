@@ -107,7 +107,10 @@ jobs:
           L=https://dbs.uni-leipzig.de/file
           fetch DBLP-ACM "$L/DBLP-ACM.zip" DBLP2.csv ACM.csv DBLP-ACM_perfectMapping.csv
           fetch DBLP-Scholar "$L/DBLP-Scholar.zip" DBLP1.csv Scholar.csv DBLP-Scholar_perfectMapping.csv
-          fetch Amazon-GoogleProducts "$L/Amazon-GoogleProducts.zip" Amazon.csv GoogleProducts.csv Amzon_GoogleProducts_perfectMapping.csv
+          # The zip is named Amazon-GoogleProducts but the loader reads
+          # Amazon-Google/ (scripts/test_run_benchmarks_download.py pins it).
+          # Writing to the zip's name left amazon_google silently skipped.
+          fetch Amazon-Google "$L/Amazon-GoogleProducts.zip" Amazon.csv GoogleProducts.csv Amzon_GoogleProducts_perfectMapping.csv
 
       - name: Sweep
         env:
