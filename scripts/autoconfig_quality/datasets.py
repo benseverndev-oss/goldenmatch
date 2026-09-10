@@ -10,6 +10,7 @@ The committed baseline scorecard is the single source of pinned expectations for
 anchors (the gate compares current signals against the baseline), so Dataset
 carries no separate `expected` block.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -58,6 +59,7 @@ def _household_hardneg() -> tuple[pl.DataFrame, set]:
     over-merge, so the F1-optimal threshold sits above 0.50 (committed 0.50 F1
     ~0.90 vs oracle link=0.70 F1 ~0.98). See anchors.gen_household_hardneg."""
     from scripts.autoconfig_quality.anchors import gen_household_hardneg
+
     return gen_household_hardneg(n_households=350, seed=41)
 
 
@@ -68,11 +70,14 @@ def _cotenant_hardneg() -> tuple[pl.DataFrame, set]:
     P ~0.26); the threshold-refit loop recovers it (~0.41 -> ~1.00). See
     anchors.gen_cotenant_hardneg."""
     from scripts.autoconfig_quality.anchors import gen_cotenant_hardneg
+
     return gen_cotenant_hardneg(n_addresses=300, seed=29)
 
 
 # ── real labeled datasets (skip-when-absent) ───────────────────────────────────
-_DATASETS_ROOT = Path(__file__).resolve().parents[2] / "packages/python/goldenmatch/tests/benchmarks/datasets"
+_DATASETS_ROOT = (
+    Path(__file__).resolve().parents[2] / "packages/python/goldenmatch/tests/benchmarks/datasets"
+)
 
 
 def _pairs_to_row_index(
@@ -93,6 +98,7 @@ def _febrl3() -> tuple[pl.DataFrame, set] | None:
     """FEBRL3 (recordlinkage-bundled). rec_id-pair truth -> row-index via df['id'].
     Returns None when recordlinkage isn't installed (skip-when-absent)."""
     from scripts.dqbench_adapters.febrl3 import load_febrl3_df_and_gt
+
     loaded = load_febrl3_df_and_gt()
     if loaded is None:
         return None
@@ -107,6 +113,7 @@ def _ncvr_synthetic() -> tuple[pl.DataFrame, set]:
     """PII-free NCVR-shaped corpus (seed 42, committable, runs in CI). Its F1 is its
     OWN baseline, never the real-data number."""
     from scripts.dqbench_adapters.ncvr import build_ncvr_synthetic_df_and_gt
+
     df, ncid_pairs = build_ncvr_synthetic_df_and_gt(seed=42)
     return df, _pairs_to_row_index(df, "ncid", ncid_pairs)
 
@@ -114,6 +121,7 @@ def _ncvr_synthetic() -> tuple[pl.DataFrame, set]:
 def _ncvr_real() -> tuple[pl.DataFrame, set] | None:
     """Real NCVR sample (gitignored PII, local-only). None when the file is absent."""
     from scripts.dqbench_adapters.ncvr import build_ncvr_df_and_gt
+
     loaded = build_ncvr_df_and_gt(_NCVR_REAL_PATH, seed=42)
     if loaded is None:
         return None
@@ -163,12 +171,74 @@ def _dblp_acm() -> tuple[pl.DataFrame, set] | None:
         cols = mapping.columns  # standard headers: idDBLP, idACM
         a_col, b_col = cols[0], cols[1]
         str_pairs = {
-            (str(a), str(b))
-            for a, b in zip(mapping[a_col].to_list(), mapping[b_col].to_list())
+            (str(a), str(b)) for a, b in zip(mapping[a_col].to_list(), mapping[b_col].to_list())
         }
         return df, _pairs_to_row_index(df, "id", str_pairs)
     except Exception:
         return None  # any malformed piece -> skip, never crash the run
+
+
+# ── held-out real datasets via the head-to-head loaders (skip-when-absent) ────
+# Not in REGISTRY: the auto-config quality gate's scorecard is unchanged. They
+# exist so `ab_lever` can measure a lever on more than one dataset with headroom.
+def _records_truth_to_frame(records, truth) -> tuple[pl.DataFrame, set]:
+    """(records, truth) pyarrow tables keyed by ``record_id`` -> this registry's
+    contract: a polars frame WITHOUT the ``record_id`` surrogate (so the kernel
+    cannot match on it) and within-cluster row-index pairs (i < j)."""
+    ids = [str(v) for v in records.column("record_id").to_pylist()]
+    cluster_of = {
+        str(r): c
+        for r, c in zip(
+            truth.column("record_id").to_pylist(), truth.column("cluster_id").to_pylist()
+        )
+    }
+    by_cluster: dict[object, list[int]] = {}
+    for row, rid in enumerate(ids):
+        cid = cluster_of.get(rid)
+        if cid is not None:
+            by_cluster.setdefault(cid, []).append(row)
+    gt: set[tuple[int, int]] = set()
+    for members in by_cluster.values():
+        for i in range(len(members)):
+            for j in range(i + 1, len(members)):
+                gt.add((members[i], members[j]))
+    keep = [c for c in records.column_names if c != "record_id"]
+    df = pl.from_arrow(records.select(keep))
+    assert isinstance(df, pl.DataFrame)
+    return df, gt
+
+
+def _from_headtohead(name: str) -> tuple[pl.DataFrame, set] | None:
+    """Load ``name`` through ``scripts.bench_er_headtohead.datasets`` (the owner of
+    these loaders -- a second copy of where each dataset lives is how a fetch step
+    ends up writing somewhere the loader never reads). None when the data or its
+    loader dependency is absent."""
+    from scripts.bench_er_headtohead import datasets as headtohead
+
+    try:
+        records, truth = headtohead.load_dataset(name)
+    except headtohead.DatasetUnavailable:
+        return None
+    return _records_truth_to_frame(records, truth)
+
+
+def _febrl4() -> tuple[pl.DataFrame, set] | None:
+    """recordlinkage's Febrl4 person LINKAGE set (5k originals + 5k duplicates,
+    1:1 links). None when recordlinkage isn't installed."""
+    return _from_headtohead("febrl4")
+
+
+def _dblp_scholar() -> tuple[pl.DataFrame, set] | None:
+    """Leipzig DBLP-Scholar: larger, noisier bibliographic linkage (web-scraped
+    Scholar side). None when the CSVs aren't under tests/benchmarks/datasets."""
+    return _from_headtohead("dblp_scholar")
+
+
+def _amazon_google() -> tuple[pl.DataFrame, set] | None:
+    """Leipzig Amazon-GoogleProducts: product linkage, a different domain from the
+    person and bibliographic sets. Reads ``Amazon-Google/`` (not the zip's
+    ``Amazon-GoogleProducts`` name). None when the CSVs are absent."""
+    return _from_headtohead("amazon_google")
 
 
 REGISTRY: list[Dataset] = [

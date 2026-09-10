@@ -190,7 +190,13 @@ jobs:
              [ "${{ github.event.inputs.tier }}" = "full" ]; then
             echo "datasets=" >> "$GITHUB_OUTPUT"        # empty -> ab_lever default (whole panel)
             echo "label=full panel" >> "$GITHUB_OUTPUT"
+            echo "full=true" >> "$GITHUB_OUTPUT"
+            # Every real dataset the steps below provision. ncvr_real is absent on
+            # purpose: it is local-only PII and never reaches CI.
+            echo "require=febrl3,febrl4,dblp_acm,dblp_scholar,amazon_google,historical_50k" >> "$GITHUB_OUTPUT"
           else
+            echo "full=false" >> "$GITHUB_OUTPUT"
+            echo "require=" >> "$GITHUB_OUTPUT"
             # ncvr_synthetic is in the PR tier deliberately (#2518): it is the
             # dataset that CAUGHT the #2387 regression, and leaving it to the
             # nightly is what turned a catchable defect into five red nights. It
@@ -198,6 +204,38 @@ jobs:
             echo "datasets=--datasets person,household_hardneg,cotenant_hardneg,ncvr_synthetic" >> "$GITHUB_OUTPUT"
             echo "label=synthetic over-merge panel" >> "$GITHUB_OUTPUT"
           fi
+      # Full panel only. febrl3/febrl4 ship inside recordlinkage, which is not a
+      # goldenmatch dependency.
+      - name: Install recordlinkage (febrl3 / febrl4)
+        if: steps.scope.outputs.full == 'true'
+        run: uv pip install recordlinkage
+      # The Leipzig benchmarks are gitignored. A failed download only warns here;
+      # --require-datasets on the A/B step is what turns a missing dataset into a
+      # failed run, so the panel cannot shrink without anyone noticing.
+      - name: Fetch Leipzig benchmarks (DBLP-ACM, DBLP-Scholar, Amazon-Google)
+        if: steps.scope.outputs.full == 'true'
+        run: |
+          BASE=packages/python/goldenmatch/tests/benchmarks/datasets
+          fetch() {
+            local name="$1" url="$2"; shift 2
+            local dest="$BASE/$name"
+            mkdir -p "$dest"
+            if curl -fsSL --retry 3 -o "/tmp/$name.zip" "$url"; then
+              mkdir -p "/tmp/$name" && unzip -o -q "/tmp/$name.zip" -d "/tmp/$name"
+              for f in "$@"; do
+                found=$(find "/tmp/$name" -name "$f" | head -1)
+                if [ -n "$found" ]; then cp "$found" "$dest/$f"
+                else echo "::warning::$name: $f not in archive"; fi
+              done
+            else
+              echo "::warning::$name download failed; --require-datasets will fail the run"
+            fi
+          }
+          L=https://dbs.uni-leipzig.de/file
+          fetch DBLP-ACM "$L/DBLP-ACM.zip" DBLP2.csv ACM.csv DBLP-ACM_perfectMapping.csv
+          fetch DBLP-Scholar "$L/DBLP-Scholar.zip" DBLP1.csv Scholar.csv DBLP-Scholar_perfectMapping.csv
+          # The zip is named Amazon-GoogleProducts; the loader reads Amazon-Google/.
+          fetch Amazon-Google "$L/Amazon-GoogleProducts.zip" Amazon.csv GoogleProducts.csv Amzon_GoogleProducts_perfectMapping.csv
       - name: Partition-fingerprint self-test
         # The A/B reports whether the lever changed the CLUSTERING, not only
         # the F1. That column's useful answer is "same", which is also what a
@@ -223,9 +261,12 @@ jobs:
           ON_VALUE: ${{ inputs.on_value || '1' }}
           EXTRA_PASSES: ${{ inputs.extra_passes }}
           ON_EXTRA_PASSES: ${{ inputs.on_extra_passes }}
+          # Empty on the PR tier -> no requirement.
+          REQUIRE_DATASETS: ${{ steps.scope.outputs.require }}
         run: |
           uv run python -m scripts.bench_er_headtohead.ab_lever \
             --env "$LEVER" --off 0 --on "$ON_VALUE" \
             --extra-passes "$EXTRA_PASSES" \
             --on-extra-passes "$ON_EXTRA_PASSES" \
+            --require-datasets "$REQUIRE_DATASETS" \
             ${{ steps.scope.outputs.datasets }}
