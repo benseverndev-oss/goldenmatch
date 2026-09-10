@@ -60,6 +60,37 @@ def test_pass_key_codes_treat_null_and_sentinels_as_invalid():
     assert codes[4] >= 0 and codes[4] != codes[0]
 
 
+@pytest.mark.parametrize("backend", ["polars", "arrow"])
+def test_pass_key_validity_matches_the_blockers_filter_valid_key(backend):
+    """ENFORCES the docstring claim: a row the pruner treats as having an invalid
+    key is exactly a row ``Frame.filter_valid_key`` drops before blocking. If the
+    two drifted, the pruner would score co-firing for pairs no block contains
+    (or miss ones it does). Both halves run on the same keys, on both frame
+    backends, including the whitespace/case sentinel variants and the empty
+    string the blocker deliberately keeps."""
+    import pyarrow as pa
+    from goldenmatch.config.schemas import BlockingKeyConfig
+    from goldenmatch.core.frame import to_frame
+
+    values = ["a", "A", None, "null", " NaN ", "None", "", "none ", "x", "nan"]
+    ids = list(range(len(values)))
+    if backend == "polars":
+        fr = to_frame(pl.DataFrame({"__row_id__": ids, "k": values}))
+    else:
+        fr = to_frame(pa.table({"__row_id__": pa.array(ids, pa.int64()), "k": pa.array(values)}))
+    key = BlockingKeyConfig(fields=["k"], transforms=["lowercase"])
+
+    codes = S._pass_key_codes(fr, key)
+    pruner_valid = {i for i, c in zip(ids, codes) if c >= 0}
+
+    keyed = fr.with_column("__block_key__", fr.derive_block_key(["k"], ["lowercase"]))
+    blocker_valid = set(keyed.filter_valid_key("__block_key__").column("__row_id__").to_list())
+
+    assert pruner_valid == blocker_valid
+    assert 6 in pruner_valid, "the empty string is a real key value for both"
+    assert codes[0] == codes[1], "a lowercase transform must make 'a' and 'A' one block"
+
+
 def test_invalid_keys_never_co_fire():
     codes = [np.array([-1, -1, 3]), np.array([0, 0, 0])]
     sig = S._row_signatures(codes, np.array([0]), np.array([1]))
