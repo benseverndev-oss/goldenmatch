@@ -791,6 +791,49 @@ def _maybe_refit_link_threshold(
     return link_threshold
 
 
+def _fit_fs_signature_pruner(
+    config: GoldenMatchConfig,
+    score_frame: Any,
+    *,
+    use_bucket: bool,
+    target_ids: set[int] | None,
+    across_files_only: bool,
+    bench_dump_dir: str | None,
+) -> Any:
+    """``GOLDENMATCH_FS_SIGNATURE_PRUNE``: a fitted pass-signature pruner, or None.
+
+    Default OFF -> None without touching the frame, so the unset path is
+    byte-identical. The pruner filters EM's training sample AND the scored pairs,
+    so the model is trained on the population it scores. It only exists where
+    both halves apply: the dedupe-scope bucket routes (list, Arrow stream,
+    columnar). Anywhere else it DECLINES loudly rather than filtering EM alone,
+    which would be a different lever wearing this one's name.
+    """
+    from goldenmatch.core.signature_prune import fit_signature_pruner, signature_prune_rule
+
+    rule = signature_prune_rule()
+    if rule is None:
+        return None
+    reason = None
+    if target_ids is not None or across_files_only:
+        reason = "match / across-files lanes keep every candidate"
+    elif not use_bucket:
+        reason = "the batched / external-blocks FS routes do not filter scored pairs"
+    elif bench_dump_dir:
+        reason = "the bench pair dump counts unfiltered candidates"
+    else:
+        from goldenmatch.backends.fs_out_of_core import fs_out_of_core_enabled
+
+        if fs_out_of_core_enabled():
+            reason = "the out-of-core FS route does not filter scored pairs"
+    if reason is not None:
+        logger.warning("FS signature prune (%s): DECLINED -- %s", rule, reason)
+        return None
+    if config.blocking is None:
+        return None
+    return fit_signature_pruner(score_frame, config.blocking, rule)
+
+
 def _score_probabilistic_matchkey(
     mk: Any,
     config: GoldenMatchConfig,
@@ -915,12 +958,23 @@ def _score_probabilistic_matchkey(
         collect_blocking_fields(config.blocking, for_em=True)
         if config.blocking else []
     )
+    # Pass-signature pruning (GOLDENMATCH_FS_SIGNATURE_PRUNE, default OFF -> None
+    # -> byte-identical): filters EM's training sample here and the scored pairs
+    # on the bucket routes below.
+    _sig_pruner = _fit_fs_signature_pruner(
+        config, score_frame,
+        use_bucket=_fs_use_bucket,
+        target_ids=target_ids,
+        across_files_only=across_files_only,
+        bench_dump_dir=bench_dump_dir,
+    )
     # Reuses mk.model_path when set (Splink-style train-once), else trains.
     em_result = load_or_train_em(
         score_frame, mk,
         blocks=blocks,
         blocking_fields=blocking_fields,
         target_ids=target_ids,
+        pair_filter=_sig_pruner.keep_mask if _sig_pruner is not None else None,
     )
     scoring_mk, link_threshold = _prepare_probabilistic_review_scoring(
         mk, em_result
@@ -1015,6 +1069,8 @@ def _score_probabilistic_matchkey(
                 n_buckets=config.n_buckets,
                 em_result=em_result,
             )
+            if _sig_pruner is not None:
+                _pair_table = _sig_pruner.filter_table(_pair_table)
             # Phase 3a threshold refit (GOLDENMATCH_FS_REFIT_THRESHOLD, default ON
             # since #2522; `=0` is the byte-identical kill-switch):
             # pick the link cutoff from the actual scored-pair distribution -- the
@@ -1077,6 +1133,8 @@ def _score_probabilistic_matchkey(
                 n_buckets=config.n_buckets,
                 em_result=em_result,
             )
+            if _sig_pruner is not None:
+                _pair_table = _sig_pruner.filter_table(_pair_table)
             link_threshold = _maybe_refit_link_threshold(
                 mk, link_threshold, table=_pair_table, decision_out=_refit_decision
             )
@@ -1099,6 +1157,8 @@ def _score_probabilistic_matchkey(
             target_ids=target_ids,
             em_result=em_result,
         )
+        if _sig_pruner is not None:
+            pairs = _sig_pruner.filter_pairs(pairs)
         link_threshold = _maybe_refit_link_threshold(mk, link_threshold, pairs=pairs,
                                                  decision_out=_refit_decision)
         pairs, candidates = _split_probabilistic_pairs(pairs, link_threshold)

@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 482,
+      "module_count": 483,
       "modules": [
         {
           "module": "goldenmatch",
@@ -4093,6 +4093,7 @@
             "_extract_matchkey_columns",
             "_finalize_review_pairs",
             "_finalize_review_pairs_arrow",
+            "_fit_fs_signature_pruner",
             "_frame_lane_eligible",
             "_fs_arrow_stream_eligible",
             "_fs_arrow_stream_enabled",
@@ -4189,6 +4190,7 @@
             "goldenmatch.core.quality",
             "goldenmatch.core.review_queue",
             "goldenmatch.core.scorer",
+            "goldenmatch.core.signature_prune",
             "goldenmatch.core.simhash_blocker",
             "goldenmatch.core.standardize",
             "goldenmatch.core.transform",
@@ -4821,6 +4823,27 @@
             "goldenmatch.core.compare_clusters",
             "goldenmatch.core.ingest",
             "goldenmatch.core.pipeline"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.signature_prune",
+          "file": "packages/python/goldenmatch/goldenmatch/core/signature_prune.py",
+          "purpose": "Pass-signature candidate pruning for multi-pass FS blocking.",
+          "defines": [
+            "SignaturePruner",
+            "_fit_from_codes",
+            "_groups",
+            "_pass_key_codes",
+            "_phi_matrix",
+            "_popcount",
+            "_row_signatures",
+            "_sample_signature_counts",
+            "_to_group_masks",
+            "fit_signature_pruner",
+            "signature_prune_rule"
+          ],
+          "imports": [
+            "goldenmatch.core.frame"
           ]
         },
         {

@@ -18,6 +18,7 @@ Usage:
 
 Design spec: docs/superpowers/specs/2026-08-01-fs-lever-enablement-design.md
 """
+
 from __future__ import annotations
 
 import argparse
@@ -37,8 +38,13 @@ import time
 # move F1. Including them means a lever A/B is measured on both the at-ceiling
 # regime (must-not-regress) AND the has-headroom regime (can-it-win).
 _PANEL = [
-    "person", "febrl3", "ncvr_synthetic", "dblp_acm", "historical_50k",
-    "household_hardneg", "cotenant_hardneg",
+    "person",
+    "febrl3",
+    "ncvr_synthetic",
+    "dblp_acm",
+    "historical_50k",
+    "household_hardneg",
+    "cotenant_hardneg",
 ]
 
 
@@ -61,7 +67,37 @@ def _load(name: str):
     return fn()  # loader returns None when its dep/vendored file is absent -> skip
 
 
-def _f1(name: str) -> dict | None:
+def _with_extra_passes(cfg, df, specs: list[str]):
+    """Append blocking passes (``field:t1,t2``) to an auto-configured config.
+
+    Measurement-only: applied identically to BOTH arms, after auto-config, so an
+    extra pass is a held constant rather than a second variable. Auto-config's own
+    guards (``_is_scale_safe``) are deliberately bypassed -- that is the point of
+    forcing a pass in. A spec naming a column the dataset lacks is skipped and
+    reported, not silently dropped.
+    """
+    if not specs or cfg.blocking is None:
+        return cfg, []
+    from goldenmatch.config.schemas import BlockingKeyConfig
+
+    keys = list(cfg.blocking.resolved_keys())
+    added = []
+    for spec in specs:
+        field, _, transforms = spec.partition(":")
+        if field not in df.columns:
+            print(f"  [extra pass] skipped {spec!r}: no column {field!r}", file=sys.stderr)
+            continue
+        keys.append(
+            BlockingKeyConfig(fields=[field], transforms=[t for t in transforms.split(",") if t])
+        )
+        added.append(spec)
+    if not added:
+        return cfg, []
+    blocking = cfg.blocking.model_copy(update={"strategy": "multi_pass", "passes": keys})
+    return cfg.model_copy(update={"blocking": blocking}), added
+
+
+def _f1(name: str, extra_passes: list[str] | None = None) -> dict | None:
     """Run zero-config FS dedupe on one dataset, return the F1 summary (or None
     to skip). Reads the lever from the CURRENT os.environ."""
     loaded = _load(name)
@@ -75,14 +111,21 @@ def _f1(name: str) -> dict | None:
     from goldenmatch.core.evaluate import evaluate_clusters
 
     cfg = auto_configure_probabilistic_df(df)
+    cfg, added = _with_extra_passes(cfg, df, extra_passes or [])
+    if added:
+        print(f"  [extra pass] {name}: added {added}", file=sys.stderr)
     t0 = time.perf_counter()
     res = goldenmatch.dedupe_df(df, config=cfg)
     wall = time.perf_counter() - t0
     ev = evaluate_clusters(res.clusters, gt).summary()
     pairs, digest = _partition_fingerprint(res.clusters)
     return {
-        "f1": ev["f1"], "p": ev["precision"], "r": ev["recall"], "wall": wall,
-        "pairs": pairs, "digest": digest,
+        "f1": ev["f1"],
+        "p": ev["precision"],
+        "r": ev["recall"],
+        "wall": wall,
+        "pairs": pairs,
+        "digest": digest,
     }
 
 
@@ -125,6 +168,7 @@ def _self_test() -> int:
     prevent. So the instrument asserts a KNOWN-POSITIVE before it is trusted to
     report an absence, and the gate runs this before it measures anything.
     """
+
     def cl(*groups):
         return {i: {"members": list(g)} for i, g in enumerate(groups)}
 
@@ -156,19 +200,31 @@ def main() -> int:
     ap.add_argument("--off", default="0", help="OFF value (baseline)")
     ap.add_argument("--on", default="1", help="ON value (candidate)")
     ap.add_argument("--datasets", default=",".join(_PANEL), help="comma list")
-    ap.add_argument("--tol", type=float, default=0.005,
-                    help="max allowed per-dataset F1 regression before FAIL")
-    ap.add_argument("--self-test", action="store_true",
-                    help="verify the partition fingerprint distinguishes partitions, then exit")
+    ap.add_argument(
+        "--tol", type=float, default=0.005, help="max allowed per-dataset F1 regression before FAIL"
+    )
+    ap.add_argument(
+        "--extra-passes",
+        default="",
+        help='blocking passes added to BOTH arms after auto-config, ";"-separated '
+        '"field:t1,t2" specs (e.g. "surname:lowercase,soundex")',
+    )
+    ap.add_argument(
+        "--self-test",
+        action="store_true",
+        help="verify the partition fingerprint distinguishes partitions, then exit",
+    )
     args = ap.parse_args()
 
     if args.self_test:
         return _self_test()
 
-
     # Isolate the measurement from cross-run auto-config memory.
     os.environ["GOLDENMATCH_AUTOCONFIG_MEMORY"] = "0"
     datasets = [d.strip() for d in args.datasets.split(",") if d.strip()]
+    extra_passes = [s.strip() for s in args.extra_passes.split(";") if s.strip()]
+    if extra_passes:
+        print(f"extra blocking passes on BOTH arms: {extra_passes}", file=sys.stderr)
 
     rows: list[tuple[str, dict, dict]] = []
     skipped: list[str] = []
@@ -176,29 +232,35 @@ def main() -> int:
         # KeyError (unknown name) intentionally propagates -- a typo must not
         # silently shrink the panel. A None result = a known-unavailable dataset.
         os.environ[args.env] = args.off
-        off = _f1(name)
+        off = _f1(name, extra_passes)
         if off is None:
             skipped.append(name)
             continue
         os.environ[args.env] = args.on
-        on = _f1(name)
+        on = _f1(name, extra_passes)
         assert on is not None, f"{name}: measurable OFF but unmeasurable ON"
         rows.append((name, off, on))
 
     if skipped:
-        print(f"[skipped] {len(skipped)} unavailable dataset(s): {', '.join(skipped)}",
-              file=sys.stderr)
+        print(
+            f"[skipped] {len(skipped)} unavailable dataset(s): {', '.join(skipped)}",
+            file=sys.stderr,
+        )
     # A regression gate that measured NOTHING must FAIL, never PASS -- an empty
     # panel is a broken environment, not a clean bill of health.
     if not rows:
-        print(f"\nGATE: FAIL — 0 datasets measured (requested {len(datasets)}, "
-              f"all unavailable). A gate that measures nothing cannot PASS.")
+        print(
+            f"\nGATE: FAIL — 0 datasets measured (requested {len(datasets)}, "
+            f"all unavailable). A gate that measures nothing cannot PASS."
+        )
         return 1
 
     print(f"\nA/B lever: {args.env}  (OFF={args.off}  ON={args.on})  tol={args.tol}")
-    print(f"{'dataset':18s} {'F1 off':>8s} {'F1 on':>8s} {'dF1':>8s} "
-          f"{'P off':>7s} {'P on':>7s} {'R off':>7s} {'R on':>7s} "
-          f"{'pairs off':>10s} {'pairs on':>9s} {'partition':>10s}  verdict")
+    print(
+        f"{'dataset':18s} {'F1 off':>8s} {'F1 on':>8s} {'dF1':>8s} "
+        f"{'P off':>7s} {'P on':>7s} {'R off':>7s} {'R on':>7s} "
+        f"{'pairs off':>10s} {'pairs on':>9s} {'partition':>10s}  verdict"
+    )
     worst = 0.0
     any_regress = False
     moved = False
@@ -210,21 +272,29 @@ def main() -> int:
         verdict = "REGRESS" if regress else ("win" if d > args.tol else "flat")
         part = "same" if off["digest"] == on["digest"] else "DIFFERS"
         moved = moved or part == "DIFFERS"
-        print(f"{name:18s} {off['f1']:8.4f} {on['f1']:8.4f} {d:+8.4f} "
-              f"{off['p']:7.3f} {on['p']:7.3f} {off['r']:7.3f} {on['r']:7.3f} "
-              f"{off['pairs']:10d} {on['pairs']:9d} {part:>10s}  {verdict}")
+        print(
+            f"{name:18s} {off['f1']:8.4f} {on['f1']:8.4f} {d:+8.4f} "
+            f"{off['p']:7.3f} {on['p']:7.3f} {off['r']:7.3f} {on['r']:7.3f} "
+            f"{off['pairs']:10d} {on['pairs']:9d} {part:>10s}  {verdict}"
+        )
 
-    print(f"\nGATE: {'FAIL' if any_regress else 'PASS'} "
-          f"(worst dF1 {worst:+.4f}, tol {args.tol}); {len(rows)} datasets measured")
+    print(
+        f"\nGATE: {'FAIL' if any_regress else 'PASS'} "
+        f"(worst dF1 {worst:+.4f}, tol {args.tol}); {len(rows)} datasets measured"
+    )
     if moved:
-        print("PARTITION: differs on at least one dataset -- the lever IS "
-              "active, so a flat dF1 means the clustering ABSORBED it.")
+        print(
+            "PARTITION: differs on at least one dataset -- the lever IS "
+            "active, so a flat dF1 means the clustering ABSORBED it."
+        )
     else:
         # Not a failure: a default-OFF lever SHOULD be byte-identical. It is
         # said out loud because "flat dF1" and "changed nothing at all" are
         # different claims, and only this one licenses the second.
-        print("PARTITION: identical on every dataset -- the lever altered no "
-              "cluster anywhere, so a flat dF1 says INERT, not neutral.")
+        print(
+            "PARTITION: identical on every dataset -- the lever altered no "
+            "cluster anywhere, so a flat dF1 says INERT, not neutral."
+        )
     return 1 if any_regress else 0
 
 
