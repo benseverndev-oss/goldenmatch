@@ -24,14 +24,20 @@ import os
 import subprocess
 import sys
 
+# Every candidate runs TWICE in fresh processes: a setting "fixes" the drift only if
+# its own two runs agree. Run 34520791144 already showed the drift is per PROCESS,
+# not per runner (two default processes on one runner: 27,035 vs 27,029 pairs), and
+# that RAYON_NUM_THREADS / n_buckets / the numpy route don't separate the outcomes
+# -- so these candidates are the per-process randomness sources.
 VARIANTS = (
     ("default", {}),
     ("default (repeat)", {}),
-    ("rayon 1 thread", {"RAYON_NUM_THREADS": "1"}),
-    ("rayon 2 threads", {"RAYON_NUM_THREADS": "2"}),
-    ("n_buckets 16", {"PROBE_N_BUCKETS": "16"}),
-    ("n_buckets 64", {"PROBE_N_BUCKETS": "64"}),
-    ("numpy route", {"GOLDENMATCH_NATIVE": "0"}),
+    ("PYTHONHASHSEED=0", {"PYTHONHASHSEED": "0"}),
+    ("PYTHONHASHSEED=0 (repeat)", {"PYTHONHASHSEED": "0"}),
+    ("PYTHONHASHSEED=1", {"PYTHONHASHSEED": "1"}),
+    ("PYTHONHASHSEED=1 (repeat)", {"PYTHONHASHSEED": "1"}),
+    ("POLARS_MAX_THREADS=1", {"POLARS_MAX_THREADS": "1"}),
+    ("POLARS_MAX_THREADS=1 (repeat)", {"POLARS_MAX_THREADS": "1"}),
 )
 
 _CHILD = r"""
@@ -86,26 +92,32 @@ def main() -> int:
             results.append((label, {"error": f"exit {proc.returncode}: {' | '.join(tail)}"}))
         else:
             results.append((label, json.loads(line)))
-        print(f"{label:18s} {json.dumps(results[-1][1])}", flush=True)
+        print(f"{label:30s} {json.dumps(results[-1][1])}", flush=True)
 
-    ok = [(label, r) for label, r in results if "error" not in r]
+    ok = dict((label, r) for label, r in results if "error" not in r)
     if len(ok) < 2:
         print("\nPROBE: FAIL -- fewer than two variants ran; nothing to compare.")
         return 1
-    base_label, base = ok[0]
-    print(f"\ncontrol: {base_label} digest {base['digest']} pairs {base['pairs']}")
-    control_ok = (
-        len(ok) > 1 and ok[1][0] == "default (repeat)" and ok[1][1]["digest"] == base["digest"]
-    )
-    print(f"control repeat identical: {control_ok}")
-    for label, r in ok[1:]:
-        same = r["digest"] == base["digest"]
-        delta = r["pairs"] - base["pairs"]
+    print("\nrepeat pairs (a setting only removes the drift if its own two runs agree):")
+    default_stable = None
+    for label, _ in VARIANTS:
+        if not label.endswith(" (repeat)"):
+            continue
+        base_label = label[: -len(" (repeat)")]
+        a, b = ok.get(base_label), ok.get(label)
+        if a is None or b is None:
+            print(f"  {base_label:24s} could not compare (a run failed)")
+            continue
+        same = a["digest"] == b["digest"]
+        if base_label == "default":
+            default_stable = same
         print(
-            f"  {label:18s} {'same' if same else 'DIFFERS'}  pairs {r['pairs']} ({delta:+d})  "
-            f"F1 {r['f1']:.4f}"
+            f"  {base_label:24s} {'IDENTICAL' if same else 'DIFFERS'}  "
+            f"pairs {a['pairs']} vs {b['pairs']}  digests {a['digest']} vs {b['digest']}"
         )
-    return 0 if control_ok else 1
+    # Exit non-zero when the default drifts: that is the defect this probe tracks,
+    # and a green job would read as "deterministic".
+    return 0 if default_stable else 1
 
 
 if __name__ == "__main__":
