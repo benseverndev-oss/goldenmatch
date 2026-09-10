@@ -55,6 +55,35 @@ def _split_edge_work_budget(n_rows: int, override: int | None = None) -> int:
     return max(_DEFAULT_SPLIT_EDGE_WORK_BUDGET, int(n_rows) * _SPLIT_EDGE_BUDGET_PER_ROW)
 
 
+#: Scores within this of a component's weakest tree edge count as tied with it.
+_SPLIT_TIE_EPS = 1e-9
+
+
+def _split_ties_level() -> bool:
+    """How ``split_oversized_cluster_to_size`` resolves tied weakest tree edges.
+
+    **Default ``level``:** cut every tree edge tied with the weakest one at once. That is
+    single-linkage at that height, so the components cannot depend on which tied edge
+    sorts first or on which of several equal-weight spanning trees Kruskal built.
+    ``GOLDENMATCH_CLUSTER_SPLIT_TIES=single`` restores cutting one edge, the first in
+    canonical endpoint order (#2935) -- deterministic, but an arbitrary choice among
+    equals: on historical_50k it scored F1 0.8274 where the earlier insertion order
+    happened to score 0.8320.
+
+    MEASURED (fs-lever-gate full panel, single vs level, default cutoff plus evidence cuts
+    3/5/9/12; runs 34531100306, 34532203699, 34532206124, 34532208460, 34532210826): it
+    never loses. Only datasets with oversized tied clusters move, always precision up at
+    flat recall. Default cutoff: historical_50k 0.8274 -> 0.8386, dblp_scholar 0.3757 ->
+    0.4213; at cut 5 both gain ~0.12. The other eight partitions are identical throughout.
+
+    Scope: this to-size splitter only (the pipeline's auto-split). The single-step
+    ``split_oversized_cluster``, the Rust ``mst_split_components`` core and TS
+    ``buildClusters`` still cut one edge."""
+    return os.environ.get("GOLDENMATCH_CLUSTER_SPLIT_TIES", "level").strip().lower() not in (
+        "single", "0", "off", "false",
+    )
+
+
 def _record_unmerge_corrections(
     pairs: list[tuple[int, int]],
     memory_store: MemoryStore | None,
@@ -260,7 +289,9 @@ def split_oversized_cluster_to_size(
     ``max_size``. A sub-tree of a maximum spanning tree IS the maximum spanning
     tree of its induced sub-graph (cycle property), so cutting original tree
     edges reproduces the old per-component re-MST cut decisions (same membership
-    partition, same first-minimum tie-break). Returns final sub-clusters in a
+    partition, same first-minimum tie-break) -- except where weakest edges tie, which
+    are all cut at once unless ``GOLDENMATCH_CLUSTER_SPLIT_TIES=single`` (see
+    ``_split_ties_level``). Returns final sub-clusters in a
     DETERMINISTIC order (sort-by-min-member at each cut, oversized components
     re-enqueued LIFO).
 
@@ -279,6 +310,7 @@ def split_oversized_cluster_to_size(
                  "oversized": size > max_size, "pair_scores": pair_scores,
                  **_confidence_fields(pair_scores, size)}]
 
+    level_ties = _split_ties_level()
     out_order: list[frozenset[int]] = []
     work: list[tuple[set[int], list]] = [(set(members), list(tree_edges))]
     while work:
@@ -286,13 +318,23 @@ def split_oversized_cluster_to_size(
         if len(node_set) <= max_size or not edges:
             out_order.append(frozenset(node_set))
             continue
-        weakest = min(edges, key=lambda e: e[2])   # first-minimum, same as today
-        remaining = [e for e in edges if e is not weakest]
+        remaining = None
+        if level_ties:
+            floor = min(e[2] for e in edges) + _SPLIT_TIE_EPS
+            remaining = [e for e in edges if e[2] > floor]
+            if not remaining:
+                # Every tree edge ties: the tree carries no split information, and a
+                # level cut would shatter the component into singletons (a block of
+                # exact duplicates all scoring 1.0). Peel one edge instead.
+                remaining = None
+        if remaining is None:
+            weakest = min(edges, key=lambda e: e[2])   # first-minimum, same as today
+            remaining = [e for e in edges if e is not weakest]
         uf = UnionFind()
         uf.add_many(list(node_set))
         for a, b, _s in remaining:
             uf.union(a, b)
-        comps = uf.get_clusters()                   # 2 components
+        comps = uf.get_clusters()                   # 2 components (more under a level cut)
         node_to_rep = {n: uf.find(n) for n in node_set}
         rep_to_edges: dict[int, list] = {}
         for e in remaining:

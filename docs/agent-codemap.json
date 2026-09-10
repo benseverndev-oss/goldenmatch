@@ -2682,6 +2682,7 @@
             "_record_unmerge_corrections",
             "_severe_bridge_count",
             "_split_edge_work_budget",
+            "_split_ties_level",
             "_try_native_group_members",
             "add_to_cluster",
             "build_cluster_frames",
