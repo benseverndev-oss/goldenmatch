@@ -349,6 +349,26 @@ def _fs_field_dependence_enabled() -> bool:
     )
 
 
+
+def _fs_fd_classes() -> str:
+    """Which EM class(es) the field-dependence correction measures. **Default 'nonmatch'.**
+
+    ``GOLDENMATCH_FS_FD_CLASSES=both`` subtracts the NET double-count,
+    ``log2(u_ab/(u_a*u_b)) - log2(m_ab/(m_a*m_b))``, instead of the non-match term
+    alone. The loglinear record-linkage literature models field interactions in the
+    match class, the non-match class, or both (Daggy et al. 2013 selected both by
+    BIC), and Xu et al. 2019 found dependence modeling matters when it is present in
+    the DOMINATING class. Inside historical_50k's blocks the match prevalence is
+    ~0.92, so matches dominate -- and the non-match-only correction ignored them.
+    True duplicates co-agree on correlated fields more than independence predicts
+    too, so subtracting only the non-match excess over-penalises real matches.
+
+    Anything other than ``both`` (unset, empty, unrecognised) is the original
+    non-match-only correction, so ADR 0066's measurements stay reproducible.
+    """
+    val = os.environ.get("GOLDENMATCH_FS_FD_CLASSES", "")
+    return "both" if val.strip().lower() == "both" else "nonmatch"
+
 def _deconvolve_post_blocking_u(
     comp_matrix, mk, m_probs, p_match, always_conditioned, u_floor: float = 1e-4,
 ) -> dict:
@@ -377,6 +397,25 @@ def _deconvolve_post_blocking_u(
         if s > 0:
             out[f.field] = [x / s for x in u_new]
     return out
+def _class_excess_bits(resp, ta, tb) -> float | None:
+    """``log2(P(a,b top) / (P(a top) * P(b top)))`` within one EM class.
+
+    ``resp`` is that class's per-pair responsibility; ``ta``/``tb`` are the
+    top-level agreement masks. Returns None when the class carries no weight or
+    either marginal or the joint is empty: the lift is then NOT ESTIMABLE, which
+    is a different statement from zero lift.
+    """
+    total = float(resp.sum())
+    if total <= 0:
+        return None
+    pa = float((resp * ta).sum()) / total
+    pb = float((resp * tb).sum()) / total
+    pab = float((resp * (ta & tb)).sum()) / total
+    if pa <= 0 or pb <= 0 or pab <= 0:
+        return None
+    return math.log2(pab / (pa * pb))
+
+
 def _compute_joint_corrections(
     comp_matrix, mk, m_probs, u_probs, p_match, conditioned_mask, always_conditioned,
 ) -> list[tuple[str, str, float]]:
@@ -388,6 +427,10 @@ def _compute_joint_corrections(
     pairs whose ``log2(joint / independent)`` exceeds ``_FD_MIN_BITS`` (top
     ``_FD_MAX_PAIRS`` by excess). Scoring subtracts ``excess_bits`` when both
     agree — dropping the namesake double-count.
+
+    Under ``GOLDENMATCH_FS_FD_CLASSES=both`` the returned bits are the NET
+    double-count, non-match lift minus match lift (see ``_fs_fd_classes``), and
+    selection, the floor and the cap all apply to that net value.
     """
     # Non-match posterior over the scored pairs (forward E-step, converged m/u).
     n_pairs = comp_matrix.shape[0]
@@ -441,19 +484,27 @@ def _compute_joint_corrections(
         lv = comp_matrix[:, j]
         top[f.field] = (lv == (int(f.levels) - 1)) & (lv >= 0)
 
+    both_classes = _fs_fd_classes() == "both"
+    v = 1.0 - w  # match responsibility
     out = []
     observed: list[tuple[str, str, float]] = []
+    breakdown: dict[tuple[str, str], tuple[float, float]] = {}
     for (ja, fa), (jb, fb) in combinations(fields, 2):
         ta, tb = top[fa.field], top[fb.field]
-        u_a = float((w * ta).sum()) / W
-        u_b = float((w * tb).sum()) / W
-        u_ab = float((w * (ta & tb)).sum()) / W
-        if u_a <= 0 or u_b <= 0 or u_ab <= 0:
+        excess_u = _class_excess_bits(w, ta, tb)
+        if excess_u is None:
             continue
-        excess = math.log2(u_ab / (u_a * u_b))
-        observed.append((fa.field, fb.field, excess))
-        if excess >= _FD_MIN_BITS:
-            out.append((fa.field, fb.field, excess))
+        excess_m = 0.0
+        if both_classes:
+            # An unestimable match-class lift contributes nothing, which leaves
+            # the pair at its non-match-only value -- the conservative fallback.
+            m_lift = _class_excess_bits(v, ta, tb)
+            excess_m = m_lift if m_lift is not None else 0.0
+        net = excess_u - excess_m
+        breakdown[(fa.field, fb.field)] = (excess_u, excess_m)
+        observed.append((fa.field, fb.field, net))
+        if net >= _FD_MIN_BITS:
+            out.append((fa.field, fb.field, net))
     out.sort(key=lambda t: t[2], reverse=True)
     if len(fields) < 2:
         # Reachable only on a matchkey with fewer than two comparison fields
@@ -485,6 +536,16 @@ def _compute_joint_corrections(
         )
 
     corrections = out[:_FD_MAX_PAIRS]
+    if both_classes and observed:
+        shown = corrections or sorted(observed, key=lambda t: t[2], reverse=True)[:3]
+        logger.warning(
+            "FS field-dependence (classes=both): net = non-match lift - match lift; %s%s",
+            ", ".join(
+                f"{a}x{b}(u={breakdown[(a, b)][0]:+.2f} m={breakdown[(a, b)][1]:+.2f} net={bits:+.2f}b)"
+                for a, b, bits in shown
+            ),
+            "" if corrections else " -- none cleared the floor",
+        )
     if corrections and os.environ.get("GOLDENMATCH_FS_FD_PROBE", "").strip() not in ("", "0"):
         _log_fd_reach_probe(corrections, top, log_m, log_u)
     return corrections

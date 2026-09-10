@@ -106,6 +106,15 @@ on:
           control for native/numpy parity. Empty leaves it unset.
         type: string
         default: ""
+      fd_classes:
+        description: >-
+          Value for GOLDENMATCH_FS_FD_CLASSES, applied to BOTH arms. "both"
+          makes the field-dependence correction subtract the NET double-count
+          (non-match lift minus match lift) instead of the non-match lift
+          alone. Anything else, empty included, is the original non-match-only
+          correction.
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -179,6 +188,7 @@ jobs:
           GOLDENMATCH_FS_EVIDENCE_CUT: ${{ inputs.evidence_cut }}
           GOLDENMATCH_FS_FD_PROBE: ${{ inputs.fd_probe }}
           GOLDENMATCH_FS_TF_CLAMP: ${{ inputs.tf_clamp }}
+          GOLDENMATCH_FS_FD_CLASSES: ${{ inputs.fd_classes }}
         run: |
           uv run python -m scripts.bench_er_headtohead.ab_lever \
             --env "$LEVER" --off 0 --on 1 \
