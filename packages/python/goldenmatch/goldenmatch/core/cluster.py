@@ -60,16 +60,28 @@ _SPLIT_TIE_EPS = 1e-9
 
 
 def _split_ties_level() -> bool:
-    """``GOLDENMATCH_CLUSTER_SPLIT_TIES=level``: cut every tied weakest tree edge at once.
+    """How ``split_oversized_cluster_to_size`` resolves tied weakest tree edges.
 
-    Default OFF: ``split_oversized_cluster_to_size`` cuts ONE weakest edge, the first in
-    canonical endpoint order (#2935). That removed the insertion-order dependence, but
-    which tied edge goes is still arbitrary, and on historical_50k the canonical choice
-    scored F1 0.8274 where the old insertion order happened to score 0.8320. A level cut
-    is single-linkage at that height: the components it leaves do not depend on which
-    tied edge sorts first, nor on which of several equal-weight spanning trees Kruskal
-    built. Measurement lever until the panel says otherwise."""
-    return os.environ.get("GOLDENMATCH_CLUSTER_SPLIT_TIES", "").strip().lower() == "level"
+    **Default ``level``:** cut every tree edge tied with the weakest one at once. That is
+    single-linkage at that height, so the components cannot depend on which tied edge
+    sorts first or on which of several equal-weight spanning trees Kruskal built.
+    ``GOLDENMATCH_CLUSTER_SPLIT_TIES=single`` restores cutting one edge, the first in
+    canonical endpoint order (#2935) -- deterministic, but an arbitrary choice among
+    equals: on historical_50k it scored F1 0.8274 where the earlier insertion order
+    happened to score 0.8320.
+
+    MEASURED (fs-lever-gate full panel, single vs level, default cutoff plus evidence cuts
+    3/5/9/12; runs 34531100306, 34532203699, 34532206124, 34532208460, 34532210826): it
+    never loses. Only datasets with oversized tied clusters move, always precision up at
+    flat recall. Default cutoff: historical_50k 0.8274 -> 0.8386, dblp_scholar 0.3757 ->
+    0.4213; at cut 5 both gain ~0.12. The other eight partitions are identical throughout.
+
+    Scope: this to-size splitter only (the pipeline's auto-split). The single-step
+    ``split_oversized_cluster``, the Rust ``mst_split_components`` core and TS
+    ``buildClusters`` still cut one edge."""
+    return os.environ.get("GOLDENMATCH_CLUSTER_SPLIT_TIES", "level").strip().lower() not in (
+        "single", "0", "off", "false",
+    )
 
 
 def _record_unmerge_corrections(
@@ -277,7 +289,9 @@ def split_oversized_cluster_to_size(
     ``max_size``. A sub-tree of a maximum spanning tree IS the maximum spanning
     tree of its induced sub-graph (cycle property), so cutting original tree
     edges reproduces the old per-component re-MST cut decisions (same membership
-    partition, same first-minimum tie-break). Returns final sub-clusters in a
+    partition, same first-minimum tie-break) -- except where weakest edges tie, which
+    are all cut at once unless ``GOLDENMATCH_CLUSTER_SPLIT_TIES=single`` (see
+    ``_split_ties_level``). Returns final sub-clusters in a
     DETERMINISTIC order (sort-by-min-member at each cut, oversized components
     re-enqueued LIFO).
 

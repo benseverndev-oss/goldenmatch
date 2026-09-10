@@ -1,9 +1,9 @@
-"""``GOLDENMATCH_CLUSTER_SPLIT_TIES=level``: the to-size splitter cuts every tied weakest edge.
+"""The to-size splitter cuts every tied weakest edge by default (``GOLDENMATCH_CLUSTER_SPLIT_TIES``).
 
-The default cuts one tied weakest edge, the first in canonical endpoint order (#2935).
-That is deterministic but still an arbitrary choice among equals. A level cut is
-single-linkage at that height, so its components cannot depend on which tied edge sorts
-first or on which equal-weight spanning tree was built.
+``single`` cuts one tied weakest edge, the first in canonical endpoint order (#2935).
+That is deterministic but still an arbitrary choice among equals. The ``level`` default
+is single-linkage at that height, so its components cannot depend on which tied edge
+sorts first or on which equal-weight spanning tree was built.
 """
 
 from __future__ import annotations
@@ -25,14 +25,20 @@ def _partition(subs: list[dict]) -> list[tuple[int, ...]]:
     return sorted(tuple(sorted(s["members"])) for s in subs)
 
 
-def test_default_cuts_one_tied_edge(monkeypatch):
-    monkeypatch.delenv("GOLDENMATCH_CLUSTER_SPLIT_TIES", raising=False)
+def test_single_cuts_one_tied_edge(monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_CLUSTER_SPLIT_TIES", "single")
     got = _partition(split_oversized_cluster_to_size(list(range(6)), _scores(_PATH), 4))
     assert got == [(0, 1), (2, 3, 4, 5)]
 
 
+def test_level_is_the_default(monkeypatch):
+    monkeypatch.delenv("GOLDENMATCH_CLUSTER_SPLIT_TIES", raising=False)
+    got = _partition(split_oversized_cluster_to_size(list(range(6)), _scores(_PATH), 4))
+    assert got == [(0, 1), (2, 3), (4, 5)]
+
+
 def test_level_cuts_every_tied_weakest_edge(monkeypatch):
-    """KNOWN-POSITIVE: the default leaves {2,3,4,5}; the level cut also removes (3,4)."""
+    """KNOWN-POSITIVE: ``single`` leaves {2,3,4,5}; the level cut also removes (3,4)."""
     monkeypatch.setenv("GOLDENMATCH_CLUSTER_SPLIT_TIES", "level")
     for order in ([0, 1, 2, 3, 4], [4, 3, 2, 1, 0]):
         got = _partition(split_oversized_cluster_to_size(list(range(6)), _scores(_PATH, order), 4))
@@ -44,9 +50,9 @@ def test_level_does_not_shatter_an_all_tied_component(monkeypatch):
     clique = [(a, b, 1.0) for a in range(6) for b in range(a + 1, 6)]
     monkeypatch.setenv("GOLDENMATCH_CLUSTER_SPLIT_TIES", "level")
     level = _partition(split_oversized_cluster_to_size(list(range(6)), _scores(clique), 4))
-    monkeypatch.delenv("GOLDENMATCH_CLUSTER_SPLIT_TIES")
-    default = _partition(split_oversized_cluster_to_size(list(range(6)), _scores(clique), 4))
-    assert level == default
+    monkeypatch.setenv("GOLDENMATCH_CLUSTER_SPLIT_TIES", "single")
+    single = _partition(split_oversized_cluster_to_size(list(range(6)), _scores(clique), 4))
+    assert level == single
     assert len(level) < 6
 
 

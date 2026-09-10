@@ -38,7 +38,9 @@ def test_tied_weakest_edges_split_the_same_way_in_any_insertion_order():
     assert forward == [(0, 1), (2, 3, 4, 5)]
 
 
-def test_split_to_size_is_independent_of_insertion_order_on_ties():
+def test_split_to_size_is_independent_of_insertion_order_on_ties(monkeypatch):
+    # The one-edge cut this file pins; the level default is in test_cluster_split_level_ties.py.
+    monkeypatch.setenv("GOLDENMATCH_CLUSTER_SPLIT_TIES", "single")
     members = list(range(6))
     forward = _partition(split_oversized_cluster_to_size(members, _scores([0, 1, 2, 3, 4]), 4))
     backward = _partition(split_oversized_cluster_to_size(members, _scores([4, 3, 2, 1, 0]), 4))
