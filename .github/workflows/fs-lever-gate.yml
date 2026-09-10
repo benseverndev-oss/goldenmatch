@@ -145,7 +145,12 @@ env:
   GOLDENMATCH_AUTOCONFIG_MEMORY: "0" # no cross-run memory writes in CI
 
 concurrency:
-  group: fs-lever-gate-${{ github.ref }}
+  # Dispatches with different inputs are different MEASUREMENTS, not a newer copy
+  # of the same run, so they key apart: a sweep of four A/B configurations on one
+  # branch used to cancel itself down to its last run. PR / push / schedule runs
+  # carry empty inputs and keep one cancel-in-progress group per ref.
+  group: >-
+    fs-lever-gate-${{ github.ref }}-${{ inputs.tier }}-${{ inputs.lever }}-${{ inputs.on_value }}-${{ inputs.extra_passes }}-${{ inputs.calibrated }}-${{ inputs.evidence_cut }}-${{ inputs.fd_probe }}-${{ inputs.tf_clamp }}-${{ inputs.fd_classes }}
   cancel-in-progress: true
 
 jobs:
