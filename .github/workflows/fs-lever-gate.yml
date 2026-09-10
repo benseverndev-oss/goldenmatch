@@ -97,6 +97,15 @@ on:
           property.
         type: string
         default: ""
+      tf_clamp:
+        description: >-
+          Value for GOLDENMATCH_FS_TF_CLAMP, applied to BOTH arms: the +/- bit
+          clamp on the Winkler TF adjustment (default 10). Any value, 10
+          included, routes TF fields off the native kernel, which has its own
+          clamp and cannot see the override -- so tf_clamp=10 is a same-clamp
+          control for native/numpy parity. Empty leaves it unset.
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -169,6 +178,7 @@ jobs:
           GOLDENMATCH_FS_CALIBRATED: ${{ inputs.calibrated }}
           GOLDENMATCH_FS_EVIDENCE_CUT: ${{ inputs.evidence_cut }}
           GOLDENMATCH_FS_FD_PROBE: ${{ inputs.fd_probe }}
+          GOLDENMATCH_FS_TF_CLAMP: ${{ inputs.tf_clamp }}
         run: |
           uv run python -m scripts.bench_er_headtohead.ab_lever \
             --env "$LEVER" --off 0 --on 1 \

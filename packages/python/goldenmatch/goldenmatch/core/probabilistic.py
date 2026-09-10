@@ -4714,6 +4714,42 @@ def _field_score_matrix_dedup(vals: list[str | None], scorer: str) -> np.ndarray
 _TF_CLAMP = 10.0
 
 
+def _fs_tf_clamp_override() -> float | None:
+    """``GOLDENMATCH_FS_TF_CLAMP``: override the +/- bit clamp on the TF adjustment.
+    **Default None (the 10-bit constant).**
+
+    A measurement knob. TF under the default calibration regresses historical_50k
+    (-0.0125) and cotenant_hardneg (-0.0209) while inflating predicted pairs, and
+    the inflation shrinks as the evidence bar rises (x1.93 at c=9, x1.26 under the
+    default, x1.17 at c=12, x1.14 at c=15). Whether the SIZE of the bump drives
+    that is what lowering the clamp tests.
+
+    Empty, whitespace, non-numeric and non-positive values all mean unset --
+    GitHub renders an unset workflow input as "", and an empty
+    ``GOLDENMATCH_FS_CALIBRATED`` once silently disabled the evidence cut.
+
+    Any override, INCLUDING an explicit 10, routes TF fields off the native
+    kernel (see ``_fs_native_eligible``): the kernel carries its own
+    ``FS_TF_CLAMP`` and takes no clamp argument, so an override would otherwise
+    not reach the default route. That also makes ``=10`` a same-clamp control
+    for native/numpy parity on TF.
+    """
+    val = os.environ.get("GOLDENMATCH_FS_TF_CLAMP")
+    if val is None or not val.strip():
+        return None
+    try:
+        c = float(val.strip())
+    except ValueError:
+        return None
+    return c if c > 0 else None
+
+
+def _tf_clamp_bits() -> float:
+    """The clamp in effect: the override when set, else ``_TF_CLAMP``."""
+    c = _fs_tf_clamp_override()
+    return _TF_CLAMP if c is None else c
+
+
 def _apply_tf_adjustment(total_weight, vals, lvl, f, em_result, n) -> None:
     """Add Winkler term-frequency adjustment to ``total_weight`` in place.
 
@@ -4731,6 +4767,7 @@ def _apply_tf_adjustment(total_weight, vals, lvl, f, em_result, n) -> None:
     if not collision:
         return
     top = int(f.levels) - 1
+    clamp = _tf_clamp_bits()
 
     # Per-row adjustment weight (0 where the value is null/unknown).
     adj = np.zeros(n, dtype=np.float64)
@@ -4746,7 +4783,7 @@ def _apply_tf_adjustment(total_weight, vals, lvl, f, em_result, n) -> None:
         code_arr[i] = c
         fv = freqs.get(v)
         if fv:
-            adj[i] = float(np.clip(math.log2(collision / fv), -_TF_CLAMP, _TF_CLAMP))
+            adj[i] = float(np.clip(math.log2(collision / fv), -clamp, clamp))
 
     # Apply only on exact-equal, top-level agreements. adj[i] == adj[j] there
     # (same value), so broadcasting the row vector is correct.
@@ -4794,7 +4831,8 @@ def _scalar_tf_contribution(va, vb, level: int, f, em_result) -> float:
     fv = em_result.tf_freqs[f.field].get(va)
     if not fv:
         return 0.0
-    return float(np.clip(math.log2(collision / fv), -_TF_CLAMP, _TF_CLAMP))
+    clamp = _tf_clamp_bits()
+    return float(np.clip(math.log2(collision / fv), -clamp, clamp))
 
 
 def _joint_field_indices(mk, em_result):
@@ -5476,9 +5514,11 @@ def _fs_native_enabled() -> bool:
 def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
     """Whether (mk) can use the native FS kernel.
 
-    Every field scorer must be one the kernel's score_one implements, and no
-    field may opt into TF adjustment (the kernel doesn't carry the per-value
-    frequency tables — those fields stay on the numpy path). Custom
+    Every field scorer must be one the kernel's score_one implements. TF
+    adjustment is native on wheels exposing ``FS_SUPPORTS_TF_ADJUSTMENT`` (the
+    kernel carries the frequency tables and its OWN +/-10-bit clamp); an older
+    wheel, or a ``GOLDENMATCH_FS_TF_CLAMP`` override the kernel cannot see,
+    declines to the numpy path. Custom
     ``level_thresholds`` banding is native from goldenmatch-native >= 0.1.14:
     the kernel's ``score_block_pairs_fs`` takes an optional per-field
     ``level_thresholds`` kwarg and ``score.rs fs_level_from_sim`` bands with
@@ -5565,6 +5605,12 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
             return False  # old wheel: name scorers never cross their FFI
         if needs_tf and not getattr(mod, "FS_SUPPORTS_TF_ADJUSTMENT", False):
             return False  # old wheel: tf_freqs/tf_collision never cross their FFI
+        if needs_tf and _fs_tf_clamp_override() is not None:
+            # The kernel applies TF with its OWN `FS_TF_CLAMP = 10.0` (fs-core)
+            # and takes no clamp kwarg, so an override would silently not reach
+            # the default route. Any override -- an explicit 10 included --
+            # takes the numpy path, which makes `=10` a same-clamp control.
+            return False
         if needs_ensemble and not getattr(mod, "FS_SUPPORTS_ENSEMBLE", False):
             return False  # old wheel: scores ensemble (id 6) as 0.0 (catch-all)
         if needs_embedding and not getattr(mod, "FS_SUPPORTS_EMBEDDING", False):
