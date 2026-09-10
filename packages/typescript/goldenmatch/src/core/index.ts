@@ -216,6 +216,7 @@ export {
   parsePairKey,
   getClusterPairScores,
 } from "./cluster.js";
+export type { BuildClustersOptions, SplitTies } from "./cluster.js";
 
 // ---------------------------------------------------------------------------
 // Golden records

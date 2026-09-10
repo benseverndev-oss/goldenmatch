@@ -35,6 +35,16 @@ export interface ClusterWasmBackend {
   ): number[][];
 
   /**
+   * Level-cut variant of `mstSplitComponents`: drop every MST edge tied with
+   * the weakest, or exactly one edge when all of them tie. The partition does not
+   * depend on edge order. Same `[]` unsplittable result.
+   */
+  mstSplitComponentsLevel(
+    members: readonly number[],
+    edges: readonly (readonly [number, number, number])[],
+  ): number[][];
+
+  /**
    * Confidence metrics for one cluster of `size` members whose scored pairs are
    * `edges` (in pair_scores iteration order). Returns the
    * `[minEdge, avgEdge, connectivity, bottleneck, confidence]` tuple.

@@ -87,6 +87,20 @@ def _scenarios() -> list[dict]:
         "all_ids": list(range(n)),
     })
 
+    # 6. Tied weakest edges where cutting ONE already brings the rest under the
+    #    cap: a single cut stops at {0..60} | {61..149}, the default level cut
+    #    (GOLDENMATCH_CLUSTER_SPLIT_TIES=level / TS splitTies "level") also drops
+    #    the tied 70-71 link. The case that tells the two tie rules apart.
+    pairs3 = []
+    for i in range(n - 1):
+        w = 0.40 if i in (60, 70) else 0.90
+        pairs3.append([i, i + 1, w])
+    scen.append({
+        "name": "oversized_chain_level_tie_split",
+        "pairs": pairs3,
+        "all_ids": list(range(n)),
+    })
+
     return scen
 
 

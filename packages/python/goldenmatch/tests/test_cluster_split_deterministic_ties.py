@@ -27,9 +27,11 @@ def _partition(subs: list[dict]) -> list[tuple[int, ...]]:
     return sorted(tuple(sorted(s["members"])) for s in subs)
 
 
-def test_tied_weakest_edges_split_the_same_way_in_any_insertion_order():
+def test_tied_weakest_edges_split_the_same_way_in_any_insertion_order(monkeypatch):
     """KNOWN-POSITIVE: with insertion-order tie-breaking, inserting (1,2) first cut
     {0,1} | {2,3,4,5} and inserting (3,4) first cut {0,1,2,3} | {4,5}."""
+    # The one-edge cut this file pins; the level default is in test_cluster_split_level_ties.py.
+    monkeypatch.setenv("GOLDENMATCH_CLUSTER_SPLIT_TIES", "single")
     members = list(range(6))
     forward = _partition(split_oversized_cluster(members, _scores([0, 1, 2, 3, 4])))
     backward = _partition(split_oversized_cluster(members, _scores([4, 3, 2, 1, 0])))

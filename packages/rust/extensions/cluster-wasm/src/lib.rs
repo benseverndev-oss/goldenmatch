@@ -12,7 +12,16 @@
 
 use goldenmatch_cluster_core::{
     cluster_confidence as core_cluster_confidence, mst_split_components as core_mst_split_components,
+    mst_split_components_level as core_mst_split_components_level,
 };
+
+fn components_json(comps: Vec<Vec<i64>>) -> String {
+    let out: Vec<Vec<i32>> = comps
+        .into_iter()
+        .map(|c| c.into_iter().map(|x| x as i32).collect())
+        .collect();
+    serde_json::to_string(&out).unwrap_or_else(|_| "[]".to_string())
+}
 use wasm_bindgen::prelude::*;
 
 /// Reassemble the `(a, b, weight)` edge triples from three parallel arrays, in
@@ -41,12 +50,23 @@ pub fn mst_split_components(
 ) -> String {
     let mem: Vec<i64> = members.iter().map(|&x| x as i64).collect();
     let edges = zip_edges(edges_a, edges_b, edges_w);
-    let comps = core_mst_split_components(mem, edges);
-    let out: Vec<Vec<i32>> = comps
-        .into_iter()
-        .map(|c| c.into_iter().map(|x| x as i32).collect())
-        .collect();
-    serde_json::to_string(&out).unwrap_or_else(|_| "[]".to_string())
+    components_json(core_mst_split_components(mem, edges))
+}
+
+/// Level-cut variant: drop every MST edge tied with the weakest (one edge when
+/// all tie). Behavior-exact mirror of cluster-core's `mst_split_components_level`
+/// (the Python default `GOLDENMATCH_CLUSTER_SPLIT_TIES=level`). Same JSON shape
+/// and `"[]"` unsplittable result as `mst_split_components`.
+#[wasm_bindgen]
+pub fn mst_split_components_level(
+    members: &[i32],
+    edges_a: &[i32],
+    edges_b: &[i32],
+    edges_w: &[f64],
+) -> String {
+    let mem: Vec<i64> = members.iter().map(|&x| x as i64).collect();
+    let edges = zip_edges(edges_a, edges_b, edges_w);
+    components_json(core_mst_split_components_level(mem, edges))
 }
 
 /// Confidence metrics for one cluster. Behavior-exact mirror of cluster-core's

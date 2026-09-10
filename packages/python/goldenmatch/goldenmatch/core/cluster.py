@@ -76,9 +76,10 @@ def _split_ties_level() -> bool:
     flat recall. Default cutoff: historical_50k 0.8274 -> 0.8386, dblp_scholar 0.3757 ->
     0.4213; at cut 5 both gain ~0.12. The other eight partitions are identical throughout.
 
-    Scope: this to-size splitter only (the pipeline's auto-split). The single-step
-    ``split_oversized_cluster``, the Rust ``mst_split_components`` core and TS
-    ``buildClusters`` still cut one edge."""
+    Scope: both Python splitters (``split_oversized_cluster_to_size``, the pipeline's
+    auto-split, and the single-step ``split_oversized_cluster``), the Rust core
+    (``mst_split_components_level``, native and wasm) and TS ``buildClusters``
+    (``splitTies: "level"``) all apply the same rule."""
     return os.environ.get("GOLDENMATCH_CLUSTER_SPLIT_TIES", "level").strip().lower() not in (
         "single", "0", "off", "false",
     )
@@ -216,7 +217,11 @@ def split_oversized_cluster(
         return [{"members": sorted(members), "size": len(members),
                  "oversized": False, "pair_scores": pair_scores}]
 
-    if native_enabled("clustering"):  # pragma: no cover - exercised by the native CI lane (test_native_parity), not the no-ext python lane
+    level_ties = _split_ties_level()
+    # The level cut is a separate native symbol, so a wheel that predates it
+    # takes the pure-Python level cut below rather than silently cutting one edge.
+    native_symbol = "mst_split_components_level" if level_ties else "mst_split_components"
+    if native_enabled("clustering", native_symbol):  # pragma: no cover - exercised by the native CI lane (test_native_parity), not the no-ext python lane
         # Native kernel does MST (Kruskal) + weakest-edge removal + re-union
         # and returns the post-split subcluster member lists. Edges are passed
         # in the SAME canonical endpoint order `_build_mst` uses, so the native
@@ -225,14 +230,21 @@ def split_oversized_cluster(
         # return means the MST was empty -> unsplittable (handled by the shared
         # guard below, mirroring the pure-Python `if not mst`).
         edges = [(a, b, s) for (a, b), s in sorted(pair_scores.items(), key=_pair_key)]
-        subclusters: list = native_module().mst_split_components(members, edges)
+        subclusters: list = getattr(native_module(), native_symbol)(members, edges)
     else:
         mst = _build_mst(members, pair_scores)
         if not mst:
             subclusters = []
         else:
             weakest = min(mst, key=lambda e: e[2])
-            remaining = [(a, b, s) for a, b, s in mst if (a, b, s) != weakest]
+            remaining = None
+            if level_ties:
+                # Same rule as split_oversized_cluster_to_size: drop every tied
+                # weakest edge, or one edge when all of them tie.
+                floor = weakest[2] + _SPLIT_TIE_EPS
+                remaining = [e for e in mst if e[2] > floor] or None
+            if remaining is None:
+                remaining = [(a, b, s) for a, b, s in mst if (a, b, s) != weakest]
 
             uf = UnionFind()
             uf.add_many(members)

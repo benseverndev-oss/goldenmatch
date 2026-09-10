@@ -5,6 +5,12 @@ export function mst_split_components(
   edges_b: Int32Array,
   edges_w: Float64Array,
 ): string;
+export function mst_split_components_level(
+  members: Int32Array,
+  edges_a: Int32Array,
+  edges_b: Int32Array,
+  edges_w: Float64Array,
+): string;
 export function cluster_confidence(
   edges_a: Int32Array,
   edges_b: Int32Array,

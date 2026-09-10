@@ -41,27 +41,19 @@ pub fn find(parent: &mut HashMap<i64, i64>, x: i64) -> i64 {
     root
 }
 
-/// Max-weight spanning tree (Kruskal), then drop the single weakest MST edge
-/// and return the resulting components. Behavior-exact mirror of `_build_mst`
-/// + weakest-edge removal + re-union + `get_clusters` in cluster.py's
-/// `split_oversized_cluster`.
-///
-/// `edges` MUST arrive in `pair_scores` iteration order: the stable
-/// score-descending sort then reproduces Python's Kruskal edge selection, and
-/// the first-minimum scan reproduces `min(mst, key=score)`'s tie-break
-/// (Python `min` keeps the first element achieving the minimum). Component
-/// membership is independent of union strategy, so naive union here matches
-/// the Python union-by-rank grouping. Returns `[]` when the MST is empty
-/// (caller treats that as "unsplittable", same as Python's `if not mst`).
-pub fn mst_split_components(members: Vec<i64>, edges: Vec<(i64, i64, f64)>) -> Vec<Vec<i64>> {
-    // Kruskal over a max-weight ordering. Vec::sort_by is stable, so equal
-    // scores keep pair_scores insertion order -- matching Python's stable sort.
+/// Scores within this of the weakest spanning-tree edge count as tied with it.
+/// Mirrors `_SPLIT_TIE_EPS` in cluster.py.
+pub const SPLIT_TIE_EPS: f64 = 1e-9;
+
+/// Kruskal max-weight spanning tree. `Vec::sort_by` is stable, so equal scores
+/// keep the order `edges` arrived in -- matching Python's stable sort.
+fn max_spanning_tree(members: &[i64], edges: Vec<(i64, i64, f64)>) -> Vec<(i64, i64, f64)> {
     let mut sorted = edges;
     sorted.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
 
     let need = members.len().saturating_sub(1);
     let mut parent: HashMap<i64, i64> = HashMap::with_capacity(members.len());
-    for &m in &members {
+    for &m in members {
         parent.entry(m).or_insert(m);
     }
     let mut mst: Vec<(i64, i64, f64)> = Vec::with_capacity(need);
@@ -76,27 +68,34 @@ pub fn mst_split_components(members: Vec<i64>, edges: Vec<(i64, i64, f64)>) -> V
             }
         }
     }
-    if mst.is_empty() {
-        return Vec::new();
-    }
+    mst
+}
 
-    // weakest = first MST edge achieving the minimum score (strict `<` keeps
-    // the first on ties, mirroring Python `min`).
+/// Index of the first tree edge achieving the minimum score (strict `<` keeps
+/// the first on ties, mirroring Python `min`).
+fn first_min(mst: &[(i64, i64, f64)]) -> usize {
     let mut weakest = 0usize;
     for i in 1..mst.len() {
         if mst[i].2 < mst[weakest].2 {
             weakest = i;
         }
     }
+    weakest
+}
 
-    // Re-union every MST edge except the weakest, over the full member set, so
-    // isolated members surface as singleton components (mirrors add_many).
+/// Re-union the tree edges `keep` accepts over the full member set, so isolated
+/// members surface as singleton components (mirrors add_many).
+fn components_keeping(
+    members: &[i64],
+    mst: &[(i64, i64, f64)],
+    keep: impl Fn(usize, f64) -> bool,
+) -> Vec<Vec<i64>> {
     let mut parent2: HashMap<i64, i64> = HashMap::with_capacity(members.len());
-    for &m in &members {
+    for &m in members {
         parent2.entry(m).or_insert(m);
     }
-    for (i, &(a, b, _s)) in mst.iter().enumerate() {
-        if i == weakest {
+    for (i, &(a, b, s)) in mst.iter().enumerate() {
+        if !keep(i, s) {
             continue;
         }
         let ra = find(&mut parent2, a);
@@ -112,6 +111,52 @@ pub fn mst_split_components(members: Vec<i64>, edges: Vec<(i64, i64, f64)>) -> V
         groups.entry(r).or_default().push(k);
     }
     groups.into_values().collect()
+}
+
+/// Max-weight spanning tree (Kruskal), then drop the single weakest MST edge
+/// and return the resulting components. Behavior-exact mirror of `_build_mst`
+/// + weakest-edge removal + re-union + `get_clusters` in cluster.py's
+/// `split_oversized_cluster` under `GOLDENMATCH_CLUSTER_SPLIT_TIES=single`.
+///
+/// `edges` MUST arrive in `pair_scores` iteration order: the stable
+/// score-descending sort then reproduces Python's Kruskal edge selection, and
+/// the first-minimum scan reproduces `min(mst, key=score)`'s tie-break
+/// (Python `min` keeps the first element achieving the minimum). Component
+/// membership is independent of union strategy, so naive union here matches
+/// the Python union-by-rank grouping. Returns `[]` when the MST is empty
+/// (caller treats that as "unsplittable", same as Python's `if not mst`).
+pub fn mst_split_components(members: Vec<i64>, edges: Vec<(i64, i64, f64)>) -> Vec<Vec<i64>> {
+    let mst = max_spanning_tree(&members, edges);
+    if mst.is_empty() {
+        return Vec::new();
+    }
+    let weakest = first_min(&mst);
+    components_keeping(&members, &mst, |i, _s| i != weakest)
+}
+
+/// Level-cut variant of `mst_split_components`: drop EVERY tree edge tied with
+/// the weakest (within `SPLIT_TIE_EPS`), not just the first. Single-linkage at
+/// that height, so the components do not depend on edge order or on which of
+/// several equal-weight spanning trees Kruskal built. When every tree edge ties,
+/// the tree carries no split information and a level cut would shatter the
+/// component into singletons, so exactly one edge is dropped instead -- the
+/// same first minimum `mst_split_components` drops. Mirrors the default
+/// `GOLDENMATCH_CLUSTER_SPLIT_TIES=level` in cluster.py. Returns `[]` when the
+/// MST is empty.
+pub fn mst_split_components_level(
+    members: Vec<i64>,
+    edges: Vec<(i64, i64, f64)>,
+) -> Vec<Vec<i64>> {
+    let mst = max_spanning_tree(&members, edges);
+    if mst.is_empty() {
+        return Vec::new();
+    }
+    let weakest = first_min(&mst);
+    let floor = mst[weakest].2 + SPLIT_TIE_EPS;
+    if mst.iter().all(|e| e.2 <= floor) {
+        return components_keeping(&members, &mst, |i, _s| i != weakest);
+    }
+    components_keeping(&members, &mst, |_i, s| s > floor)
 }
 
 /// Count edges whose removal splits the cluster into two >= 2-node components
@@ -243,6 +288,49 @@ mod tests {
         // Determinism: repeat runs are identical.
         let again = canon(mst_split_components(members, edges));
         assert_eq!(again, vec![vec![1, 2], vec![3, 4]]);
+    }
+
+    /// A path 0-1-2-3-4-5 whose two weakest edges tie at 0.5.
+    fn tied_path() -> (Vec<i64>, Vec<(i64, i64, f64)>) {
+        let edges = vec![(0, 1, 0.9), (1, 2, 0.5), (2, 3, 0.9), (3, 4, 0.5), (4, 5, 0.9)];
+        ((0..6).collect(), edges)
+    }
+
+    #[test]
+    fn mst_split_level_cuts_every_tied_weakest_edge() {
+        // KNOWN-POSITIVE: the single cut drops only (1,2) and leaves {2,3,4,5}.
+        let (members, edges) = tied_path();
+        let single = canon(mst_split_components(members.clone(), edges.clone()));
+        assert_eq!(single, vec![vec![0, 1], vec![2, 3, 4, 5]]);
+        let level = canon(mst_split_components_level(members, edges));
+        assert_eq!(level, vec![vec![0, 1], vec![2, 3], vec![4, 5]]);
+    }
+
+    #[test]
+    fn mst_split_level_is_independent_of_edge_order() {
+        let (members, mut edges) = tied_path();
+        let forward = canon(mst_split_components_level(members.clone(), edges.clone()));
+        edges.reverse();
+        let backward = canon(mst_split_components_level(members, edges));
+        assert_eq!(forward, backward);
+    }
+
+    #[test]
+    fn mst_split_level_drops_one_edge_when_every_edge_ties() {
+        // Six exact duplicates: a level cut would leave six singletons.
+        let members: Vec<i64> = (0..6).collect();
+        let edges: Vec<(i64, i64, f64)> = (0..6)
+            .flat_map(|a| ((a + 1)..6).map(move |b| (a, b, 1.0)))
+            .collect();
+        let single = canon(mst_split_components(members.clone(), edges.clone()));
+        let level = canon(mst_split_components_level(members, edges));
+        assert_eq!(level, single);
+        assert_eq!(level.len(), 2);
+    }
+
+    #[test]
+    fn mst_split_level_empty_when_no_edges() {
+        assert!(mst_split_components_level(vec![1, 2, 3], vec![]).is_empty());
     }
 
     #[test]

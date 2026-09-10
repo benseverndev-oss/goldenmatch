@@ -24,6 +24,7 @@ use goldenmatch_cluster_core::{
     cluster_confidence as core_cluster_confidence, find,
     group_members_by_cluster as core_group_members_by_cluster,
     mst_split_components as core_mst_split_components,
+    mst_split_components_level as core_mst_split_components_level,
     severe_bridge_count as core_severe_bridge_count, ConfidenceResult,
 };
 
@@ -46,6 +47,20 @@ pub fn connected_components(edges: Vec<(i64, i64, f64)>, all_ids: Vec<i64>) -> V
 #[pyfunction]
 pub fn mst_split_components(members: Vec<i64>, edges: Vec<(i64, i64, f64)>) -> Vec<Vec<i64>> {
     core_mst_split_components(members, edges)
+}
+
+/// Level-cut variant: drop every MST edge tied with the weakest (one edge when
+/// all tie). Thin shim over `goldenmatch_cluster_core::mst_split_components_level`,
+/// the kernel behind cluster.py's default `GOLDENMATCH_CLUSTER_SPLIT_TIES=level`.
+/// A NEW symbol rather than a changed `mst_split_components`, so a wheel that
+/// predates it falls back to the pure-Python level cut instead of silently
+/// cutting one edge.
+#[pyfunction]
+pub fn mst_split_components_level(
+    members: Vec<i64>,
+    edges: Vec<(i64, i64, f64)>,
+) -> Vec<Vec<i64>> {
+    core_mst_split_components_level(members, edges)
 }
 
 /// Count edges whose removal splits the cluster into two >= 2-node components
