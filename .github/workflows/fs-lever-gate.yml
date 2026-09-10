@@ -137,6 +137,8 @@ on:
           is what the A/B measures. Point `lever` at an env var nothing reads
           (e.g. GOLDENMATCH_UNUSED) to hold everything else equal. Compound
           keys use "+": "surname:lowercase,soundex+first_name:lowercase,substring:0:1".
+          A leading "~" marks the pass additive, so its fields stay EM-trained
+          instead of being demoted to fixed neutral weights for every pair.
         type: string
         default: ""
 

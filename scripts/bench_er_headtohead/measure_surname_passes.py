@@ -52,9 +52,18 @@ FRACTIONS = (0.25, 0.5, 1.0)
 
 
 def pass_from_spec(spec: str):
-    """``field:t1,t2`` or ``field:t1,t2+field:t3`` -> ``BlockingKeyConfig``."""
+    """``field:t1,t2`` or ``field:t1,t2+field:t3`` -> ``BlockingKeyConfig``.
+
+    A leading ``~`` marks the pass ``additive``: its fields stay EM-trained. Without
+    it, every field a pass keys on is demoted to a fixed neutral weight for EVERY
+    pair (``collect_blocking_fields(for_em=True)`` -> ``train_em``'s
+    ``always_conditioned``), which is how a surname pass silently removes the
+    surname weight from the whole model.
+    """
     from goldenmatch.config.schemas import BlockingKeyConfig
 
+    additive = spec.startswith("~")
+    spec = spec[1:] if additive else spec
     parts = [p for p in spec.split("+") if p]
     if not parts:
         raise ValueError(f"empty blocking pass spec {spec!r}")
@@ -67,8 +76,10 @@ def pass_from_spec(spec: str):
         fields.append(field)
         chains[field] = [t for t in transforms.split(",") if t]
     if len(fields) == 1:
-        return BlockingKeyConfig(fields=fields, transforms=chains[fields[0]])
-    return BlockingKeyConfig(fields=fields, transforms=[], field_transforms=chains)
+        return BlockingKeyConfig(fields=fields, transforms=chains[fields[0]], additive=additive)
+    return BlockingKeyConfig(
+        fields=fields, transforms=[], field_transforms=chains, additive=additive
+    )
 
 
 def label(key) -> str:
