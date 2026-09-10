@@ -143,11 +143,26 @@ class UnionFind:
         return list(groups.values())
 
 
+def _pair_key(item: tuple[tuple[int, int], float]) -> tuple[int, int]:
+    """Sort key for ``pair_scores`` items: the endpoint pair alone (keys are unique,
+    so the score never needs comparing)."""
+    return item[0]
+
+
 def _build_mst(
     members: list[int], pair_scores: dict[tuple[int, int], float],
 ) -> list[tuple[int, int, float]]:
-    """Build max-weight spanning tree using Kruskal's algorithm."""
-    edges = [(a, b, s) for (a, b), s in pair_scores.items()]
+    """Build max-weight spanning tree using Kruskal's algorithm.
+
+    Equal-score edges are ordered by endpoint pair, never by ``pair_scores``
+    insertion order. FS scores are sums of discrete level weights, so ties are
+    common, and both splitters cut the FIRST minimum of this tree's edge order.
+    Taking edges as inserted made that cut follow the order pairs were scored in,
+    which follows Python's per-process string hashing: on dblp_scholar the same
+    232-member cluster split differently under PYTHONHASHSEED 0 and 1 (27,125 vs
+    27,035 predicted pairs, fs-determinism-probe run 34525109806).
+    """
+    edges = [(a, b, s) for (a, b), s in sorted(pair_scores.items(), key=_pair_key)]
     # operator.itemgetter(2) is a C-level key extractor; the equivalent
     # `lambda e: e[2]` invokes a Python frame per comparison-key fetch and
     # showed up as a hotspot in the profile-hotspots cProfile run.
@@ -175,11 +190,12 @@ def split_oversized_cluster(
     if native_enabled("clustering"):  # pragma: no cover - exercised by the native CI lane (test_native_parity), not the no-ext python lane
         # Native kernel does MST (Kruskal) + weakest-edge removal + re-union
         # and returns the post-split subcluster member lists. Edges are passed
-        # in pair_scores iteration order so the native stable score-desc sort
-        # and first-minimum tie-break reproduce the Python path exactly. An
-        # empty return means the MST was empty -> unsplittable (handled by the
-        # shared guard below, mirroring the pure-Python `if not mst`).
-        edges = [(a, b, s) for (a, b), s in pair_scores.items()]
+        # in the SAME canonical endpoint order `_build_mst` uses, so the native
+        # stable score-desc sort and first-minimum tie-break reproduce the Python
+        # path exactly -- and neither depends on insertion order. An empty
+        # return means the MST was empty -> unsplittable (handled by the shared
+        # guard below, mirroring the pure-Python `if not mst`).
+        edges = [(a, b, s) for (a, b), s in sorted(pair_scores.items(), key=_pair_key)]
         subclusters: list = native_module().mst_split_components(members, edges)
     else:
         mst = _build_mst(members, pair_scores)
