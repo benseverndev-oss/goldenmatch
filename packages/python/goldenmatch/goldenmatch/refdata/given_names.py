@@ -174,6 +174,25 @@ def aliases_of(name: str | None) -> frozenset[str]:
     return frozenset(out)
 
 
+
+def normalize_given_name(name: str) -> str:
+    """The normalization ``are_equivalent`` compares names on."""
+    return _normalize(name)
+
+
+def canonicals_of(name: str | None) -> frozenset[str]:
+    """The canonical names ``name`` belongs to -- the sets ``are_equivalent``
+    intersects. Unlike ``aliases_of``, this does NOT expand to class members."""
+    if name is None:
+        return frozenset()
+    norm = _normalize(name)
+    if not norm:
+        return frozenset()
+    _load()
+    if _state is None:
+        return frozenset()
+    return frozenset(_state.canonicals.get(norm) or ())
+
 def are_equivalent(a: str | None, b: str | None) -> bool:
     """True iff ``a`` and ``b`` share at least one canonical.
 

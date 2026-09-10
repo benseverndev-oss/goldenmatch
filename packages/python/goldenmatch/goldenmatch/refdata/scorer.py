@@ -28,8 +28,9 @@ import numpy as np
 from goldenmatch.core import strsim
 from goldenmatch.plugins.registry import PluginRegistry
 from goldenmatch.refdata.given_names import (
-    aliases_of,
     are_equivalent,
+    canonicals_of,
+    normalize_given_name,
 )
 from goldenmatch.refdata.given_names import is_available as given_names_available
 from goldenmatch.refdata.surnames import is_available, surname_idf, surname_rank
@@ -213,8 +214,9 @@ class GivenNameAliasedJW(ScorerPlugin):
 
         Algorithm:
             1. base = cdist(values, JaroWinkler.similarity)
-            2. For each input, compute its alias frozenset once.
-            3. equiv_mask[i,j] = aliases[i] & aliases[j] is non-empty.
+            2. For each input, compute its normalized form and CANONICAL set once.
+            3. equiv_mask[i,j] = normalized-equal, or canonicals intersect
+               (exactly ``are_equivalent``, the rule ``score_pair`` applies).
             4. final = where(equiv_mask, 1.0, base).
         """
         n = len(values)
@@ -226,43 +228,37 @@ class GivenNameAliasedJW(ScorerPlugin):
         if n == 0 or not given_names_available():
             return base
 
-        # Cache aliases_of per unique value — many records in a block
-        # often share the same first name (Bob, Bob, Bob...). Without
-        # this dedup, we'd call aliases_of() up to N times for identical
-        # inputs.
-        unique_lookup: dict[str, frozenset[str]] = {}
-        per_row: list[frozenset[str]] = []
-        for v in clean:
-            cache = unique_lookup.get(v)
-            if cache is None:
-                cache = aliases_of(v) if v else frozenset()
-                unique_lookup[v] = cache
-            per_row.append(cache)
+        # Equivalence must be EXACTLY `are_equivalent`, the rule `score_pair`
+        # applies and the native kernel mirrors: normalized-equal, or the two
+        # names' CANONICAL sets intersect. This used to intersect `aliases_of`
+        # MEMBER sets, which is looser: 'catherine' (canonical catherine) and
+        # 'kathy' (canonical kathleen) share the members kate/katie, so the matrix
+        # promoted a non-alias to 1.0 while score_pair and the kernel gave 0.644.
+        norm_ids: dict[str, int] = {}
+        per_value: dict[str, tuple[int, frozenset[str]]] = {}
+        norm_code = np.full(n, -1, dtype=np.int64)
+        canons: list[frozenset[str]] = []
+        for i, v in enumerate(clean):
+            cached = per_value.get(v)
+            if cached is None:
+                norm = normalize_given_name(v) if v else ""
+                code = norm_ids.setdefault(norm, len(norm_ids)) if norm else -1
+                cached = (code, canonicals_of(v) if v else frozenset())
+                per_value[v] = cached
+            norm_code[i] = cached[0]
+            canons.append(cached[1])
 
-        # Identify rows that have a non-empty alias set; pairs where
-        # either side is OOV can't be promoted by the alias rule.
-        has_aliases = np.array(
-            [bool(s) for s in per_row], dtype=bool,
-        )
-        if not has_aliases.any():
-            return base
-
-        # equiv_mask[i,j] = aliases[i] ∩ aliases[j] non-empty. Set
-        # intersection is fast on small frozensets; the worst case is
-        # O(N²) intersections, which is the same cost class as cdist
-        # itself. Skip when neither side has aliases.
-        equiv_mask = np.zeros((n, n), dtype=bool)
-        for i in range(n):
-            if not has_aliases[i]:
-                continue
-            ai = per_row[i]
-            for j in range(i + 1, n):
-                if not has_aliases[j]:
-                    continue
-                if ai & per_row[j]:
-                    equiv_mask[i, j] = True
-                    equiv_mask[j, i] = True
-
+        # Normalized-equal pairs, vectorized.
+        equiv_mask = (norm_code[:, None] == norm_code[None, :]) & (norm_code[:, None] >= 0)
+        # Canonical intersection, only among rows that have canonicals at all.
+        with_canon = [k for k in range(n) if canons[k]]
+        for x, a in enumerate(with_canon):
+            ca = canons[a]
+            for b in with_canon[x + 1:]:
+                if not ca.isdisjoint(canons[b]):
+                    equiv_mask[a, b] = True
+                    equiv_mask[b, a] = True
+        np.fill_diagonal(equiv_mask, False)  # the diagonal keeps base, as before
         return np.where(equiv_mask, np.float32(1.0), base)
 
 
