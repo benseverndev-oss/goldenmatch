@@ -115,6 +115,22 @@ on:
           0066 first measured.
         type: string
         default: ""
+      on_value:
+        description: >-
+          Value the lever takes in the ON arm (the OFF arm is always 0). Empty
+          means 1. For a lever with named modes -- e.g.
+          GOLDENMATCH_FS_SIGNATURE_PRUNE=multi -- this picks the mode.
+        type: string
+        default: ""
+      extra_passes:
+        description: >-
+          Blocking passes appended to BOTH arms after auto-config, as
+          semicolon-separated field:transforms specs (e.g.
+          "surname:lowercase,soundex"). Bypasses auto-config's scale guard on
+          purpose, to measure a pass it would not choose. A dataset without
+          the column skips that pass. Empty adds nothing.
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -129,7 +145,12 @@ env:
   GOLDENMATCH_AUTOCONFIG_MEMORY: "0" # no cross-run memory writes in CI
 
 concurrency:
-  group: fs-lever-gate-${{ github.ref }}
+  # Dispatches with different inputs are different MEASUREMENTS, not a newer copy
+  # of the same run, so they key apart: a sweep of four A/B configurations on one
+  # branch used to cancel itself down to its last run. PR / push / schedule runs
+  # carry empty inputs and keep one cancel-in-progress group per ref.
+  group: >-
+    fs-lever-gate-${{ github.ref }}-${{ inputs.tier }}-${{ inputs.lever }}-${{ inputs.on_value }}-${{ inputs.extra_passes }}-${{ inputs.calibrated }}-${{ inputs.evidence_cut }}-${{ inputs.fd_probe }}-${{ inputs.tf_clamp }}-${{ inputs.fd_classes }}
   cancel-in-progress: true
 
 jobs:
@@ -189,7 +210,10 @@ jobs:
           GOLDENMATCH_FS_FD_PROBE: ${{ inputs.fd_probe }}
           GOLDENMATCH_FS_TF_CLAMP: ${{ inputs.tf_clamp }}
           GOLDENMATCH_FS_FD_CLASSES: ${{ inputs.fd_classes }}
+          ON_VALUE: ${{ inputs.on_value || '1' }}
+          EXTRA_PASSES: ${{ inputs.extra_passes }}
         run: |
           uv run python -m scripts.bench_er_headtohead.ab_lever \
-            --env "$LEVER" --off 0 --on 1 \
+            --env "$LEVER" --off 0 --on "$ON_VALUE" \
+            --extra-passes "$EXTRA_PASSES" \
             ${{ steps.scope.outputs.datasets }}

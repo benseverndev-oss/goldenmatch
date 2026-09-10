@@ -291,7 +291,8 @@ Current operating point: auto-config's 8 passes, **11,977,484 candidates, PC 0.8
   whose phi over the candidate pairs is at least 0.5 become one feature. EM then
   finds two modes. The textbook maximum-likelihood mode is the wrong one (prior
   0.54), and **the smallest-prior mode** (0.0073) reaches PC 0.8793 at 7.29M, 0.93
-  at 9.61M and 0.9319 within 12M, against 0.8793 today.
+  at 9.61M and 0.9319 within 12M, against 0.8793 today. **This does not
+  generalize** -- see the follow-up below.
 - **Fixing u from random record pairs, Splink-style, does not help**: PC 0.8793
   needs 12.17M.
 - On auto-config's 8 passes alone, the same rule matches the grouped oracle
@@ -310,6 +311,47 @@ second problem at most, since FS would train on the pruned set; it does nothing 
 the first, because the pairs are still generated before they are pruned. Pair
 completeness here is therefore an upper bound on what the pass could buy, not a
 case for shipping it.
+
+### Follow-up: the EM rule fails; two count rules replace it (2026-09-10)
+
+- **The smallest-prior EM mode is not robust.** On a synthetic world with
+  namesakes (the `GOLDENMATCH_FS_SIGNATURE_PRUNE` unit-test fixture), all 15
+  starts converge to ONE mode, with prior 0.22 against a true share of 0.019 and the
+  name group weighted negative. Every candidate fires at least one pass, so noise
+  tends to fire exactly one group. A two-class independence model can split on that
+  instead of separating duplicates from noise. historical_50k happened to
+  have a rare-match mode too.
+- **Counting independent pass groups has no modes to land in.** With passes merged
+  at phi >= 0.2 (0.2 beats 0.5 on historical_50k, where 0.5 leaves the name passes
+  in two groups), two label-free rules, as share of candidates kept and PC:
+
+  | candidate set | `dominant`: drop lone groups firing on >= 30% | `multi`: keep >= 2 groups |
+  |---|---|---|
+  | household_hardneg | 51.7%, PC 1.0 | 4.5%, PC 1.0 |
+  | cotenant_hardneg | 33.0%, PC 1.0 | 4.9%, PC 1.0 |
+  | historical_50k + surname soundex | 48.7%, PC 0.9193 | 5.9%, PC 0.7724 |
+  | historical_50k, auto-config passes | 40.5%, PC 0.8312 | 4.9%, PC 0.6338 |
+  | unit-test fixture | 21.4%, dup PC 0.9634 | 2.1%, dup PC 0.8696 |
+
+  Both rules were picked after seeing these numbers. household_hardneg's
+  first_name soundex group fires on 0.299 of candidates, on the 30% threshold itself.
+- The rules ship as the default-OFF lever `GOLDENMATCH_FS_SIGNATURE_PRUNE`
+  (`1`/`dominant` or `multi`), which also filters EM's training sample. Its CI A/B,
+  `fs-lever-gate` with `lever=GOLDENMATCH_FS_SIGNATURE_PRUNE`, `on_value` and
+  optional `extra_passes`, is the F1 answer PC cannot give.
+  `measure_blocking_signatures.py --dataset <loader>` rebuilds any panel dataset.
+- **The F1 answer: no.** `fs-lever-gate`, full panel, 2026-09-10:
+  - **`dominant` with each arm at its own best evidence cut** (default, 3, 5, 9, 12) is
+    +0.0063 on historical_50k (0.8320 -> 0.8383) and ties everywhere else. The sign
+    flips at cut 9 (-0.0159), and nearly all of the gain comes from EM's retrained sample.
+  - **`multi`** is -0.0120 on historical_50k.
+  - **A forced `surname` soundex pass** costs 0.0276 by itself, and pruning recovers at
+    most 0.0019.
+  - Runs 34501832833, 34501835540, 34501839230, 34501843346, 34502652123,
+    34502654667, 34502658089 and 34502661903.
+  - The pipeline pruner compares block keys and ignores oversized-block splitting, so
+    it is not the rule this harness measured: on historical_50k it sees 27.2M
+    candidates against 11.98M.
 
 ## Honest caveats (carried into the results doc)
 

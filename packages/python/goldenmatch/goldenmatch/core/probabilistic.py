@@ -2402,6 +2402,7 @@ def train_em(
     target_ids: set[int] | None = None,
     label_pairs: dict[tuple[int, int], int] | None = None,
     pair_weights: Sequence[float] | None = None,
+    pair_filter: Any = None,
 ) -> EMResult:
     """Train Fellegi-Sunter model using Expectation-Maximization.
 
@@ -2440,6 +2441,12 @@ def train_em(
             EM, NOT a per-pair score override: the labels improve the trained
             model, which is then re-scored across the whole population. Default
             None is byte-identical to unsupervised EM.
+        pair_filter: Optional ``callable(id_a, id_b) -> bool mask`` over int64
+            arrays. When set, the blocked training sample keeps only pairs the
+            filter keeps, so EM trains on the candidate population that will be
+            scored (``GOLDENMATCH_FS_SIGNATURE_PRUNE``). Disables counted mode,
+            which cannot filter pairs it has already collapsed. Default None is
+            byte-identical.
 
     Returns:
         EMResult with trained m/u probabilities and match weights.
@@ -2464,6 +2471,7 @@ def train_em(
         and blocks
         and label_pairs is None
         and pair_weights is None
+        and pair_filter is None
         and not _em_ne_fields(mk)
     ):
         return train_em_counted(
@@ -2506,14 +2514,45 @@ def train_em(
     # the dominant training-memory cost at 10M+ rows). Sampling reads only
     # ``__row_id__`` / the blocks, never the lookup, so the sampled pairs — and
     # the trained model — are unchanged by this reordering.
+    # A candidate filter (GOLDENMATCH_FS_SIGNATURE_PRUNE) trains EM on the pairs
+    # that will be scored. Draw 3x the budget, keep what the filter keeps, then
+    # downsample, so a filter that drops most candidates still leaves EM a full
+    # sample. Only a BLOCKED sample is filtered: the no-blocks fallback is random
+    # pairs, which are not candidates.
+    _filtering = pair_filter is not None and bool(blocks)
     blocked_pairs, pair_conditioning = _training_pair_conditioning(
         blocks,
         random_pairs,
         blocking_fields,
-        n_sample_pairs,
+        n_sample_pairs * 3 if _filtering else n_sample_pairs,
         seed,
         target_ids=target_ids,
     )
+    if _filtering and blocked_pairs:
+        _drawn = len(blocked_pairs)
+        _mask = pair_filter(
+            np.fromiter((p[0] for p in blocked_pairs), dtype=np.int64, count=_drawn),
+            np.fromiter((p[1] for p in blocked_pairs), dtype=np.int64, count=_drawn),
+        )
+        _kept = [i for i in range(_drawn) if _mask[i]]
+        if len(_kept) < 10:
+            # Too few survivors to estimate m from: train on the unfiltered draw
+            # rather than degenerate, and say so.
+            logger.warning(
+                "FS EM training sample: candidate filter kept %d of %d drawn blocked "
+                "pairs -- too few, training on the unfiltered sample",
+                len(_kept), _drawn,
+            )
+            _kept = list(range(_drawn))
+        else:
+            logger.warning(
+                "FS EM training sample: candidate filter kept %d of %d drawn blocked pairs",
+                len(_kept), _drawn,
+            )
+        if len(_kept) > n_sample_pairs:
+            _kept = sorted(random.Random(seed).sample(_kept, n_sample_pairs))
+        blocked_pairs = [blocked_pairs[i] for i in _kept]
+        pair_conditioning = [pair_conditioning[i] for i in _kept]
     # Semi-supervised anchors: append caller-provided labeled pairs to the EM
     # training sample so their comparison vectors are present in comp_matrix and
     # their E-step responsibility can be clamped to the label each iteration.
@@ -2812,6 +2851,7 @@ def load_or_train_em(
     convergence: float | None = None,
     target_ids: set[int] | None = None,
     label_pairs: dict[tuple[int, int], int] | None = None,
+    pair_filter: Any = None,
 ) -> EMResult:
     """Return a trained EMResult, reusing ``mk.model_path`` when present.
 
@@ -2859,11 +2899,12 @@ def load_or_train_em(
         blocking_fields=blocking_fields,
         target_ids=target_ids,
         label_pairs=label_pairs,
+        pair_filter=pair_filter,
     )
-    # Persist ONLY the canonical un-anchored model. An anchored model is a
-    # per-call override; overwriting the shared model_path file with it would
-    # surprise the next reuse.
-    if path and not label_pairs:
+    # Persist ONLY the canonical un-anchored, unfiltered model. An anchored or
+    # candidate-filtered model is a per-call override; overwriting the shared
+    # model_path file with it would surprise the next reuse.
+    if path and not label_pairs and pair_filter is None:
         em.save_json(path)
         logger.info("Saved FS model to %s", path)
     return em

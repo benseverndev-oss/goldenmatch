@@ -365,7 +365,10 @@ def _load_or_build(args):
 
     from scripts.autoconfig_quality import datasets as D
 
-    df, gt = D._historical_50k()
+    loaded = getattr(D, f"_{args.dataset}")()
+    if loaded is None:
+        raise SystemExit(f"dataset {args.dataset!r} is unavailable here")
+    df, gt = loaded
     cfg = auto_configure_probabilistic_df(df)
     df_rowid = df.with_row_index("__row_id__") if "__row_id__" not in df.columns else df
     keys = list(cfg.blocking.resolved_keys())
@@ -388,6 +391,11 @@ def main() -> int:
         type=float,
         default=[],
         help="merge passes whose phi clears this threshold (repeatable; default 0.2 0.5 0.7)",
+    )
+    ap.add_argument(
+        "--dataset",
+        default="historical_50k",
+        help="scripts.autoconfig_quality.datasets loader name (default historical_50k)",
     )
     ap.add_argument("--signatures-json", default=None, help="reuse a previous --out")
     ap.add_argument("--out", default=None)
