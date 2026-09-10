@@ -340,6 +340,18 @@ case for shipping it.
   `fs-lever-gate` with `lever=GOLDENMATCH_FS_SIGNATURE_PRUNE`, `on_value` and
   optional `extra_passes`, is the F1 answer PC cannot give.
   `measure_blocking_signatures.py --dataset <loader>` rebuilds any panel dataset.
+- **The F1 answer: no.** `fs-lever-gate`, full panel, 2026-09-10:
+  - **`dominant` with each arm at its own best evidence cut** (default, 3, 5, 9, 12) is
+    +0.0063 on historical_50k (0.8320 -> 0.8383) and ties everywhere else. The sign
+    flips at cut 9 (-0.0159), and nearly all of the gain comes from EM's retrained sample.
+  - **`multi`** is -0.0120 on historical_50k.
+  - **A forced `surname` soundex pass** costs 0.0276 by itself, and pruning recovers at
+    most 0.0019.
+  - Runs 34501832833, 34501835540, 34501839230, 34501843346, 34502652123,
+    34502654667, 34502658089 and 34502661903.
+  - The pipeline pruner compares block keys and ignores oversized-block splitting, so
+    it is not the rule this harness measured: on historical_50k it sees 27.2M
+    candidates against 11.98M.
 
 ## Honest caveats (carried into the results doc)
 
