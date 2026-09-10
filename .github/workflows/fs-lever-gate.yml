@@ -108,11 +108,11 @@ on:
         default: ""
       fd_classes:
         description: >-
-          Value for GOLDENMATCH_FS_FD_CLASSES, applied to BOTH arms. "both"
-          makes the field-dependence correction subtract the NET double-count
-          (non-match lift minus match lift) instead of the non-match lift
-          alone. Anything else, empty included, is the original non-match-only
-          correction.
+          Value for GOLDENMATCH_FS_FD_CLASSES, applied to BOTH arms. Empty
+          (the default) and "both" make the field-dependence correction
+          subtract the NET double-count, non-match lift minus match lift.
+          "nonmatch" reproduces the original non-match-only correction ADR
+          0066 first measured.
         type: string
         default: ""
 

@@ -4,8 +4,9 @@ The original correction subtracts the NON-MATCH lift ``log2(u_ab/(u_a*u_b))``.
 Loglinear record-linkage models put interactions in the match class, the
 non-match class, or both (Daggy et al. 2013), and dependence matters most in the
 dominating class (Xu et al. 2019). ``both`` subtracts the net double-count,
-non-match lift minus match lift. The default stays non-match-only, so ADR 0066's
-measurements remain reproducible; the regression pins below hold that exactly.
+non-match lift minus match lift. ``both`` is the default: measured to be at least
+as good as the original on every panel dataset at every bar (ADR 0066 addendum).
+``nonmatch`` reproduces the original correction, pinned exactly below.
 """
 from __future__ import annotations
 
@@ -18,8 +19,8 @@ from goldenmatch.core import probabilistic as P
 
 ENV = "GOLDENMATCH_FS_FD_CLASSES"
 
-# Measured on origin/main 15ac6e530 BEFORE this change -- the pins that prove the
-# default path is unchanged.
+# Measured on origin/main 15ac6e530 before the match-class term existed: the original
+# correction's exact values, now reachable only via ``nonmatch``.
 F1_LEGACY_BITS = 0.7270137144645805
 F4_LEGACY_BITS = 1.9178745145247293
 F4_BOTH_BITS = 1.663521872313443
@@ -56,18 +57,18 @@ def _correct(p_match):
 
 # ---- mode parsing ------------------------------------------------------------
 
-@pytest.mark.parametrize("val", [None, "", "   ", "nonmatch", "garbage", "match"])
-def test_anything_but_both_is_the_original_correction(monkeypatch, val):
+@pytest.mark.parametrize("val", [None, "", "   ", "both", " BOTH ", "garbage", "match"])
+def test_the_net_correction_is_the_default(monkeypatch, val):
     """Empty in particular: GitHub renders an unset workflow input as ""."""
     if val is not None:
         monkeypatch.setenv(ENV, val)
-    assert P._fs_fd_classes() == "nonmatch"
-
-
-@pytest.mark.parametrize("val", ["both", " BOTH ", "Both"])
-def test_both_selects_the_net_correction(monkeypatch, val):
-    monkeypatch.setenv(ENV, val)
     assert P._fs_fd_classes() == "both"
+
+
+@pytest.mark.parametrize("val", ["nonmatch", " NONMATCH ", "NonMatch"])
+def test_nonmatch_restores_the_original_correction(monkeypatch, val):
+    monkeypatch.setenv(ENV, val)
+    assert P._fs_fd_classes() == "nonmatch"
 
 
 # ---- the per-class lift ------------------------------------------------------
@@ -109,27 +110,28 @@ def test_unestimable_lift_is_none_not_zero(resp, ta, tb):
 # ---- the correction ----------------------------------------------------------
 
 @pytest.mark.parametrize("p_match,legacy", [(0.05, F1_LEGACY_BITS), (0.92, F4_LEGACY_BITS)])
-def test_default_is_byte_identical_to_the_original_correction(p_match, legacy):
-    """REGRESSION PIN: exact values measured before this change."""
+def test_nonmatch_is_byte_identical_to_the_original_correction(monkeypatch, p_match, legacy):
+    """REGRESSION PIN: exact values measured before the match-class term existed."""
+    monkeypatch.setenv(ENV, "nonmatch")
     assert _correct(p_match) == [legacy]
 
 
-def test_nonmatch_spelled_out_equals_the_default(monkeypatch):
-    monkeypatch.setenv(ENV, "nonmatch")
-    assert _correct(0.92) == [F4_LEGACY_BITS]
-
-
-def test_both_subtracts_the_match_class_lift(monkeypatch):
-    """KNOWN-POSITIVE that the match term is wired: at match prevalence 0.92 the
-    match class carries real co-agreement (+0.25 b), so the net is lower."""
-    monkeypatch.setenv(ENV, "both")
+def test_default_subtracts_the_match_class_lift():
+    """KNOWN-POSITIVE that the default is the net correction: at match prevalence
+    0.92 the match class carries real co-agreement (+0.25 b), so the default is
+    lower than the original correction's value."""
     got = _correct(0.92)
     assert got == [pytest.approx(F4_BOTH_BITS, abs=1e-12)]
     assert got[0] < F4_LEGACY_BITS
 
 
-def test_both_reports_what_the_net_is_made_of(monkeypatch, caplog):
+def test_both_spelled_out_equals_the_default(monkeypatch):
+    default = _correct(0.92)
     monkeypatch.setenv(ENV, "both")
+    assert _correct(0.92) == default
+
+
+def test_default_reports_what_the_net_is_made_of(caplog):
     with caplog.at_level("WARNING"):
         _correct(0.92)
     assert "classes=both" in caplog.text
@@ -150,6 +152,7 @@ def test_selection_floor_applies_to_the_net_value(monkeypatch):
     comp = np.array(_ROWS, dtype=np.int64)
     cond = np.zeros((len(comp), 3), dtype=bool)
 
+    monkeypatch.setenv(ENV, "nonmatch")
     monkeypatch.setattr(P, "_class_excess_bits", lambda resp, ta, tb: 0.8)
     kept = P._compute_joint_corrections(comp, _mk(), _M, _U, 0.5, cond, set())
     assert len(kept) == 3

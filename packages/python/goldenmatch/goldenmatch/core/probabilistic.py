@@ -351,23 +351,29 @@ def _fs_field_dependence_enabled() -> bool:
 
 
 def _fs_fd_classes() -> str:
-    """Which EM class(es) the field-dependence correction measures. **Default 'nonmatch'.**
+    """Which EM class(es) the field-dependence correction measures. **Default 'both'.**
 
-    ``GOLDENMATCH_FS_FD_CLASSES=both`` subtracts the NET double-count,
-    ``log2(u_ab/(u_a*u_b)) - log2(m_ab/(m_a*m_b))``, instead of the non-match term
-    alone. The loglinear record-linkage literature models field interactions in the
-    match class, the non-match class, or both (Daggy et al. 2013 selected both by
-    BIC), and Xu et al. 2019 found dependence modeling matters when it is present in
-    the DOMINATING class. Inside historical_50k's blocks the match prevalence is
-    ~0.92, so matches dominate -- and the non-match-only correction ignored them.
-    True duplicates co-agree on correlated fields more than independence predicts
-    too, so subtracting only the non-match excess over-penalises real matches.
+    The correction subtracts the NET double-count,
+    ``log2(u_ab/(u_a*u_b)) - log2(m_ab/(m_a*m_b))``: non-match lift minus match
+    lift. Loglinear record-linkage models put field interactions in the match
+    class, the non-match class, or both (Daggy et al. 2013 selected both by BIC),
+    and Xu et al. 2019 found dependence modelling matters when it is present in
+    the DOMINATING class. Inside historical_50k's blocks match prevalence is
+    ~0.92, so matches dominate.
 
-    Anything other than ``both`` (unset, empty, unrecognised) is the original
-    non-match-only correction, so ADR 0066's measurements stay reproducible.
+    Measured (ADR 0066 addendum): with each arm at its own best evidence cut over
+    c in {3, 5, 9, 12}, the net correction is at least as good as the
+    non-match-only one on every panel dataset at every bar, and better on
+    historical_50k (0.8124 vs 0.7812), where surname x postcode_fake carries
+    +2.33 b of match lift against +3.69 b non-match. It still does not beat the
+    uncorrected baseline anywhere, which is why the lever itself stays default-OFF.
+
+    ``GOLDENMATCH_FS_FD_CLASSES=nonmatch`` restores the original non-match-only
+    correction ADR 0066 first measured. Anything else, unset and empty included,
+    is ``both``.
     """
     val = os.environ.get("GOLDENMATCH_FS_FD_CLASSES", "")
-    return "both" if val.strip().lower() == "both" else "nonmatch"
+    return "nonmatch" if val.strip().lower() == "nonmatch" else "both"
 
 def _deconvolve_post_blocking_u(
     comp_matrix, mk, m_probs, p_match, always_conditioned, u_floor: float = 1e-4,
@@ -428,7 +434,7 @@ def _compute_joint_corrections(
     ``_FD_MAX_PAIRS`` by excess). Scoring subtracts ``excess_bits`` when both
     agree — dropping the namesake double-count.
 
-    Under ``GOLDENMATCH_FS_FD_CLASSES=both`` the returned bits are the NET
+    By default (``GOLDENMATCH_FS_FD_CLASSES`` unset or ``both``) the returned bits are the NET
     double-count, non-match lift minus match lift (see ``_fs_fd_classes``), and
     selection, the floor and the cap all apply to that net value.
     """
