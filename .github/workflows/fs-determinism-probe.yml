@@ -1,0 +1,86 @@
+# FS determinism probe: run one panel dataset under zero-config FS in fresh
+# processes, varying the knobs a result could silently depend on (native thread
+# count, bucket count, native vs numpy route), and report which ones change the
+# partition. Exists because three fs-lever-gate full-panel runs on one commit gave
+# dblp_scholar three different baselines while both arms of each run agreed -- the
+# drift follows the runner, and a gate whose baseline moves between runs cannot
+# resolve a small lever effect.
+#
+# Runs on the PR that touches it (a workflow_dispatch trigger only exists once the
+# file is on the default branch) and by manual dispatch after. Not in ci-required.
+name: fs-determinism-probe
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/fs-determinism-probe.yml"
+      - "scripts/bench_er_headtohead/determinism_probe.py"
+  workflow_dispatch:
+    inputs:
+      dataset:
+        description: "scripts.autoconfig_quality.datasets loader name"
+        type: string
+        default: dblp_scholar
+
+permissions:
+  contents: read
+
+env:
+  ARROW_DEFAULT_MEMORY_POOL: system
+  _RJEM_MALLOC_CONF: "dirty_decay_ms:1000,muzzy_decay_ms:0"
+  GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+
+concurrency:
+  group: fs-determinism-probe-${{ github.ref }}-${{ inputs.dataset }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Sync workspace (installs goldenmatch @ HEAD)
+        run: uv sync --all-packages
+      - name: Build the native kernel (mirror the real default FS path)
+        run: uv run python scripts/build_native.py
+      - name: Runner hardware
+        run: |
+          nproc
+          lscpu | head -20
+          free -g
+      - name: Install recordlinkage (febrl3 / febrl4)
+        run: uv pip install recordlinkage
+      - name: Fetch Leipzig benchmarks (DBLP-ACM, DBLP-Scholar, Amazon-Google)
+        run: |
+          BASE=packages/python/goldenmatch/tests/benchmarks/datasets
+          fetch() {
+            local name="$1" url="$2"; shift 2
+            local dest="$BASE/$name"
+            mkdir -p "$dest"
+            if curl -fsSL --retry 3 -o "/tmp/$name.zip" "$url"; then
+              mkdir -p "/tmp/$name" && unzip -o -q "/tmp/$name.zip" -d "/tmp/$name"
+              for f in "$@"; do
+                found=$(find "/tmp/$name" -name "$f" | head -1)
+                if [ -n "$found" ]; then cp "$found" "$dest/$f"
+                else echo "::warning::$name: $f not in archive"; fi
+              done
+            else
+              echo "::warning::$name download failed"
+            fi
+          }
+          L=https://dbs.uni-leipzig.de/file
+          fetch DBLP-ACM "$L/DBLP-ACM.zip" DBLP2.csv ACM.csv DBLP-ACM_perfectMapping.csv
+          fetch DBLP-Scholar "$L/DBLP-Scholar.zip" DBLP1.csv Scholar.csv DBLP-Scholar_perfectMapping.csv
+          # The zip is named Amazon-GoogleProducts; the loader reads Amazon-Google/.
+          fetch Amazon-Google "$L/Amazon-GoogleProducts.zip" Amazon.csv GoogleProducts.csv Amzon_GoogleProducts_perfectMapping.csv
+      - name: Probe
+        env:
+          DATASET: ${{ inputs.dataset || 'dblp_scholar' }}
+        run: uv run python -m scripts.bench_er_headtohead.determinism_probe --dataset "$DATASET"
