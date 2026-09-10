@@ -332,3 +332,60 @@ def test_no_emresult_field_is_silently_dropped_by_combine():
         f"RECOMPUTED/INTERNAL with a reason. This is the bug that made the "
         f"field-dependence correction inert."
     )
+
+
+# ---------------------------------------------------------------------------
+# Every native route must consult the model, not just the matchkey
+#
+# `_fs_native_eligible(mk)` answers a question about the MATCHKEY, so it cannot
+# see a post-adjustment carried on the trained model. The decline was taught to
+# ONE of four routes; the bucket kernel, the bucket-batch path and the
+# out-of-core path each gated on it alone and scored natively anyway. That is
+# why the correction stayed inert on the panel even after it was carried
+# through the EM combine: estimated, logged, carried, then bypassed by the
+# scorer that actually ran.
+# ---------------------------------------------------------------------------
+
+def test_native_route_declines_when_a_correction_is_present():
+    em = _sess_em([("first_name", "surname", 2.48)])
+    assert P._fs_native_route_eligible(_mk(), em) is False
+
+
+def test_native_route_defers_to_matchkey_eligibility_without_corrections(monkeypatch):
+    """KNOWN-POSITIVE: with no correction the wrapper must be transparent, or
+    it would silently disable the native kernel for everyone."""
+    monkeypatch.setattr(P, "_fs_native_eligible", lambda mk: True)
+    assert P._fs_native_route_eligible(_mk(), _sess_em(None)) is True
+    monkeypatch.setattr(P, "_fs_native_eligible", lambda mk: False)
+    assert P._fs_native_route_eligible(_mk(), _sess_em(None)) is False
+
+
+def test_no_routing_decision_calls_the_matchkey_only_check_directly():
+    """THE CLASS GUARD.
+
+    A route that asks `_fs_native_eligible(mk)` cannot know a post-adjustment
+    exists. Exactly one place is allowed to call it: the wrapper that adds the
+    model half. A new scoring route calling it directly fails here rather than
+    silently discarding whatever the model carries.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(P.__file__).resolve().parent.parent
+    offenders = []
+    for path in sorted(root.rglob("*.py")):
+        for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if not re.search(r"(?<!_route)_fs_native_eligible\(", line):
+                continue
+            if line.lstrip().startswith(("#", "*", '"')) or "``" in line:
+                continue          # prose, not a call
+            if "def _fs_native_eligible(" in line:
+                continue          # the definition itself
+            if "return _fs_native_eligible(mk)" in line:
+                continue          # the ONE allowed call, inside the wrapper
+            offenders.append(f"{path.relative_to(root)}:{i}: {line.strip()}")
+    assert not offenders, (
+        "these call the matchkey-only check directly and so cannot see a "
+        "model-carried post-adjustment; route them through "
+        "_fs_native_route_eligible(mk, em_result):\n  " + "\n  ".join(offenders)
+    )

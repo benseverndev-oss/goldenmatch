@@ -4269,6 +4269,7 @@
             "_fs_native_dbg_record",
             "_fs_native_eligible",
             "_fs_native_enabled",
+            "_fs_native_route_eligible",
             "_fs_ne_extend_cols",
             "_fs_ne_weight_range",
             "_fs_post_blocking_u_enabled",

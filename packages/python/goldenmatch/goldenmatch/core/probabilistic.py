@@ -5235,8 +5235,12 @@ def score_probabilistic_blocks_batched(
     if cap is None:
         cap = _fs_batch_rows()
 
+    # Inverted polarity, same trap: when the kernel is eligible this path goes
+    # native and a model-carried post-adjustment is lost. Asking the route
+    # check instead makes a correction FORCE the vectorized batch scorer, which
+    # is the path that applies it.
     use_vec = (
-        not _fs_native_eligible(mk)
+        not _fs_native_route_eligible(mk, em_result)
         and _fs_vectorized_enabled()
         and _fs_vectorized_supported(mk)
     )
@@ -5568,6 +5572,30 @@ def _fs_native_eligible(mk: MatchkeyConfig) -> bool:
         return True
     except Exception:
         return False
+
+
+def _fs_native_route_eligible(mk: MatchkeyConfig, em_result) -> bool:
+    """Whether the native FS kernel may score THIS (mk, em_result).
+
+    ``_fs_native_eligible`` answers a question about the MATCHKEY only, so it
+    structurally cannot see a post-adjustment carried on the trained model. The
+    kernel returns pre-normalized, pre-thresholded scores, so any Python
+    weight adjustment applied after scoring is silently lost when it runs.
+
+    That decline existed in exactly one of the four routes. The per-block
+    chooser (``probabilistic_block_scorer``) declined correctly; the bucket
+    kernel, the bucket-batch path and the out-of-core path each gated on
+    ``_fs_native_eligible(mk)`` alone and scored natively anyway -- which is
+    why the field-dependence correction stayed inert on the panel even after
+    it was carried through the EM combine. Estimated, logged, carried, and
+    then bypassed by the scorer that actually ran.
+
+    Every route asks THIS function now, so a future post-adjustment is declined
+    everywhere or nowhere, never in three places out of four.
+    """
+    if getattr(em_result, "joint_corrections", None):
+        return False
+    return _fs_native_eligible(mk)
 
 
 def _fs_arrow_column(native_df, f, n: int):
@@ -6037,9 +6065,7 @@ def probabilistic_block_scorer(mk: MatchkeyConfig, em_result: EMResult):
     # Field-dependence correction is a Python post-adjustment; the native kernel
     # returns pre-normalized/thresholded scores, so decline it to the numpy path
     # when a correction is present (mirrors the tf-on-old-wheel decline).
-    _decline_native = bool(getattr(em_result, "joint_corrections", None))
-
-    if not _decline_native and _fs_native_eligible(mk):
+    if _fs_native_route_eligible(mk, em_result):
         def _native(block_df, exclude_pairs=None):
             return score_probabilistic_native(block_df, mk, em_result, exclude_pairs)
         return _native
