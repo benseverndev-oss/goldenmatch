@@ -300,6 +300,17 @@ Current operating point: auto-config's 8 passes, **11,977,484 candidates, PC 0.8
 Open: one dataset; the phi threshold and mode rule were chosen after seeing these
 curves (phi 0.7 fails on the 8-pass set); PC is not F1.
 
+**The `surname` soundex pass carries an earlier refutation (2026-07-24).**
+Auto-config does not produce it: `surname` fails `_is_scale_safe` (#876/#715),
+because Zipf-concentrated surname blocks grow with N and blow the pairs-per-row
+budget. Forcing the pass in at 20k rows also made FS F1 **worse** (+surname soundex
++ birth_place: 0.8136 to 0.7697 linear, 0.4972 under the evidence cut), because FS
+estimates m, u and the prior from the candidate population. Pruning answers the
+second problem at most, since FS would train on the pruned set; it does nothing for
+the first, because the pairs are still generated before they are pruned. Pair
+completeness here is therefore an upper bound on what the pass could buy, not a
+case for shipping it.
+
 ## Honest caveats (carried into the results doc)
 
 - **Blocking asymmetry is reported, not hidden.** GoldenMatch's bucket path does
