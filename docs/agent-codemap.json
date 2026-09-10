@@ -2677,6 +2677,7 @@
             "_is_pairs_dataframe",
             "_measure_bridges",
             "_measure_bridges_frames",
+            "_pair_key",
             "_pairs_df_to_list_numpy",
             "_record_unmerge_corrections",
             "_severe_bridge_count",
