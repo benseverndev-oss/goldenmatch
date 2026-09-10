@@ -91,8 +91,8 @@ const NFW_COMMON_NAME_FLOOR: f64 = 0.6;
 /// `name_freq_weighted_jw`: Jaro-Winkler down-weighted by surname frequency in
 /// the borderline zone. Mirrors `refdata.scorer.NameFreqWeightedJW.score_pair`'s
 /// STATIC-census branch (the branch the probabilistic path takes — it never
-/// populates the per-dataset `tf_freqs` table, and TF-adjustment fields decline
-/// native anyway):
+/// populates the per-dataset `tf_freqs` table; TF adjustment is applied
+/// separately, on top of this score, by `TfTable::adjustment`):
 ///
 /// ```text
 /// jw = JaroWinkler(a, b)

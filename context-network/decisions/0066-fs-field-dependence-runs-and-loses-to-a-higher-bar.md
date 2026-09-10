@@ -92,9 +92,23 @@ does once the cut is placed well.
 - **Two previously rejected weight-space levers were re-measured on the
   evidence-cut axis and fail harder there**: post-blocking-u (historical_50k
   −0.3596) and TF adjustment (−0.2240, with predicted pairs nearly doubling).
-  Neither was rescued. The TF result is likely a scale mismatch of the same
-  kind — `_TF_CLAMP = 10.0` per field lets one rare-value hit exceed a 9-bit bar
-  alone — and has not been measured past a single bar.
+  Neither was rescued at a single bar.
+- **TF addendum (2026-09-10): swept further, the verdict splits by dataset and
+  TF still stays off.** Under the default calibration, lowering the TF clamp
+  (`GOLDENMATCH_FS_TF_CLAMP`) moves historical_50k from −0.0116 (clamp 10) to
+  −0.0043 (6) to **+0.0058** (3), so bump size drives that regression. But
+  cotenant (−0.0178) and household (−0.0041) are identical at every clamp, down
+  to the pair count: none of their adjustments exceeds 3 bits, so their
+  regression has another cause. On the evidence-cut axis TF's best bar beats the
+  baseline's best on historical_50k (0.8482 vs 0.8186, both c=12) and loses on
+  cotenant (0.9851 vs 0.9959). **No single evidence cut replaces today's
+  default**: swept over c ∈ {3, 5, 9, 12, 15}, the baseline's historical_50k peaks
+  at 0.8186 (c=12) against the default's 0.8320, and household and cotenant
+  are already falling by then.
+- **Native and numpy TF scoring disagree.** Same commit, clamp and data, only
+  the route differs: historical_50k 303,998 vs 303,314 predicted pairs (F1 0.8195
+  vs 0.8204), cotenant 1,287 vs 1,279. The one CI lane running the TF
+  route-parity tests deselects the native ones. Tracked in #2922.
 
 ## Method note
 Every panel verdict on this lever between #2914 and #2919 was reasoning about a
