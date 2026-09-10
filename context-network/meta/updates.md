@@ -2,6 +2,17 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-09-10 -- ADR 0066 addendum: the correction subtracts the two-class double-count by default
+- The field-dependence correction originally subtracted only the NON-MATCH lift. The
+  record-linkage literature models interactions in either or both classes and finds dependence
+  matters in the DOMINATING class; historical_50k's within-block match prevalence is ~0.92.
+- Adding the match-class term (`GOLDENMATCH_FS_FD_CLASSES`, now default `both`) is at least as good
+  as the original at every bar on every panel dataset and recovers most of historical_50k's loss
+  (best 0.7812 -> 0.8124; `surname x postcode_fake` carries +2.33 b match lift of +3.69 b), but still
+  never beats the uncorrected baseline. The lever stays default-OFF.
+- Corrects the ADR's historical_50k baseline best (0.7843 over c in {3,5,9}; 0.8186 with c=12) and
+  records why fitting interactions inside EM is not pursued.
+
 ## 2026-09-10 -- ADR 0066: the FS field-dependence correction runs, and loses to a higher bar
 - Added **[ADR 0066](../decisions/0066-fs-field-dependence-runs-and-loses-to-a-higher-bar.md)**,
   superseding 0065. The panel's `+0.0000` hid THREE stacked defects, each alone enough to

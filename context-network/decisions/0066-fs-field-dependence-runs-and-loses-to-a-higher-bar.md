@@ -110,6 +110,51 @@ does once the cut is placed well.
   vs 0.8204), cotenant 1,287 vs 1,279. The one CI lane running the TF
   route-parity tests deselects the native ones. Tracked in #2922.
 
+## Addendum: the match-class term (2026-09-10)
+**Measured:** net correction [34491766633](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34491766633) (c=3), [34491769702](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34491769702) (c=5), [34491773407](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34491773407) (c=9), [34491777072](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34491777072) (c=12); non-match-only rerun [34491840682](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34491840682) (c=3), [34491844272](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34491844272) (c=5), [34491847161](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34491847161) (c=9), [34491780279](https://github.com/benseverndev-oss/goldenmatch/actions/runs/34491780279) (c=12). All on one commit; every paired baseline arm identical.
+
+A literature review found the original correction misspecified in a testable way.
+Loglinear record-linkage models put field interactions in the match class, the
+non-match class, or both (Daggy et al. 2013 selected both by BIC), and Xu et al.
+2019 found dependence modelling matters when it is present in the DOMINATING
+class. The original subtracted only the non-match lift, and inside
+historical_50k's blocks match prevalence is ~0.92.
+
+The correction now subtracts the net double-count,
+`log2(u_ab/(u_a·u_b)) − log2(m_ab/(m_a·m_b))`, by default. Measured on `main`
+after #2924 and #2926 fixed the numpy route the correction scores on, each arm at
+its own best bar over c ∈ {3, 5, 9, 12}:
+
+| dataset | baseline | non-match only | net (both classes) |
+|---|---|---|---|
+| historical_50k | **0.8186** (c=12) | 0.7812 (c=12) | 0.8124 (c=12) |
+| cotenant_hardneg | **0.9959** (c=9) | 0.9083 (c=3) | 0.9083 (c=3) |
+| household_hardneg | **1.0000** (c=9) | 0.9775 (c=5) | 0.9775 (c=5) |
+| ncvr_synthetic | 0.9986 | 0.9986 | 0.9986 |
+| person | 1.0000 | 1.0000 | 1.0000 |
+
+- **The match-class term is real where it exists.** historical_50k's
+  `surname × postcode_fake` carries +2.33 b of match lift against +3.69 b
+  non-match. The net correction cuts historical_50k's loss at the same bar from
+  −0.0374 to −0.0062 (c=12) and from −0.0049 to −0.0002 (c=3).
+- **Elsewhere it is about zero** (`street × dob` +7.62 vs +0.00,
+  `last_name × email` +5.42 vs +0.00). True duplicates agree on those fields
+  almost always, so their joint cannot exceed independence by much, and the net
+  stays at the full non-match lift.
+- **The net correction is at least as good as the original at every bar on every
+  dataset, so it is now the default**; `GOLDENMATCH_FS_FD_CLASSES=nonmatch`
+  restores the original. **It still beats the baseline nowhere**, so the lever
+  stays default-OFF and this ADR's verdict stands on the fixed numpy route. The
+  original's best numbers barely moved (cotenant 0.9067 → 0.9083).
+- **Correction to the Decision table above:** its historical_50k baseline best,
+  0.7843, came from c ∈ {3, 5, 9}. With c=12 it is 0.8186.
+- **Fitting the interactions inside EM is not pursued.** Where the dependence is
+  two-class, the net correction is already near neutral; where it is not, a
+  proper fit estimates the same near-zero match interaction. This matches Xu et
+  al. 2019's "comparable matching accuracy", and Domingos & Pazzani 1997's result
+  that a naive-Bayes classifier's decisions can survive violated independence
+  while its probability estimates do not.
+
 ## Method note
 Every panel verdict on this lever between #2914 and #2919 was reasoning about a
 measurement of code that did not execute. The July 2026 spike is the exception:
