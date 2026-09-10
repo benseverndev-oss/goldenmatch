@@ -71,6 +71,29 @@ const SPLIT_CASES: SplitCase[] = [
     ],
   },
   {
+    name: "path whose two weakest edges tie (level cuts both)",
+    members: [0, 1, 2, 3, 4, 5],
+    pairs: [
+      [0, 1, 0.9],
+      [1, 2, 0.5],
+      [2, 3, 0.9],
+      [3, 4, 0.5],
+      [4, 5, 0.9],
+    ],
+  },
+  {
+    name: "every edge ties (level drops one edge, no shattering)",
+    members: [0, 1, 2, 3],
+    pairs: [
+      [0, 1, 1.0],
+      [0, 2, 1.0],
+      [0, 3, 1.0],
+      [1, 2, 1.0],
+      [1, 3, 1.0],
+      [2, 3, 1.0],
+    ],
+  },
+  {
     name: "size-1 cluster is unsplittable",
     members: [7],
     pairs: [],
@@ -125,14 +148,27 @@ describe("cluster-wasm parity — wasm == pure-TS", () => {
   afterEach(() => disableClusterWasm());
 
   for (const c of SPLIT_CASES) {
-    it(`splitOversizedCluster: ${c.name}`, () => {
-      disableClusterWasm();
-      const pure = projSplit(splitOversizedCluster(c.members, ps(c.pairs)));
-      enableClusterWasm();
-      const wasm = projSplit(splitOversizedCluster(c.members, ps(c.pairs)));
-      expect(wasm).toEqual(pure);
-    });
+    for (const ties of ["level", "single"] as const) {
+      it(`splitOversizedCluster (${ties}): ${c.name}`, () => {
+        disableClusterWasm();
+        const pure = projSplit(splitOversizedCluster(c.members, ps(c.pairs), ties));
+        enableClusterWasm();
+        const wasm = projSplit(splitOversizedCluster(c.members, ps(c.pairs), ties));
+        expect(wasm).toEqual(pure);
+      });
+    }
   }
+
+  it("level cut removes both tied weakest edges; single removes one (known-positive)", () => {
+    disableClusterWasm();
+    const path = SPLIT_CASES.find((c) => c.name.startsWith("path whose two weakest"))!;
+    const groups = (ties: "level" | "single") =>
+      splitOversizedCluster(path.members, ps(path.pairs), ties)
+        .map((c) => [...c.members].sort((a, b) => a - b))
+        .sort((a, b) => a[0]! - b[0]!);
+    expect(groups("single")).toEqual([[0, 1], [2, 3, 4, 5]]);
+    expect(groups("level")).toEqual([[0, 1], [2, 3], [4, 5]]);
+  });
 
   for (const c of CONF_CASES) {
     it(`computeClusterConfidence: ${c.name}`, () => {

@@ -108,6 +108,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("FUSED_FS_SUPPORTS_NAME_SCORERS", true)?;
     m.add_function(wrap_pyfunction!(cluster::connected_components, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::mst_split_components, m)?)?;
+    m.add_function(wrap_pyfunction!(cluster::mst_split_components_level, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::severe_bridge_count, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::cluster_confidence, m)?)?;
     m.add_function(wrap_pyfunction!(cluster::build_clusters_native, m)?)?;

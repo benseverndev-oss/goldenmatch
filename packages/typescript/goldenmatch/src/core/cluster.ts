@@ -229,12 +229,28 @@ interface MutableClusterInfo {
 }
 
 /**
- * Split a cluster by removing the weakest MST edge.
+ * How the oversized-cluster split resolves tied weakest MST edges.
+ *
+ * - `"level"` (default): drop every MST edge tied with the weakest, or exactly
+ *   one edge when all of them tie. Single-linkage at that height, so the split
+ *   does not depend on edge order. Matches Python's default
+ *   `GOLDENMATCH_CLUSTER_SPLIT_TIES=level`.
+ * - `"single"`: drop only the first weakest edge.
+ */
+export type SplitTies = "level" | "single";
+
+/** Scores within this of the weakest MST edge count as tied (Python `_SPLIT_TIE_EPS`). */
+const SPLIT_TIE_EPS = 1e-9;
+
+/**
+ * Split a cluster by removing its weakest MST edge (every tied weakest edge
+ * under the default `splitTies: "level"`).
  * Returns sub-cluster infos.
  */
 export function splitOversizedCluster(
   members: readonly number[],
   pairScores: ReadonlyMap<PairKey, number>,
+  splitTies: SplitTies = "level",
 ): MutableClusterInfo[] {
   if (members.length <= 1 || pairScores.size === 0) {
     return [
@@ -276,7 +292,10 @@ export function splitOversizedCluster(
       const [a, b] = parsePairKey(key);
       edges.push([a, b, score]);
     }
-    const comps = backend.mstSplitComponents(members as number[], edges);
+    const comps =
+      splitTies === "level"
+        ? backend.mstSplitComponentsLevel(members as number[], edges)
+        : backend.mstSplitComponents(members as number[], edges);
     if (comps.length === 0) return unsplittable();
     components = comps.map((c) => new Set(c));
   } else {
@@ -293,11 +312,18 @@ export function splitOversizedCluster(
       }
     }
 
-    // Rebuild without weakest edge
+    // Level cut: drop every edge tied with the weakest, unless every edge ties
+    // (then the tree carries no split information and a level cut would shatter
+    // a block of exact duplicates into singletons -- drop one edge instead).
+    const floor = weakestScore + SPLIT_TIE_EPS;
+    const level = splitTies === "level" && mst.some((e) => e[2] > floor);
+
+    // Rebuild without the dropped edge(s)
     const uf = new UnionFind();
     uf.addMany(members as number[]);
     for (let i = 0; i < mst.length; i++) {
-      if (i !== weakestIdx) {
+      const keep = level ? mst[i]![2] > floor : i !== weakestIdx;
+      if (keep) {
         uf.union(mst[i]![0], mst[i]![1]);
       }
     }
@@ -336,6 +362,8 @@ export interface BuildClustersOptions {
   readonly maxClusterSize?: number;
   readonly weakClusterThreshold?: number;
   readonly autoSplit?: boolean;
+  /** Tied weakest-edge handling in the auto-split. Default `"level"`. */
+  readonly splitTies?: SplitTies;
 }
 
 // ---------------------------------------------------------------------------
@@ -357,6 +385,7 @@ export function buildClusters(
   const maxClusterSize = options?.maxClusterSize ?? 100;
   const weakClusterThreshold = options?.weakClusterThreshold ?? 0.3;
   const autoSplit = options?.autoSplit ?? true;
+  const splitTies = options?.splitTies ?? "level";
 
   // Connected components of the candidate-pair graph. Rust-source-of-truth
   // path: the shared graph-core kernel (same as the Python native path + the
@@ -443,6 +472,7 @@ export function buildClusters(
       const subClusters = splitOversizedCluster(
         cinfo.members,
         cinfo.pairScores,
+        splitTies,
       );
       let nextCid = 0;
       for (const [k] of result) {

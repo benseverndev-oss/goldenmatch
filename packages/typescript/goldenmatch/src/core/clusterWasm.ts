@@ -18,6 +18,7 @@
 import {
   initSync,
   mst_split_components,
+  mst_split_components_level,
   cluster_confidence,
 } from "./_wasm/clusterWasmBindings.js";
 import { CLUSTER_WASM_BASE64 } from "./_wasm/clusterWasmBytes.js";
@@ -74,6 +75,20 @@ export function mstSplitComponents(
 }
 
 /**
+ * Level-cut split via the shared cluster-core kernel: drop every MST edge tied
+ * with the weakest (one edge when all tie). Same return shape as
+ * `mstSplitComponents`.
+ */
+export function mstSplitComponentsLevel(
+  members: readonly number[],
+  edges: readonly (readonly [number, number, number])[],
+): number[][] {
+  ensureInit();
+  const { a, b, w } = splitEdges(edges);
+  return JSON.parse(mst_split_components_level(Int32Array.from(members), a, b, w));
+}
+
+/**
  * Cluster confidence tuple via the shared cluster-core kernel.
  */
 export function clusterConfidence(
@@ -92,7 +107,7 @@ export function clusterConfidence(
  */
 export function enableClusterWasm(): void {
   ensureInit();
-  setClusterWasmBackend({ mstSplitComponents, clusterConfidence });
+  setClusterWasmBackend({ mstSplitComponents, mstSplitComponentsLevel, clusterConfidence });
 }
 
 export { disableClusterWasm };

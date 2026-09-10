@@ -6,6 +6,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Changed
+- **Oversized-cluster auto-split cuts every tied weakest edge.** `buildClusters`
+  takes `splitTies: "level" | "single"` (default `"level"`), and
+  `splitOversizedCluster` takes it as a third argument. Under `"level"` every
+  MST edge tied with the weakest is dropped at once (one edge when all of them
+  tie, so a block of exact duplicates is not shattered), which makes the split
+  independent of edge order. This matches Python's new default
+  (`GOLDENMATCH_CLUSTER_SPLIT_TIES=level`), measured on the Python FS panel as
+  never lower at any cutoff and precision-up where tied oversized clusters
+  exist. `"single"` restores the previous one-edge cut. The opt-in cluster wasm
+  backend gains `mstSplitComponentsLevel` (cluster-core
+  `mst_split_components_level`), and `SplitTies` / `BuildClustersOptions` are
+  now exported from `goldenmatch/core`.
+
 ### Fixed
 - **`blockingHealth` grades skew by work concentration, not by a size
   percentile.** Parity port of the Python fix: `blockSizesP99 > 10 * (nRows /

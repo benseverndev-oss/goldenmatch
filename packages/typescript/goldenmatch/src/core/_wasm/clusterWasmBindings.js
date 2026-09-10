@@ -68,6 +68,38 @@ export function mst_split_components(members, edges_a, edges_b, edges_w) {
         wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
     }
 }
+
+/**
+ * Level-cut variant: drop every MST edge tied with the weakest (one edge when
+ * all tie). Behavior-exact mirror of cluster-core's `mst_split_components_level`
+ * (the Python default `GOLDENMATCH_CLUSTER_SPLIT_TIES=level`). Same JSON shape
+ * and `"[]"` unsplittable result as `mst_split_components`.
+ * @param {Int32Array} members
+ * @param {Int32Array} edges_a
+ * @param {Int32Array} edges_b
+ * @param {Float64Array} edges_w
+ * @returns {string}
+ */
+export function mst_split_components_level(members, edges_a, edges_b, edges_w) {
+    let deferred5_0;
+    let deferred5_1;
+    try {
+        const ptr0 = passArray32ToWasm0(members, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray32ToWasm0(edges_a, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passArray32ToWasm0(edges_b, wasm.__wbindgen_malloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passArrayF64ToWasm0(edges_w, wasm.__wbindgen_malloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ret = wasm.mst_split_components_level(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+        deferred5_0 = ret[0];
+        deferred5_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
+    }
+}
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
@@ -159,11 +191,15 @@ function __wbg_finalize_init(instance, module) {
 
 async function __wbg_load(module, imports) {
     if (typeof Response === 'function' && module instanceof Response) {
+        if (!module.ok) {
+            throw new Error(`failed to fetch Wasm: ${module.status} ${module.statusText} fetching '${module.url}'`);
+        }
+
         if (typeof WebAssembly.instantiateStreaming === 'function') {
             try {
                 return await WebAssembly.instantiateStreaming(module, imports);
             } catch (e) {
-                const validResponse = module.ok && expectedResponseType(module.type);
+                const validResponse = expectedResponseType(module.type);
 
                 if (validResponse && module.headers.get('Content-Type') !== 'application/wasm') {
                     console.warn("`WebAssembly.instantiateStreaming` failed because your server does not serve Wasm with `application/wasm` MIME type. Falling back to `WebAssembly.instantiate` which is slower. Original error:\n", e);

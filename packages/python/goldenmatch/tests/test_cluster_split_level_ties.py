@@ -37,6 +37,22 @@ def test_level_is_the_default(monkeypatch):
     assert got == [(0, 1), (2, 3), (4, 5)]
 
 
+def test_single_step_splitter_follows_the_same_rule(monkeypatch):
+    """``split_oversized_cluster`` (one split step) applies the setting too, on the
+    pure-Python path; the native path is checked against it in test_native_parity."""
+    from goldenmatch.core.cluster import split_oversized_cluster
+
+    monkeypatch.setenv("GOLDENMATCH_NATIVE", "0")
+    monkeypatch.setenv("GOLDENMATCH_CLUSTER_SPLIT_TIES", "single")
+    assert _partition(split_oversized_cluster(list(range(6)), _scores(_PATH))) == [
+        (0, 1), (2, 3, 4, 5),
+    ]
+    monkeypatch.setenv("GOLDENMATCH_CLUSTER_SPLIT_TIES", "level")
+    assert _partition(split_oversized_cluster(list(range(6)), _scores(_PATH))) == [
+        (0, 1), (2, 3), (4, 5),
+    ]
+
+
 def test_level_cuts_every_tied_weakest_edge(monkeypatch):
     """KNOWN-POSITIVE: ``single`` leaves {2,3,4,5}; the level cut also removes (3,4)."""
     monkeypatch.setenv("GOLDENMATCH_CLUSTER_SPLIT_TIES", "level")
