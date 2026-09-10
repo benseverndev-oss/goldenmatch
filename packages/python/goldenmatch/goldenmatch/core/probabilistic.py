@@ -3435,7 +3435,7 @@ def _add_ne_matrix_contribution(
     present + non-empty AND similarity is STRICTLY below ``ne.threshold`` --
     the same rule as :func:`_ne_fired`, vectorized.
     """
-    sim = _field_score_matrix_dedup(vals, ne.scorer)
+    sim = _field_score_matrix_dedup(vals, ne.scorer, cuts=[float(ne.threshold)])
     inconclusive = np.array([v is None or v == "" for v in vals], dtype=bool)
     fired = sim < ne.threshold
     if inconclusive.any():
@@ -4655,6 +4655,24 @@ def _levels_from_similarity(
     return lvl
 
 
+
+def _similarity_cuts(
+    levels: int, partial_threshold: float, level_thresholds: list[float] | None = None,
+) -> list[float]:
+    """Every threshold ``_levels_from_similarity`` compares a similarity against.
+
+    Kept beside it on purpose. ``_field_score_matrix_dedup`` recomputes cells that
+    sit on one of these at full precision (#2922), so a cut added to the banding
+    rule and not here would silently reopen that bug for the new cut.
+    """
+    if level_thresholds is not None:
+        return [float(t) for t in level_thresholds]
+    if levels == 2:
+        return [float(partial_threshold)]
+    if levels == 3:
+        return [float(partial_threshold), 0.95]
+    return [k / levels for k in range(1, levels)]
+
 def _field_score_matrix(vals: list[str | None], scorer: str) -> np.ndarray:
     """NxN similarity matrix for a field, routing by scorer the same way
     ``find_fuzzy_matches`` does: exact / soundex have dedicated matrices,
@@ -4674,7 +4692,54 @@ def _field_score_matrix(vals: list[str | None], scorer: str) -> np.ndarray:
     return _fuzzy_score_matrix(vals, scorer)
 
 
-def _field_score_matrix_dedup(vals: list[str | None], scorer: str) -> np.ndarray:
+# Float32 rounding error on a [0, 1] similarity is under ~6e-8, so a cell further
+# than this from every cut bands identically at float32 and at float64.
+_CUT_REPAIR_BAND = 1e-6
+
+
+def _repair_cut_cells(raw, vals, scorer: str, cuts) -> np.ndarray:
+    """``raw`` as float64, with every cell that sits on a cut recomputed exactly.
+
+    #2922. ``scorer._fuzzy_score_matrix`` returns float32 -- the weighted matcher's
+    memory contract, from both the native ``score_field_matrix`` kernel and
+    ``pure_field_matrix`` -- and casting afterwards cannot restore the lost digits.
+    Jaro-Winkler('anderson', 'andersen') is exactly 0.95, is stored as
+    0.949999988079071, and loses ``>= 0.95``, where the FS kernel (f64) and EM
+    training (scalar ``score_field``, f64) both win it. The pair landed one level
+    lower on the numpy route only.
+
+    Only a cell within ``_CUT_REPAIR_BAND`` of a cut can band differently, so only
+    those are rescored, with ``score_field``: the scalar EM trains with, asserted
+    byte-parity with the kernel's ``score_one``. Every other cell keeps its fast
+    float32 value, whose banding is provably unchanged.
+    """
+    out = np.asarray(raw, dtype=np.float64)
+    # Gate on the SCORER, not the dtype. `_fuzzy_score_matrix` casts the float32
+    # kernel result to float64 before returning it, so truncated digits arrive
+    # already wearing a float64 dtype (measured: native float32 0.949999988 ->
+    # `_fuzzy_score_matrix` float64 0.949999988). A dtype guard never fired.
+    # Model-backed scorers compute cosine in float64 and have no scalar twin in
+    # `score_field`, so they are the one exclusion.
+    if not cuts or out.size == 0 or scorer in _MODEL_BACKED_SCORERS:
+        return out
+    near = np.zeros(out.shape, dtype=bool)
+    for t in cuts:
+        near |= np.abs(out - float(t)) <= _CUT_REPAIR_BAND
+    if not near.any():
+        return out
+    out = out.copy()  # never write into an array the caller may still hold
+    from goldenmatch.core.scorer import score_field
+
+    for i, j in zip(*np.nonzero(near)):
+        exact = score_field(vals[i], vals[j], scorer)
+        if exact is not None:
+            out[i, j] = exact
+    return out
+
+
+def _field_score_matrix_dedup(
+    vals: list[str | None], scorer: str, cuts: list[float] | None = None,
+) -> np.ndarray:
     """``_field_score_matrix`` over the DISTINCT values, expanded back to NxN.
 
     Field similarity depends only on the ``(value_a, value_b)`` pair, so scoring
@@ -4683,6 +4748,10 @@ def _field_score_matrix_dedup(vals: list[str | None], scorer: str) -> np.ndarray
     blocking-key field to a 1x1 matrix), shrinking the per-field cdist / native
     kernel call that dominates FS block scoring. No-op when all values are
     distinct (returns the full-list matrix directly).
+
+    Pass ``cuts`` -- the thresholds the caller compares against -- whenever the
+    result is banded or thresholded. Without them a similarity sitting exactly on
+    a cut stays float32-truncated and bands differently from the kernel (#2922).
     """
     n = len(vals)
     index = np.empty(n, dtype=np.intp)
@@ -4696,8 +4765,8 @@ def _field_score_matrix_dedup(vals: list[str | None], scorer: str) -> np.ndarray
             uniq.append(v)
         index[i] = j
     if len(uniq) == n:
-        return np.asarray(_field_score_matrix(vals, scorer), dtype=np.float64)
-    sub = np.asarray(_field_score_matrix(uniq, scorer), dtype=np.float64)
+        return _repair_cut_cells(np.asarray(_field_score_matrix(vals, scorer)), vals, scorer, cuts)
+    sub = _repair_cut_cells(np.asarray(_field_score_matrix(uniq, scorer)), uniq, scorer, cuts)
     # Two distinct rows sharing a value collapse to the SAME unique index, so
     # the expansion reads that value's diagonal cell. For multiplicity-based
     # matrices (exact / soundex) ``_field_score_matrix`` leaves a singleton's
@@ -4997,7 +5066,10 @@ def score_probabilistic_vectorized(
             continue
         vals = _field_values_for_block(block_df, f, n)
         weights = np.asarray(em_result.match_weights[f.field], dtype=np.float64)
-        sim = _field_score_matrix_dedup(vals, f.scorer)
+        sim = _field_score_matrix_dedup(
+            vals, f.scorer,
+            cuts=_similarity_cuts(int(f.levels), float(f.partial_threshold), f.level_thresholds),
+        )
         lvl = _levels_from_similarity(
             sim, int(f.levels), float(f.partial_threshold), level_thresholds=f.level_thresholds
         )
@@ -5128,7 +5200,10 @@ def score_probabilistic_vectorized_batch(
         for bdf, (s, e) in zip(block_dfs, spans):
             vals.extend(_field_values_for_block(bdf, f, e - s))
         weights = np.asarray(em_result.match_weights[f.field], dtype=np.float64)
-        sim = _field_score_matrix_dedup(vals, f.scorer)
+        sim = _field_score_matrix_dedup(
+            vals, f.scorer,
+            cuts=_similarity_cuts(int(f.levels), float(f.partial_threshold), f.level_thresholds),
+        )
         lvl = _levels_from_similarity(
             sim, int(f.levels), float(f.partial_threshold), level_thresholds=f.level_thresholds
         )
