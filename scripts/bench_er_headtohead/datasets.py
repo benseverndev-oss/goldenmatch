@@ -469,6 +469,36 @@ def _abt_buy() -> tuple[pa.Table, pa.Table]:
 
 _MAGELLAN_SPLITS = ("train.csv", "valid.csv", "test.csv")
 
+#: Corpus names of the DeepMatcher/Magellan benchmarks, by their directory under ``Magellan/``.
+MAGELLAN_SUBDIRS: dict[str, str] = {
+    "walmart_amazon": "Walmart-Amazon",
+    "itunes_amazon": "iTunes-Amazon",
+    "fodors_zagats": "Fodors-Zagats",
+}
+
+
+def magellan_labels(subdir: str) -> list[tuple[str, str, bool]]:
+    """Every labelled candidate pair of the train/valid/test splits as
+    ``(a:<id>, b:<id>, is_match)``, in file order. Raises ``DatasetUnavailable`` when a split
+    is missing."""
+    base = DATASETS_DIR / "Magellan" / subdir
+    splits = [base / s for s in _MAGELLAN_SPLITS]
+    missing = [p.name for p in splits if not p.exists()]
+    if missing:
+        raise DatasetUnavailable(
+            f"{subdir} Magellan splits not found under {base}; missing: {missing}"
+        )
+    labels: list[tuple[str, str, bool]] = []
+    for split in splits:
+        table = _read_csv_lossy(split)
+        for left, right, label in zip(
+            table.column("ltable_id").to_pylist(),
+            table.column("rtable_id").to_pylist(),
+            table.column("label").to_pylist(),
+        ):
+            labels.append((f"a:{left}", f"b:{right}", label.strip() == "1"))
+    return labels
+
 
 def _magellan(subdir: str) -> tuple[pa.Table, pa.Table]:
     """A DeepMatcher/Magellan structured benchmark (cite-only: fetched at run time,
@@ -494,16 +524,9 @@ def _magellan(subdir: str) -> tuple[pa.Table, pa.Table]:
         ],
         promote_options="default",
     )
-    pairs: list[tuple[Hashable, Hashable]] = []
-    for split in paths[2:]:
-        table = _read_csv_lossy(split)
-        for left, right, label in zip(
-            table.column("ltable_id").to_pylist(),
-            table.column("rtable_id").to_pylist(),
-            table.column("label").to_pylist(),
-        ):
-            if label.strip() == "1":
-                pairs.append((f"a:{left}", f"b:{right}"))
+    pairs: list[tuple[Hashable, Hashable]] = [
+        (left, right) for left, right, is_match in magellan_labels(subdir) if is_match
+    ]
     all_ids = records.column("record_id").to_pylist()
     cmap = _cluster_ids_from_pairs(all_ids, pairs)
     truth = pa.table({"record_id": all_ids, "cluster_id": [cmap[r] for r in all_ids]})

@@ -158,6 +158,49 @@ def _model_hashes(model_dir: Path) -> dict[str, str]:
     }
 
 
+def labelled_summary(clusters: dict, labels: dict[tuple[int, int], bool]) -> dict:
+    """Precision / recall / F1 over the labelled pairs only.
+
+    A labelled match inside one predicted cluster is a TP, a labelled non-match inside one is
+    an FP, and a labelled match split apart is an FN. Unlabelled pairs count for nothing."""
+    from goldenmatch.core.evaluate import EvalResult
+
+    cluster_of: dict[int, object] = {}
+    for cid, info in clusters.items():
+        for member in info.get("members", []):
+            cluster_of[member] = cid
+    tp = fp = fn = 0
+    for (i, j), is_match in labels.items():
+        together = i in cluster_of and cluster_of[i] == cluster_of.get(j)
+        if is_match and together:
+            tp += 1
+        elif is_match:
+            fn += 1
+        elif together:
+            fp += 1
+    summary = EvalResult(tp=tp, fp=fp, fn=fn).summary()
+    return {
+        **{key: summary[key] for key in ("f1", "precision", "recall")},
+        "labelled_pairs": len(labels),
+    }
+
+
+def gate_metric_of(name: str) -> str:
+    """``"labelled"`` for a DeepMatcher/Magellan dataset (F1 over labelled pairs only), else
+    ``"f1"``."""
+    from scripts.bench_er_headtohead.datasets import MAGELLAN_SUBDIRS
+
+    return "labelled" if name in MAGELLAN_SUBDIRS else "f1"
+
+
+def metric_value(arm_record: dict, metric: str) -> float | None:
+    """An arm's gate metric: ``f1``, or the labelled-pairs F1; None when not measured."""
+    if metric == "labelled":
+        labelled = arm_record.get("labelled")
+        return None if labelled is None else labelled["f1"]
+    return arm_record.get("f1")
+
+
 #: Watchdog limits for one arm's child process. The memory cap leaves headroom on
 #: the 16 GB hosted runner, so an over-merging rule is killed and recorded before
 #: the runner itself dies and takes every other arm's measurement with it.
@@ -212,6 +255,7 @@ def killed_record(
         "recall": None,
         "pairs": None,
         "digest": None,
+        "labelled": None,
         "matchkeys": {},
         "applied": False,
         "voided": False,
@@ -366,15 +410,17 @@ def run_arm(
         peak_rss_mb=round(peak, 1),
         wall_seconds=payload["wall_seconds"],
         process_seconds=round(process_seconds, 1),
+        labelled=payload.get("labelled"),
     )
     return record, payload
 
 
-def execute_arm(df, gt: set, cfg, arm: str, model_dir: Path) -> dict:
+def execute_arm(df, gt: set, cfg, arm: str, model_dir: Path, labels: dict | None = None) -> dict:
     """Run one arm on one labelled frame and return its JSON-able result.
 
-    The only place an arm's pipeline runs: the ``arm`` child process calls it, and
-    so does any in-process caller."""
+    The only place an arm's pipeline runs: the ``arm`` child process calls it, and so does any
+    in-process caller. ``labels`` (``datasets.labelled_pairs``) adds the labelled-pairs
+    metric."""
     import time
 
     import goldenmatch
@@ -392,6 +438,7 @@ def execute_arm(df, gt: set, cfg, arm: str, model_dir: Path) -> dict:
         "report": (result.stats or {}).get("fs_link_thresholds") or {},
         "partition": [pairs, digest],
         "wall_seconds": round(time.perf_counter() - start, 1),
+        "labelled": labelled_summary(result.clusters, labels) if labels is not None else None,
     }
 
 
@@ -441,7 +488,11 @@ def arm_main(argv: list[str]) -> int:
         return 1
     df, gt = loaded
     cfg = GoldenMatchConfig.model_validate_json(args.config.read_text(encoding="utf-8"))
-    payload = execute_arm(df, gt, cfg, args.arm, args.model_dir)
+    from scripts.autoconfig_quality.datasets import labelled_pairs
+
+    payload = execute_arm(
+        df, gt, cfg, args.arm, args.model_dir, labels=labelled_pairs(args.dataset)
+    )
     args.out.write_text(json.dumps(payload), encoding="utf-8")
     return 0
 
@@ -492,6 +543,7 @@ def sweep_dataset(
     arm_timeout = _limit(None, ARM_TIMEOUT_ENV, ARM_TIMEOUT_S)
     # Held-out per-rule F1 stays out of CI logs, like it stays out of the gate view.
     holdout = corpus_of(name) == "holdout"
+    metric = gate_metric_of(name)
     records: dict[str, dict] = {}
     diagnostics: dict[str, dict | None] = {}
     models_saved: list[str] = []
@@ -527,7 +579,8 @@ def sweep_dataset(
                 mk: entry.get("cut_diagnostics") for mk, entry in sorted(payload["report"].items())
             }
     hashes_after_last = _model_hashes(model_dir)
-    baseline = records[BASELINE_ARM]["f1"]
+    baseline_f1 = records[BASELINE_ARM]["f1"]
+    baseline_gate = metric_value(records[BASELINE_ARM], metric)
     rules = [arm for arm in arms if arm in CUT_RULES]
     # Without both baselines there is nothing to compare a rule against; run() fails it.
     baseline_ok = not records["default"]["crashed"] and not records[BASELINE_ARM]["crashed"]
@@ -546,21 +599,29 @@ def sweep_dataset(
         "probabilistic_matchkeys": probabilistic_matchkeys,
         "arms": records,
         "cut_diagnostics": diagnostics,
+        "gate_metric": metric,
         "models_saved": models_saved,
         "model_complete": model_complete,
         "model_stable": model_stable,
         "reload_partition_match": (
             records["default"]["digest"] == records[BASELINE_ARM]["digest"] if baseline_ok else None
         ),
-        "model_reload_delta": (float(baseline - records["default"]["f1"]) if baseline_ok else None),
-        # A rule arm that was killed or crashed is worse than the baseline.
+        "model_reload_delta": (
+            float(baseline_f1 - records["default"]["f1"]) if baseline_ok else None
+        ),
+        # A rule arm that was killed or crashed is worse than the baseline. Magellan datasets
+        # compare on the labelled-pairs metric (gate_metric).
         "below_default": sorted(
             rule
             for rule in rules
             if baseline_ok
             and (
                 records[rule]["crashed"]
-                or (records[rule]["applied"] and records[rule]["f1"] < baseline - TOLERANCE)
+                or (
+                    records[rule]["applied"]
+                    and baseline_gate is not None
+                    and (metric_value(records[rule], metric) or 0.0) < baseline_gate - TOLERANCE
+                )
             )
         ),
         "crashed": {rule: records[rule]["crashed"] for rule in rules if records[rule]["crashed"]},
@@ -638,6 +699,10 @@ def run(argv: list[str]) -> int:
             status = record["arms"].get(arm, {}).get("crashed")
             if status:
                 failures.append(f"{name}: baseline arm {arm} {status}")
+        if record.get("gate_metric") == "labelled":
+            baseline_arm = record["arms"].get(BASELINE_ARM, {})
+            if not baseline_arm.get("crashed") and baseline_arm.get("labelled") is None:
+                failures.append(f"{name}: labelled metric missing on the baseline arm")
         if not record.get("model_complete"):
             failures.append(f"{name}: shared EM model not saved for every probabilistic matchkey")
         if not record.get("model_stable"):

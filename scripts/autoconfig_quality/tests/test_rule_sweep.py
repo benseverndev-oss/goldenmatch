@@ -420,6 +420,8 @@ def test_sweep_dataset_runs_each_arm_in_its_own_child_on_one_saved_model(tmp_pat
     assert out["reload_partition_match"] in (True, False)
     assert isinstance(out["wall_seconds"], float)
     assert out["corpus"] == "design"
+    assert out["gate_metric"] == "f1"
+    assert all(rec["labelled"] is None for rec in out["arms"].values())
 
 
 # ─── run() metadata and failure paths (I1 + I2 + I5) ──────────────────────────
@@ -455,6 +457,7 @@ def _record(
             "crashed": None,
             "peak_rss_mb": 10.0,
             "wall_seconds": 0.1,
+            "labelled": None,
         }
         for arm in S.ARMS
     }
@@ -465,6 +468,7 @@ def _record(
         "probabilistic_matchkeys": ["fs"],
         "arms": arms,
         "cut_diagnostics": {},
+        "gate_metric": "f1",
         "models_saved": ["fs.json"],
         "model_complete": model_complete,
         "model_stable": model_stable,
@@ -583,22 +587,30 @@ def _small_person(monkeypatch):
     monkeypatch.setattr(S, "resolve_loader", lambda name: lambda: gen_labeled(60, seed=7))
 
 
-def _fake_run_arm(crash: dict[str, str]):
-    """An arm runner that runs nothing: every arm applies at ``_SUMMARY``'s F1,
-    except the arms in ``crash``, which come back killed with that status."""
+def _fake_run_arm(crash: dict[str, str], labelled: dict[str, float] | None = None):
+    """An arm runner that runs nothing: every arm applies at ``_SUMMARY``'s F1, except the
+    arms in ``crash``, which come back killed with that status. ``labelled`` gives an arm a
+    labelled-pairs F1."""
 
     def fake(argv, out_path, arm, expected_matchkeys, **kwargs):
         if arm in crash:
             return S.killed_record(crash[arm], 1, 20.0, 0.1), None
         rule = None if arm in ("default", S.BASELINE_ARM) else arm
         report = {mk: _entry(rule, "pinned by link_cut_rule") for mk in expected_matchkeys}
+        lab = None
+        if labelled and arm in labelled:
+            value = labelled[arm]
+            lab = {"f1": value, "precision": value, "recall": value, "labelled_pairs": 4}
         rec = S.arm_record(arm, _SUMMARY, _stats(**report), (1, "d"), expected_matchkeys)
-        rec.update(crashed=None, peak_rss_mb=20.0, wall_seconds=0.1, process_seconds=0.2)
+        rec.update(
+            crashed=None, peak_rss_mb=20.0, wall_seconds=0.1, process_seconds=0.2, labelled=lab
+        )
         payload = {
             "summary": _SUMMARY,
             "report": report,
             "partition": [1, "d"],
             "wall_seconds": 0.1,
+            "labelled": lab,
         }
         return rec, payload
 
@@ -699,6 +711,84 @@ def test_arm_log_line_omits_f1_for_holdout_datasets(tmp_path, monkeypatch, capsy
 
     assert len(holdout) == len(arms) and not [ln for ln in holdout if "f1" in ln]
     assert len(design) == len(arms) and all("f1=0.9" in ln for ln in design)
+
+
+# ─── labelled-pairs metric (P4) ───────────────────────────────────────────────
+
+
+def test_labelled_summary_scores_only_labelled_pairs():
+    clusters = {1: {"members": [0, 1, 2]}, 2: {"members": [3]}, 3: {"members": [4, 5]}}
+    labels = {(0, 1): True, (0, 2): False, (3, 4): True, (4, 5): False}
+    # (0,1) match together: TP. (0,2) non-match together: FP. (3,4) match apart: FN.
+    # (4,5) non-match together: FP. The unlabelled (1,2) counts for nothing.
+    assert S.labelled_summary(clusters, labels) == {
+        "f1": 0.4,
+        "precision": 0.3333,
+        "recall": 0.5,
+        "labelled_pairs": 4,
+    }
+
+
+def test_execute_arm_adds_the_labelled_metric_only_when_labels_are_given(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import goldenmatch
+
+    clusters = {1: {"members": [0, 1]}, 2: {"members": [2]}}
+    monkeypatch.setattr(
+        goldenmatch, "dedupe_df", lambda df, config: SimpleNamespace(clusters=clusters, stats={})
+    )
+    plain = S.execute_arm(None, {(0, 1)}, _cfg(), "default_loaded", tmp_path)
+    labelled = S.execute_arm(
+        None, {(0, 1)}, _cfg(), "default_loaded", tmp_path, labels={(0, 1): True, (1, 2): False}
+    )
+    assert plain["labelled"] is None
+    assert labelled["labelled"] == {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "labelled_pairs": 2,
+    }
+    assert labelled["summary"] == plain["summary"]
+
+
+def test_gate_metric_is_labelled_for_magellan_datasets_only():
+    assert S.gate_metric_of("walmart_amazon") == "labelled"
+    assert S.gate_metric_of("fodors_zagats") == "labelled"
+    assert S.gate_metric_of("abt_buy") == "f1"
+    assert S.metric_value({"f1": 0.9, "labelled": {"f1": 0.7}}, "labelled") == 0.7
+    assert S.metric_value({"f1": 0.9, "labelled": None}, "labelled") is None
+    assert S.metric_value({"f1": 0.9, "labelled": {"f1": 0.7}}, "f1") == 0.9
+
+
+def test_sweep_dataset_gates_magellan_datasets_on_the_labelled_metric(tmp_path, monkeypatch):
+    _small_person(monkeypatch)
+    labelled = {"default": 0.8, "default_loaded": 0.8, "evidence_9": 0.7}
+    monkeypatch.setattr(S, "run_arm", _fake_run_arm({}, labelled=labelled))
+    arms = ("default", "default_loaded", "evidence_9")
+
+    magellan = S.sweep_dataset("walmart_amazon", tmp_path, arms=arms)
+    plain = S.sweep_dataset("person", tmp_path, arms=arms)
+
+    assert magellan["gate_metric"] == "labelled"
+    assert magellan["below_default"] == ["evidence_9"]
+    assert plain["gate_metric"] == "f1"
+    assert plain["below_default"] == []
+
+
+def test_run_reports_failure_when_the_labelled_metric_is_missing(tmp_path, monkeypatch):
+    _clear_cut_env(monkeypatch)
+
+    def fake(name, work_dir):
+        rec = _record("holdout", {})
+        rec["gate_metric"] = "labelled"
+        return rec
+
+    monkeypatch.setattr(S, "sweep_dataset", fake)
+    out = tmp_path / "card.json"
+    assert S.run(["--datasets", "walmart_amazon", "--out", str(out)]) == 1
+    card = json.loads(out.read_text())
+    assert "walmart_amazon: labelled metric missing on the baseline arm" in card["meta"]["failures"]
 
 
 # ─── best_rule / merge_cards / render_markdown / merge CLI ────────────────────

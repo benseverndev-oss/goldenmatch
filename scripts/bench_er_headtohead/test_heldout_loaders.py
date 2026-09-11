@@ -117,3 +117,49 @@ def test_design_synthetic_defaults_are_unchanged():
     assert params["seed"].default == 42
     assert params["corruption"].default == 1.0
     assert D._HELDOUT_SYNTH_SEED != params["seed"].default
+
+
+def _fake_magellan(root, subdir: str, *, valid: str = "") -> None:
+    base = root / "Magellan" / subdir
+    _write(base / "tableA.csv", "id,title\n0,apple ipod\n1,bose speaker\n")
+    _write(base / "tableB.csv", "id,title\n0,ipod apple 8gb\n1,sony tv\n")
+    _write(base / "train.csv", "ltable_id,rtable_id,label\n1,1,0\n")
+    _write(base / "valid.csv", "ltable_id,rtable_id,label\n" + valid)
+    _write(base / "test.csv", "ltable_id,rtable_id,label\n0,0,1\n")
+
+
+def test_magellan_subdirs_name_every_magellan_loader(tmp_path, monkeypatch):
+    monkeypatch.setattr(D, "DATASETS_DIR", tmp_path)
+    assert set(D.MAGELLAN_SUBDIRS) == {"walmart_amazon", "itunes_amazon", "fodors_zagats"}
+    for name, subdir in D.MAGELLAN_SUBDIRS.items():
+        _fake_magellan(tmp_path, subdir)
+        records, _truth = D.load_dataset(name)
+        assert records.num_rows == 4
+
+
+def test_magellan_labels_keep_every_labelled_pair_in_file_order(tmp_path, monkeypatch):
+    monkeypatch.setattr(D, "DATASETS_DIR", tmp_path)
+    _fake_magellan(tmp_path, "Walmart-Amazon", valid="0,1,0\n")
+    assert D.magellan_labels("Walmart-Amazon") == [
+        ("a:1", "b:1", False),
+        ("a:0", "b:1", False),
+        ("a:0", "b:0", True),
+    ]
+
+
+def test_labelled_pairs_maps_labels_to_frame_row_indices(tmp_path, monkeypatch):
+    from scripts.autoconfig_quality import datasets as Q
+
+    monkeypatch.setattr(D, "DATASETS_DIR", tmp_path)
+    _fake_magellan(tmp_path, "Walmart-Amazon", valid="0,0,0\n")
+    # Rows follow records order: a:0, a:1, b:0, b:1. (a:0, b:0) is labelled 0 in valid and 1
+    # in test, so it counts as a match, as the truth builder counts it.
+    assert Q.labelled_pairs("walmart_amazon") == {(1, 3): False, (0, 2): True}
+    assert Q.labelled_pairs("febrl3") is None
+
+
+def test_labelled_pairs_is_none_when_the_data_is_absent(tmp_path, monkeypatch):
+    from scripts.autoconfig_quality import datasets as Q
+
+    monkeypatch.setattr(D, "DATASETS_DIR", tmp_path)
+    assert Q.labelled_pairs("itunes_amazon") is None
