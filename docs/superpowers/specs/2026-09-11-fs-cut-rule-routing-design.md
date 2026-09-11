@@ -88,7 +88,7 @@ This lets the choice be reported, persisted, stamped by the controller when appr
 
 - Each row is a condition on diagnostics, the rule it picks, and a human-readable reason.
 - The first matching row wins.
-- The last row is the shipped default.
+- No matching row means the shipped default rule. `choose_cut_rule` returns None for that case instead of carrying a literal last row, because the default is set process-wide by `GOLDENMATCH_FS_LINEAR_CUT`.
 
 It is unit-testable without data and gated by the harness.
 
@@ -121,6 +121,8 @@ The router runs where the link cut is resolved. The valley-gated threshold refit
 1. **Measure.** For every dataset in the design and held-out sets, the harness records F1, precision and recall for each candidate rule (labelled), next to the diagnostics above (label-free).
 2. **Propose a row.** Pick a condition on diagnostics and the rule it selects, from the design-set matrix only. Row authors read only the design-set results. Held-out results are produced and stored separately, as a gate-only artifact, and are read only when a proposed row is gated.
 3. **Gate the row.** On every design dataset the routed rule must score at least `default − 0.01`; then the same on every held-out dataset. A row that fails either set is dropped, not tuned against the held-out set.
+   - On the DeepMatcher/Magellan datasets the metric is F1 over the labelled candidate pairs only. Their truth covers only labelled positives, so plain F1 counts an unlabelled true match as a false positive and favours high cuts.
+   - The held-out verdict is reported as PASS/FAIL plus how many held-out datasets the row fired on, with no dataset names, rules or scores.
 4. **Order the rows.** The first match wins, and the last row is the shipped default.
 
 Starting hypotheses from the current panel. They are candidates to test, not decisions:
@@ -151,6 +153,9 @@ A table row, and later the router default flip, is accepted only when **all** ho
 - **Design set:** never below the default, within 0.01.
 - **Held-out set:** never below the default, within 0.01.
 - **Existing gates:** `quality_gate`, `bench-suggest-quality` (gate) and `bench-quality-scale` (QIS) pass.
+  - P4 rows ship behind the default-off router, so these three gates measure the unchanged default by construction.
+  - Running them with the router on is a P5 criterion, checked before the default flips.
+- **Routed arm:** the matrix runs every dataset once more with the router on. Its partition must equal the partition of the arm that pins the rule the router chose. This checks that the router, running live, reads the same diagnostics the gate replayed.
 
 ## Error handling
 
@@ -179,7 +184,7 @@ All failures degrade to the shipped default and say why:
 | P1 | `fs_cut_rules.py`, `link_cut_rule`, resolver integration, reporting | router off; default rule unchanged |
 | P2 | training-sample histogram on `EMResult`, diagnostics assembly | router off |
 | P3 | held-out corpus and the per-rule harness block | measurement only |
-| P4 | table rows written from evidence, each gated | router behind `GOLDENMATCH_FS_CUT_ROUTER`, default off |
+| P4 | one link-cut resolver; table rows written from evidence, each gated on both sets plus a routed arm | router behind `GOLDENMATCH_FS_CUT_ROUTER`, default off |
 | P5 | router default on once the gate holds on both sets | env kept as a kill switch |
 
 - P1 to P3 are independently useful even if no row passes: pinnable rules and a per-rule measurement matrix.
