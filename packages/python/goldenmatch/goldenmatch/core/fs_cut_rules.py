@@ -71,7 +71,7 @@ def rule_bits(rule: str, envelope: Envelope, em_result: Any) -> float | None:
     if rule in _EVIDENCE_BITS:
         return _EVIDENCE_BITS[rule]
     if rule == "otsu":
-        return None  # needs EMResult.training_score_histogram (Tasks 5-6)
+        return otsu_bits(em_result, envelope)
     if rule not in CUT_RULES:
         raise ValueError(f"unknown link cut rule {rule!r}; expected one of {CUT_RULES}")
     lam = getattr(em_result, "proportion_matched", None)
@@ -88,3 +88,89 @@ def rule_bits(rule: str, envelope: Envelope, em_result: Any) -> float | None:
 def bits_to_normalized(bits: float, envelope: Envelope) -> float:
     """The linear-score cutoff equivalent to ``W >= bits``, clamped to [0, 1]."""
     return min(max((bits - envelope.lo) / (envelope.hi - envelope.lo), 0.0), 1.0)
+
+
+def otsu_bits(em_result: Any, envelope: Envelope) -> float | None:
+    """The Otsu calibrator's cut, in bits.
+
+    Splits ``EMResult.training_score_histogram`` exactly as ``_calibrate_link_threshold``
+    (GOLDENMATCH_FS_CALIBRATE_THRESHOLD) does, clamp and rounding included. The calibrator
+    applies its split ``t`` directly as the linear cutoff, so the bits are placed on the
+    scoring envelope: ``bits_to_normalized(otsu_bits(em, env), env)`` is ``t``.
+
+    None when the model carries no training histogram, or too little of one.
+    """
+    import numpy as np
+
+    from goldenmatch.core.probabilistic import (
+        _CALIBRATE_MAX,
+        _CALIBRATE_MIN,
+        _otsu_split_from_counts,
+    )
+
+    hist = getattr(em_result, "training_score_histogram", None)
+    if not hist:
+        return None
+    if sum(hist["counts"]) <= 50:
+        return None  # same minimum sample as _calibrate_link_threshold
+    t = _otsu_split_from_counts(hist["counts"])
+    if t is None:
+        return None
+    t = round(float(np.clip(t, _CALIBRATE_MIN, _CALIBRATE_MAX)), 4)
+    return envelope.lo + t * (envelope.hi - envelope.lo)
+
+
+@dataclass(frozen=True)
+class CutDiagnostics:
+    """What a link-cut router may read after EM. No labels, no scoring pass."""
+
+    proportion_matched: float
+    lo: float
+    hi: float
+    midpoint_bits: float
+    prior_bits: float
+    n_fields: int
+    has_negative_evidence: bool
+    field_weight_spans: dict[str, float]
+    #: Share of the training sample each rule would admit; None without a training histogram.
+    #: Bin resolution only (1/100 of the regular-field envelope), and the training sample is a
+    #: biased stand-in for the scored candidates -- see the spec's risks.
+    admitted_fraction: dict[str, float] | None
+
+
+def cut_diagnostics(mk: Any, em_result: Any) -> CutDiagnostics | None:
+    """Router inputs for ``mk`` from its trained model, or None without usable weights."""
+    envelope = weight_envelope(mk, em_result)
+    lam = getattr(em_result, "proportion_matched", None)
+    if envelope is None or lam is None:
+        return None
+    match_weights = em_result.match_weights
+    spans = {
+        f.field: float(max(w) - min(w))
+        for f in mk.fields
+        if (w := match_weights.get(f.field))
+    }
+    admitted = None
+    hist = getattr(em_result, "training_score_histogram", None)
+    if hist and sum(hist["counts"]) > 0 and hist["hi"] > hist["lo"]:
+        counts = hist["counts"]
+        total = float(sum(counts))
+        admitted = {}
+        for rule in CUT_RULES:
+            bits = rule_bits(rule, envelope, em_result)
+            if bits is None:
+                continue
+            t = min(max((bits - hist["lo"]) / (hist["hi"] - hist["lo"]), 0.0), 1.0)
+            start = min(math.ceil(t * len(counts)), len(counts))
+            admitted[rule] = sum(counts[start:]) / total
+    return CutDiagnostics(
+        proportion_matched=float(lam),
+        lo=envelope.lo,
+        hi=envelope.hi,
+        midpoint_bits=envelope.midpoint,
+        prior_bits=prior_bits(lam),
+        n_fields=len(mk.fields),
+        has_negative_evidence=bool(getattr(mk, "negative_evidence", None)),
+        field_weight_spans=spans,
+        admitted_fraction=admitted,
+    )

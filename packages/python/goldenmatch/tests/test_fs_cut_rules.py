@@ -123,3 +123,64 @@ def test_link_cut_rule_rejects_unknown_names():
             name="fs", type="probabilistic", link_cut_rule="median",
             fields=[MatchkeyField(field="zip", scorer="exact", levels=2)],
         )
+
+
+def test_otsu_splits_the_training_histogram_with_the_calibrator_clamp():
+    """KNOWN-POSITIVE for the clamp: two point masses make every split between them tie,
+    argmax takes the first (0.11), and the calibrator's 0.40 floor lifts it."""
+    from goldenmatch.core.fs_cut_rules import otsu_bits
+
+    counts = [0] * 100
+    counts[10], counts[80] = 500, 200
+    em = _em(0.01, training_score_histogram={"lo": -10.0, "hi": 14.0, "counts": counts})
+    env = weight_envelope(_mk(), em)
+    bits = otsu_bits(em, env)
+    assert math.isclose(bits_to_normalized(bits, env), 0.40, abs_tol=1e-12)
+    assert rule_bits("otsu", env, em) == bits
+
+
+def test_otsu_needs_more_than_50_training_pairs():
+    """Same floor as _calibrate_link_threshold: 50 pairs is too few to split."""
+    from goldenmatch.core.fs_cut_rules import otsu_bits
+
+    env = Envelope(lo=-10.0, hi=14.0)
+    few = [0] * 100
+    few[10], few[80] = 25, 25
+    assert otsu_bits(
+        _em(0.01, training_score_histogram={"lo": -10.0, "hi": 14.0, "counts": few}), env
+    ) is None
+    enough = list(few)
+    enough[80] = 26
+    assert otsu_bits(
+        _em(0.01, training_score_histogram={"lo": -10.0, "hi": 14.0, "counts": enough}), env
+    ) is not None
+
+
+def test_cut_diagnostics_without_a_histogram():
+    from goldenmatch.core.fs_cut_rules import cut_diagnostics
+
+    d = cut_diagnostics(_mk(), _em(0.01))
+    assert (d.lo, d.hi, d.midpoint_bits) == (-10.0, 14.0, 2.0)
+    assert math.isclose(d.prior_bits, math.log2(99.0), rel_tol=1e-12)
+    assert d.n_fields == 2 and d.has_negative_evidence is False
+    assert d.field_weight_spans == {"name": 16.0, "zip": 8.0}
+    assert d.admitted_fraction is None
+
+
+def test_cut_diagnostics_admitted_fraction():
+    """Uniform counts over [-10, 14] bits: a cut at c bits admits the bins from
+    ceil(100 * (c + 10) / 24) up."""
+    from goldenmatch.core.fs_cut_rules import cut_diagnostics
+
+    em = _em(0.01, training_score_histogram={"lo": -10.0, "hi": 14.0, "counts": [10] * 100})
+    adm = cut_diagnostics(_mk(), em).admitted_fraction
+    assert math.isclose(adm["midpoint"], 0.50, abs_tol=1e-12)
+    assert math.isclose(adm["evidence_3"], 0.45, abs_tol=1e-12)
+    assert math.isclose(adm["evidence_12"], 0.08, abs_tol=1e-12)
+    assert "otsu" in adm
+
+
+def test_cut_diagnostics_is_none_without_weights():
+    from goldenmatch.core.fs_cut_rules import cut_diagnostics
+
+    assert cut_diagnostics(_mk(), SimpleNamespace(proportion_matched=0.01)) is None

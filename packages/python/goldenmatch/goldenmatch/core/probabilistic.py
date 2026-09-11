@@ -3820,15 +3820,26 @@ def _fs_unresolved_cut_reason(mk: MatchkeyConfig, em_result: EMResult) -> str | 
 
 
 def link_cut_report(mk: MatchkeyConfig, em_result: EMResult) -> dict:
-    """``cut_rule`` / ``cut_reason`` for the per-matchkey cutoff report.
+    """``cut_rule`` / ``cut_reason`` / ``cut_diagnostics`` for the per-matchkey cutoff report.
 
-    - Both are None when a configured or calibrated cutoff decided first, in posterior mode,
-      or when no rule was asked for.
+    - ``cut_rule`` and ``cut_reason`` are None when a configured or calibrated cutoff decided
+      first, in posterior mode, or when no rule was asked for.
     - ``cut_reason`` alone is set when a rule was asked for but could not place the cut.
+    - ``cut_diagnostics`` is reported whenever the model has usable weights, so the
+      measurement harness can read it even when no rule applied.
 
     Mirrors the precedence in :func:`_fs_link_threshold` / :func:`resolve_thresholds`.
     """
-    report = {"cut_rule": None, "cut_reason": None}
+    from dataclasses import asdict
+
+    from goldenmatch.core.fs_cut_rules import cut_diagnostics
+
+    diagnostics = cut_diagnostics(mk, em_result)
+    report = {
+        "cut_rule": None,
+        "cut_reason": None,
+        "cut_diagnostics": asdict(diagnostics) if diagnostics is not None else None,
+    }
     if mk.link_threshold is not None:
         return report
     if getattr(em_result, "calibrated_link_threshold", None) is not None:
