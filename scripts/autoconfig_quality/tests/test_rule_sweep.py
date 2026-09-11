@@ -148,33 +148,135 @@ def test_run_refuses_when_a_cut_env_var_is_set(tmp_path, monkeypatch):
     assert not out.exists()
 
 
-def test_sweep_frame_runs_every_arm_on_one_saved_model(tmp_path, monkeypatch):
+# ─── watchdog: one capped child process per arm ───────────────────────────────
+
+
+def _alive(pid: int) -> bool:
+    import psutil
+
+    try:
+        return psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return False
+
+
+def test_run_arm_classifies_a_child_that_exits_non_zero_as_crashed(tmp_path):
+    import sys
+
+    argv = [sys.executable, "-c", "import os; os._exit(137)"]
+    rec, payload = S.run_arm(argv, tmp_path / "arm.json", "prior", ["fs"])
+    assert rec["crashed"] == "crashed"
+    assert rec["returncode"] == 137
+    assert rec["f1"] is None
+    assert rec["voided"] is False
+    assert rec["applied"] is False
+    assert payload is None
+
+
+def test_run_arm_kills_a_child_over_the_memory_cap(tmp_path):
+    import sys
+    import time
+
+    pid_file = tmp_path / "pid"
+    code = (
+        "import os, pathlib, time; "
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid())); "
+        "b = bytearray(400 * 2**20); time.sleep(30)"
+    )
+    start = time.perf_counter()
+    rec, _ = S.run_arm(
+        [sys.executable, "-c", code], tmp_path / "arm.json", "prior", ["fs"], memory_cap_mb=150
+    )
+    assert rec["crashed"] == "memory_cap"
+    assert time.perf_counter() - start < 20, "the watchdog must kill before the child's sleep ends"
+    assert rec["peak_rss_mb"] > 150
+    assert not _alive(int(pid_file.read_text()))
+
+
+def test_run_arm_kills_a_child_past_the_timeout(tmp_path):
+    import sys
+    import time
+
+    start = time.perf_counter()
+    rec, _ = S.run_arm(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        tmp_path / "arm.json",
+        "prior",
+        ["fs"],
+        timeout_s=1,
+    )
+    assert rec["crashed"] == "timeout"
+    assert rec["f1"] is None
+    assert time.perf_counter() - start < 20
+
+
+def test_execute_arm_applies_every_rule_on_one_saved_model(tmp_path, monkeypatch):
+    """Every arm through the one function the child process runs, in-process, on a
+    small frame: no arm voided, every computable rule applied, one saved model."""
     for var in S.CUT_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
+
     from scripts.autoconfig_quality.anchors import gen_labeled
 
     df, gt = gen_labeled(n_entities=60, seed=7)
-    out = S.sweep_frame(df, gt, tmp_path)
+    cfg = auto_configure_probabilistic_df(df)
+    matchkeys = sorted(mk.name for mk in cfg.get_matchkeys() if mk.type == "probabilistic")
+    assert matchkeys, "must auto-configure at least one probabilistic matchkey"
 
-    assert set(out["arms"]) == set(S.ARMS)
-    assert not [a for a, rec in out["arms"].items() if rec["voided"]]
-    not_applied = [r for r in CUT_RULES if r != "otsu" and not out["arms"][r]["applied"]]
+    records, payloads = {}, {}
+    for arm in S.ARMS:
+        payload = json.loads(json.dumps(S.execute_arm(df, gt, cfg, arm, tmp_path)))
+        payloads[arm] = payload
+        records[arm] = S.arm_record(
+            arm,
+            payload["summary"],
+            {"fs_link_thresholds": payload["report"]},
+            tuple(payload["partition"]),
+            matchkeys,
+        )
+        assert payload["wall_seconds"] >= 0.0
+
+    assert not [a for a, rec in records.items() if rec["voided"]]
+    not_applied = [r for r in CUT_RULES if r != "otsu" and not records[r]["applied"]]
     assert not not_applied, not_applied
-    assert out["models_saved"], "the default arm must save the EM model the other arms load"
-    assert all(d and "midpoint_bits" in d for d in out["cut_diagnostics"].values())
-    assert set(out["below_default"]) <= set(CUT_RULES)
-    assert isinstance(out["model_reload_delta"], float)
+    assert sorted(p.name for p in tmp_path.glob("*.json")) == sorted(f"{n}.json" for n in matchkeys)
+    report = payloads[S.BASELINE_ARM]["report"]
+    assert all(
+        e["cut_diagnostics"] and "midpoint_bits" in e["cut_diagnostics"] for e in report.values()
+    )
+
+
+def test_sweep_dataset_runs_each_arm_in_its_own_child_on_one_saved_model(tmp_path, monkeypatch):
+    """End-to-end isolation: real child processes, one config file, one EM model."""
+    for var in S.CUT_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    arms = ("default", "default_loaded", "evidence_9")
+    out = S.sweep_dataset("person", tmp_path, arms=arms)
+
+    assert (tmp_path / "person" / "config.json").is_file()
+    assert set(out["arms"]) == set(arms)
+    assert all(rec["crashed"] is None for rec in out["arms"].values())
+    assert all(rec["peak_rss_mb"] > 0 for rec in out["arms"].values())
+    assert not [a for a, rec in out["arms"].items() if rec["voided"]]
+    assert out["arms"]["evidence_9"]["applied"] is True
+    assert out["crashed"] == {}
+    assert set(out["below_default"]) <= {"evidence_9"}
     # I1: one shared EM model per dataset, enforced (not just recorded).
     assert out["probabilistic_matchkeys"], "must record the auto-configured matchkey names"
+    assert out["models_saved"], "the default arm must save the EM model the other arms load"
     assert sorted(out["models_saved"]) == sorted(
         f"{n}.json" for n in out["probabilistic_matchkeys"]
     )
     assert out["model_complete"] is True
     assert out["model_stable"] is True
+    assert all(d and "midpoint_bits" in d for d in out["cut_diagnostics"].values())
+    assert isinstance(out["model_reload_delta"], float)
     assert out["reload_partition_match"] in (True, False)
     assert isinstance(out["wall_seconds"], float)
-    assert out["wall_seconds"] >= 0.0
+    assert out["corpus"] == "design"
 
 
 # ─── run() metadata and failure paths (I1 + I2 + I5) ──────────────────────────
@@ -207,6 +309,9 @@ def _record(
             "matchkeys": {},
             "applied": applied.get(arm, True),
             "voided": voided.get(arm, False),
+            "crashed": None,
+            "peak_rss_mb": 10.0,
+            "wall_seconds": 0.1,
         }
         for arm in S.ARMS
     }
@@ -223,6 +328,7 @@ def _record(
         "reload_partition_match": reload_partition_match,
         "model_reload_delta": 0.0,
         "below_default": ["midpoint"],
+        "crashed": {},
         "wall_seconds": 1.0,
     }
 
@@ -322,6 +428,83 @@ def test_run_returns_zero_with_no_failures_for_a_clean_fake_record(tmp_path, mon
     assert card["meta"]["failures"] == []
 
 
+# ─── crashed arms: a rule crash is a result, a baseline crash is a failure ────
+
+
+def _small_person(monkeypatch):
+    """``person`` resolves to a 60-entity frame, so the parent's auto-configure is fast."""
+    from scripts.autoconfig_quality.anchors import gen_labeled
+
+    monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    monkeypatch.setattr(S, "resolve_loader", lambda name: lambda: gen_labeled(60, seed=7))
+
+
+def _fake_run_arm(crash: dict[str, str]):
+    """An arm runner that runs nothing: every arm applies at ``_SUMMARY``'s F1,
+    except the arms in ``crash``, which come back killed with that status."""
+
+    def fake(argv, out_path, arm, expected_matchkeys, **kwargs):
+        if arm in crash:
+            return S.killed_record(crash[arm], 1, 20.0, 0.1), None
+        rule = None if arm in ("default", S.BASELINE_ARM) else arm
+        report = {mk: _entry(rule, "pinned by link_cut_rule") for mk in expected_matchkeys}
+        rec = S.arm_record(arm, _SUMMARY, _stats(**report), (1, "d"), expected_matchkeys)
+        rec.update(crashed=None, peak_rss_mb=20.0, wall_seconds=0.1)
+        payload = {
+            "summary": _SUMMARY,
+            "report": report,
+            "partition": [1, "d"],
+            "wall_seconds": 0.1,
+        }
+        return rec, payload
+
+    return fake
+
+
+def _cells(md: str, name: str) -> list[str]:
+    row = next(line for line in md.splitlines() if line.startswith(f"| {name} |"))
+    return [cell.strip() for cell in row.strip().strip("|").split("|")]
+
+
+def test_a_crashed_rule_arm_counts_below_default_and_is_reported(tmp_path, monkeypatch):
+    _small_person(monkeypatch)
+    monkeypatch.setattr(S, "run_arm", _fake_run_arm({"prior": "memory_cap"}))
+    rec = S.sweep_dataset("person", tmp_path)
+
+    assert rec["arms"]["prior"]["crashed"] == "memory_cap"
+    assert rec["crashed"] == {"prior": "memory_cap"}
+    assert rec["below_default"] == ["prior"]
+    assert isinstance(rec["model_reload_delta"], float)
+    assert S.best_rule(rec)[0] not in ("prior", S.BASELINE_ARM)
+
+    design = S.render_markdown(S.merge_cards([_card("abc", person=rec)]))
+    cells = _cells(design, "person")
+    assert cells[7] == "prior:memory_cap"
+    assert "prior" not in cells[6], "a crashed arm is crashed, not 'not applied'"
+
+    holdout_card = S.merge_cards([_card("abc", abt_buy={**rec, "corpus": "holdout"})])
+    gate = S.render_markdown({"meta": holdout_card["meta"], "datasets": {}}, holdout_card)
+    assert "| abt_buy | 0.9000 | 1 | 0 | 1 |" in gate.splitlines()
+    assert "prior" not in gate.split("### Held-out")[1]
+
+
+def test_a_crashed_baseline_arm_fails_the_dataset(tmp_path, monkeypatch):
+    _clear_cut_env(monkeypatch)
+    _small_person(monkeypatch)
+    monkeypatch.setattr(S, "run_arm", _fake_run_arm({"default_loaded": "crashed"}))
+    out = tmp_path / "card.json"
+    assert S.run(["--datasets", "person", "--out", str(out)]) == 1
+
+    card = json.loads(out.read_text())
+    assert "person: baseline arm default_loaded crashed" in card["meta"]["failures"]
+    rec = card["datasets"]["person"]
+    assert rec["below_default"] == []
+    assert rec["model_reload_delta"] is None
+    assert rec["reload_partition_match"] is None
+    # The matrix still renders a dataset whose baseline has no F1.
+    assert _cells(S.render_markdown(card), "person")[1] == "crashed"
+
+
 # ─── best_rule / merge_cards / render_markdown / merge CLI ────────────────────
 
 
@@ -394,8 +577,11 @@ def test_render_markdown_design_table_then_holdout_gate_view():
     assert "### Design" in md
     assert "### Held-out (gate view)" in md
     lines = md.splitlines()
-    assert "| febrl3 | 0.9000 | prior_mid | 0.9500 | +0.0500 | midpoint | none | same |" in lines
-    assert "| abt_buy | 0.8000 | 1 | 0 |" in lines
+    assert (
+        "| febrl3 | 0.9000 | prior_mid | 0.9500 | +0.0500 | midpoint | none | none | same |"
+        in lines
+    )
+    assert "| abt_buy | 0.8000 | 1 | 0 | 0 |" in lines
     # gate view is counts only: no rule names, no per-rule F1.
     assert "evidence_12" not in md.split("### Held-out")[1]
 
@@ -436,10 +622,8 @@ def test_render_markdown_missing_rows_land_in_the_matching_corpus_table():
     )
     design_card, holdout_card = S._split_by_corpus(full)
     md = S.render_markdown(design_card, holdout_card)
-    assert (
-        "| dblp_acm | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING |" in md
-    )
-    assert "| walmart_amazon | MISSING | MISSING | MISSING |" in md
+    assert "| dblp_acm |" + " MISSING |" * 8 in md
+    assert "| walmart_amazon | MISSING | MISSING | MISSING | MISSING |" in md
 
 
 def test_render_markdown_renders_a_failures_section():

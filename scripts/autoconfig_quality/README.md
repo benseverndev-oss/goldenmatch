@@ -97,6 +97,14 @@ run, so a leaked `GOLDENMATCH_FS_EVIDENCE_CUT` cannot quietly turn nine arms int
 nine copies of the default. The sweep also refuses to start while any cut-moving
 env var is set.
 
+Each arm runs in its own child process, reading one shared config file, under a
+memory cap (`GOLDENMATCH_CUT_RULES_ARM_MEM_MB`, default 12000) and a timeout
+(`GOLDENMATCH_CUT_RULES_ARM_TIMEOUT_S`, default 3600). A rule arm that is killed
+or crashes is recorded (`crashed`: `memory_cap`, `timeout` or `crashed`, with its
+peak RSS) and counts as below default, since blowing up is worse than the
+baseline; the rest of the dataset's arms still run. A crashed `default` or
+`default_loaded` arm leaves no baseline, so it fails the dataset.
+
 ```bash
 python -m scripts.autoconfig_quality.rule_sweep --datasets person --out person.json
 python -m scripts.autoconfig_quality.rule_sweep merge a.json b.json --out m.json --summary-md m.md
