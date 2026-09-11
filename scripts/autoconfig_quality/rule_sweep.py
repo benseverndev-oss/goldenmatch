@@ -1,4 +1,4 @@
-"""Per-rule link-cut matrix (spec 2026-09-11-fs-cut-rule-routing-design, P3).
+"""Per-rule link-cut matrix (spec 2026-09-11-fs-cut-rule-routing-design, P3; routed arm and labelled metric P4).
 
 For one dataset: auto-configure the probabilistic config once, then run the full
 pipeline once per arm, each arm in its own child process under a memory cap and a
