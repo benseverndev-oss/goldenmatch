@@ -288,3 +288,95 @@ def test_link_cut_report_carries_diagnostics(monkeypatch):
     configured = link_cut_report(_mk(link_threshold=0.4), _em())
     assert configured["cut_rule"] is None
     assert configured["cut_diagnostics"]["midpoint_bits"] == 2.0
+
+
+# ─── one resolver (P4) ────────────────────────────────────────────────────────
+
+
+def test_the_four_callers_have_no_precedence_of_their_own(monkeypatch):
+    """P4: `_fs_link_threshold`, `resolve_thresholds`, `link_threshold_source` and
+    `link_cut_report` all read `resolve_link_cut`. Replacing it must move every one of them;
+    a caller that kept its own copy of the precedence would ignore the stub."""
+    import goldenmatch.core.probabilistic as P
+
+    _clear_cut_env(monkeypatch)
+    stub = P.LinkCut(
+        link=0.123, source=P.LINK_THRESHOLD_CONFIGURED, rule="evidence_5", reason="stub"
+    )
+    monkeypatch.setattr(P, "resolve_link_cut", lambda mk, em_result, calibrated: stub)
+    mk, em = _mk(), _em()
+    assert P._fs_link_threshold(mk, em, calibrated=False) == 0.123
+    assert P.resolve_thresholds(mk, em)[0] == 0.123
+    assert P.link_threshold_source(mk, em) == P.LINK_THRESHOLD_CONFIGURED
+    report = P.link_cut_report(mk, em)
+    assert (report["cut_rule"], report["cut_reason"]) == ("evidence_5", "stub")
+
+
+#: case -> (link, or None to skip the check; source; cut_rule; cut_reason). Pinned from the
+#: pre-P4 behaviour, so the consolidation cannot move a cutoff or a report.
+_EXPECTED_CUT = {
+    "configured": (0.42, LINK_THRESHOLD_CONFIGURED, None, None),
+    "configured_pinned": (
+        0.42, LINK_THRESHOLD_CONFIGURED, None,
+        "link_cut_rule=evidence_9 not applied: link_threshold is set",
+    ),
+    "calibrated": (0.61, LINK_THRESHOLD_CALIBRATED, None, None),
+    "calibrated_pinned": (
+        0.61, LINK_THRESHOLD_CALIBRATED, None,
+        "link_cut_rule=evidence_9 not applied: calibrated cutoff decided first",
+    ),
+    "pinned": (_norm(9.0), LINK_THRESHOLD_EVIDENCE_RULE, "evidence_9", "pinned by link_cut_rule"),
+    "pinned_unavailable": (
+        _norm(math.log2(99.0)), LINK_THRESHOLD_EVIDENCE_RULE, "prior_mid",
+        "otsu unavailable: needs a training histogram of more than 50 pairs; default rule",
+    ),
+    "default": (_norm(math.log2(99.0)), LINK_THRESHOLD_EVIDENCE_RULE, "prior_mid", "default rule"),
+    "fallback": (0.50, LINK_THRESHOLD_FALLBACK, None, None),
+    "posterior": (None, LINK_THRESHOLD_FALLBACK, None, None),
+    "posterior_pinned": (
+        None, LINK_THRESHOLD_FALLBACK, None,
+        "link_cut_rule=evidence_9 not applied: posterior scoring",
+    ),
+}
+
+
+def _resolver_case(monkeypatch, case: str):
+    _clear_cut_env(monkeypatch)
+    if case == "configured":
+        return _mk(link_threshold=0.42), _em()
+    if case == "configured_pinned":
+        return _mk(link_cut_rule="evidence_9", link_threshold=0.42), _em()
+    if case == "calibrated":
+        return _mk(), _em(calibrated=0.61)
+    if case == "calibrated_pinned":
+        return _mk(link_cut_rule="evidence_9"), _em(calibrated=0.61)
+    if case == "pinned":
+        return _mk(link_cut_rule="evidence_9"), _em()
+    if case == "pinned_unavailable":
+        return _mk(link_cut_rule="otsu"), _em()  # no training histogram -> the default rule
+    if case == "default":
+        return _mk(), _em()
+    if case == "fallback":
+        monkeypatch.setenv("GOLDENMATCH_FS_LINEAR_CUT", "off")
+        return _mk(), _em()
+    monkeypatch.setenv("GOLDENMATCH_FS_CALIBRATED", "posterior")
+    return (_mk(link_cut_rule="evidence_9") if case == "posterior_pinned" else _mk()), _em()
+
+
+@pytest.mark.parametrize("case", sorted(_EXPECTED_CUT))
+def test_resolve_link_cut_is_what_every_caller_applies_and_reports(monkeypatch, case):
+    from goldenmatch.core.probabilistic import link_cut_report, resolve_link_cut
+
+    mk, em = _resolver_case(monkeypatch, case)
+    link, source, rule, reason = _EXPECTED_CUT[case]
+    posterior = _fs_calibration_mode() == "posterior"
+    cut = resolve_link_cut(mk, em, calibrated=posterior)
+
+    assert (cut.source, cut.rule, cut.reason) == (source, rule, reason)
+    if link is not None:
+        assert math.isclose(cut.link, link, rel_tol=1e-12)
+    assert _fs_link_threshold(mk, em, calibrated=posterior) == cut.link
+    assert resolve_thresholds(mk, em)[0] == float(cut.link)
+    assert link_threshold_source(mk, em) == source
+    report = link_cut_report(mk, em)
+    assert (report["cut_rule"], report["cut_reason"]) == (rule, reason)
