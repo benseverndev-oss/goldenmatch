@@ -346,8 +346,10 @@ class TestRequirePositiveEvidence:
         assert (2, 3) in keys      # positive pair emitted
 
     def test_explicit_off_emits_net_zero_pair(self, monkeypatch):
-        # =0 restores the legacy emit-at-neutral behavior.
+        # =0 restores the legacy emit-at-neutral behavior. The net-zero pair sits exactly
+        # at the fixed 0.50 midpoint, so pin the midpoint cut to isolate this guard.
         monkeypatch.setenv("GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE", "0")
+        monkeypatch.setenv("GOLDENMATCH_FS_LINEAR_CUT", "off")
         pairs = score_probabilistic_vectorized(self._df(), self._mk(), self._em())
         keys = {(min(a, b), max(a, b)) for a, b, _ in pairs}
         assert (0, 1) in keys  # net-zero pair emitted (legacy)

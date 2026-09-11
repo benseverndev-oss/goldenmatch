@@ -69,7 +69,9 @@ def test_calibrate_too_few_pairs_returns_none():
     assert _calibrate_link_threshold(comp, _mk(), mw, p_match=0.15) is None
 
 
-def test_link_threshold_off_uses_fixed_default():
+def test_link_threshold_off_uses_fixed_default(monkeypatch):
+    # With calibration off AND the evidence-bit rule off, the fixed default applies.
+    monkeypatch.setenv("GOLDENMATCH_FS_LINEAR_CUT", "off")
     em = EMResult(m_probs={}, u_probs={}, match_weights={"a": [-1.0, 2.0], "b": [-1.0, 2.0]},
                   converged=True, iterations=1, proportion_matched=0.13)
     assert _fs_link_threshold(_mk(), em, False) == 0.50  # fixed default

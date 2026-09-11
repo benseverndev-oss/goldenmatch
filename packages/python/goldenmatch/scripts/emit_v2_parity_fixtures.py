@@ -172,6 +172,10 @@ def _run_probabilistic() -> dict[str, Any]:
     # probabilistic.parity.test.ts. Pin it OFF so the committed fixture is the
     # unfiltered math both surfaces share.
     os.environ["GOLDENMATCH_FS_REQUIRE_POSITIVE_EVIDENCE"] = "0"
+    # Same reason for the evidence-bit link cutoff (GOLDENMATCH_FS_LINEAR_CUT, default
+    # prior_mid): a Python-runtime rule the TS port does not implement, which applies the
+    # fixed 0.50 midpoint cut. Pin it off so the fixture stays the math both surfaces share.
+    os.environ["GOLDENMATCH_FS_LINEAR_CUT"] = "off"
 
     # --- discrete EM, 2-level ---
     rows2 = _prob_rows_small()

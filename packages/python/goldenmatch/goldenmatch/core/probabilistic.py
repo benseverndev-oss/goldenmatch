@@ -1112,6 +1112,61 @@ def _sample_pairs(
     return list(pairs)
 
 
+#: Ceiling on the FS ``u`` random-pair budget; reached at the default EM sample.
+_FS_U_PAIRS_DEFAULT = 50_000
+#: Random pairs drawn for ``u`` per pair of the caller's EM sample budget.
+_FS_U_PAIRS_PER_SAMPLE_PAIR = 5
+
+
+def _fs_u_random_pairs(n_sample_pairs: int) -> int:
+    """Random-pair budget for the ``u`` estimate: ``min(5 * n_sample_pairs, 50_000)``,
+    i.e. **50,000 at the default ``n_sample_pairs=10000``**. Env ``GOLDENMATCH_FS_U_PAIRS``
+    sets it outright (``0``, negative or non-integer = this rule).
+
+    It scales with ``n_sample_pairs`` rather than being a flat 50,000 because that argument
+    is the caller's one sampling-cost knob, and #1803 bounds the training row lookup by it:
+    a caller asking for a 20-pair sample must not silently pay for 50,000.
+
+    Applies where u has its own sample: blocked ``train_em`` (the pipeline path), counted
+    EM, and label-anchored m estimation. ``train_em`` WITHOUT blocks trains m on the random
+    pairs too, so it keeps ``min(n_sample_pairs, 5000)`` for both -- a u sample different
+    from EM's training rows flipped a tiny unblocked fixture's model outright.
+
+    ``u`` is a level's frequency among random, overwhelmingly non-matching pairs. The
+    budget used to be ``min(n_sample_pairs, 5000)``. A level that random pairs almost never
+    reach -- exact title or author agreement on bibliographic data -- counts 0 in 5,000
+    pairs, so its ``u`` fell to the 1e-6 smoothing floor and its agreement weight exploded
+    past the exact level's (dblp_acm: title/authors ~+25-28 bits, recall 0.266). Splink
+    samples 1,000,000 random pairs by default; GoldenMatch's Spark EM uses
+    ``u_max_pairs=1_000_000``.
+
+    MEASURED (fs-lever-gate full panel, 5,000 vs 50,000, default cutoff plus evidence cuts
+    3/5/9/12; runs 34547728440, 34547824612, 34547826392, 34547828074, 34547829753), best
+    F1 per dataset over the cutoffs: dblp_acm 0.8613 -> 0.9077, dblp_scholar 0.4213 ->
+    0.5050, febrl4 +0.0004, historical_50k -0.0047, the other six unchanged. At the default
+    linear cutoff dblp_acm goes 0.3758 -> 0.8058; ncvr_synthetic 0.9976 -> 0.9743 there, but
+    ties at its best cutoff (0.9986 at evidence cut 9 in both arms), so that loss is where
+    the min-max 0.5 cut lands, not the weights. 200,000 pairs went further on dblp_acm
+    (0.9235) but cost historical_50k 0.0068; 1,000,000 was no better and ~70 s slower per
+    dataset, because the sample is scored pair by pair.
+
+    ``GOLDENMATCH_FS_U_PAIRS=5000`` restores the previous budget for the default
+    ``train_em`` call. ``0`` is the default rather than a tiny sample because ``0`` is the
+    lever gate's OFF arm -- read as a 10-pair sample it once turned the gate's baseline into
+    a broken model.
+    """
+    raw = os.environ.get("GOLDENMATCH_FS_U_PAIRS", "").strip()
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError:
+            logger.warning("GOLDENMATCH_FS_U_PAIRS=%r is not an integer; using the default", raw)
+        else:
+            if value > 0:
+                return max(10, value)
+    return min(_FS_U_PAIRS_PER_SAMPLE_PAIR * max(int(n_sample_pairs), 1), _FS_U_PAIRS_DEFAULT)
+
+
 def _record_concat_value(row: dict, columns, column_weights) -> str:
     """Concatenate a row's ``record_embedding`` columns into one string.
 
@@ -2345,7 +2400,7 @@ def train_em_counted(
 
     # u from RANDOM pairs, exactly as train_em estimates it -- the counted path
     # changes how m is estimated, not what u means.
-    random_pairs = _sample_pairs(df, min(10_000, 5000 * len(mk.fields)), seed)
+    random_pairs = _sample_pairs(df, _fs_u_random_pairs(n_pairs), seed)
     if len(random_pairs) < 10:
         return _fallback_result(mk)
     lookup = _row_lookup_for_pairs(df, cols, [random_pairs])
@@ -2499,9 +2554,12 @@ def train_em(
     # ── Step 1: Estimate u from RANDOM pairs (Splink approach) ──
     # Random pairs are overwhelmingly non-matches, so the observed
     # level distribution approximates u directly. No EM needed for u.
+    # Blocked training -- the pipeline path -- estimates u from the larger budget. With no
+    # blocks, m ALSO trains on these pairs (see _training_pair_conditioning), so that path
+    # keeps its historical sample for both and stays byte-identical.
     random_pairs = _sample_pairs(
         df,
-        min(n_sample_pairs, 5000),
+        _fs_u_random_pairs(n_sample_pairs) if blocks else min(n_sample_pairs, 5000),
         seed,
         target_ids=target_ids,
     )
@@ -2984,7 +3042,7 @@ def estimate_m_from_labels(
         )
 
     # ── u from RANDOM pairs (mirrors train_em Step 1) ──
-    random_pairs = _sample_pairs(df, min(n_sample_pairs, 5000), seed)
+    random_pairs = _sample_pairs(df, _fs_u_random_pairs(n_sample_pairs), seed)
     # Row dicts for ONLY the labeled + sampled ids (#1803 item 4).
     row_lookup = _row_lookup_for_pairs(df, cols, [label_pairs, random_pairs])
     u_probs: dict[str, list[float]] = {}
@@ -3678,10 +3736,15 @@ def resolve_thresholds(
     computed_link, computed_review = compute_thresholds(em_result)
     # Precedence: explicit user config > EM-calibrated cutoff > fixed default.
     calibrated = getattr(em_result, "calibrated_link_threshold", None)
+    rule_cut = _fs_linear_rule_link_threshold(
+        mk, em_result, _fs_calibration_mode() == "posterior"
+    )
     if mk.link_threshold is not None:
         link = float(mk.link_threshold)
     elif calibrated is not None:
         link = float(calibrated)
+    elif rule_cut is not None:
+        link = float(rule_cut)
     else:
         link = computed_link
     review = (
@@ -3696,6 +3759,9 @@ def resolve_thresholds(
 LINK_THRESHOLD_CONFIGURED = "configured"
 LINK_THRESHOLD_CALIBRATED = "calibrated"
 LINK_THRESHOLD_FALLBACK = "fallback"
+#: The linear cutoff came from the ``GOLDENMATCH_FS_LINEAR_CUT`` evidence rule. Chosen from
+#: the trained model, so it is neither warned about as a fallback nor stamped as calibrated.
+LINK_THRESHOLD_EVIDENCE_RULE = "evidence_rule"
 
 
 def link_threshold_source(mk: MatchkeyConfig, em_result: EMResult) -> str:
@@ -3703,7 +3769,8 @@ def link_threshold_source(mk: MatchkeyConfig, em_result: EMResult) -> str:
 
     Mirrors -- and must keep mirroring -- the precedence in `resolve_thresholds`
     and `_fs_link_threshold`: explicit `mk.link_threshold`, then the
-    EM-calibrated per-dataset cutoff, then the fixed default. Derived here
+    EM-calibrated per-dataset cutoff, then the ``GOLDENMATCH_FS_LINEAR_CUT`` evidence
+    rule (default ``prior_mid``), then the fixed default. Derived here
     rather than re-inferred at the reporting site so the two cannot drift; a
     reporting layer that disagrees with the resolver about where the number
     came from is worse than no report at all.
@@ -3717,6 +3784,10 @@ def link_threshold_source(mk: MatchkeyConfig, em_result: EMResult) -> str:
         return LINK_THRESHOLD_CONFIGURED
     if getattr(em_result, "calibrated_link_threshold", None) is not None:
         return LINK_THRESHOLD_CALIBRATED
+    if _fs_linear_rule_link_threshold(
+        mk, em_result, _fs_calibration_mode() == "posterior"
+    ) is not None:
+        return LINK_THRESHOLD_EVIDENCE_RULE
     return LINK_THRESHOLD_FALLBACK
 
 
@@ -4525,19 +4596,95 @@ def _posterior_split(scores) -> float | None:
     return float(valley + 0.5 / _REFIT_BINS)
 
 
+_FS_LINEAR_CUT_RULES = ("prior", "prior_mid")
+
+
+_FS_LINEAR_CUT_DEFAULT = "prior_mid"
+_FS_LINEAR_CUT_OFF = ("off", "0", "false", "none", "midpoint")
+
+
+def _fs_linear_cut_rule() -> str | None:
+    """``GOLDENMATCH_FS_LINEAR_CUT``: ``prior_mid`` (default) or ``prior``.
+
+    ``off`` (or ``0``/``false``/``none``/``midpoint``) restores the fixed 0.50 midpoint cut.
+    An unrecognised value warns and keeps the default rather than silently reverting.
+    """
+    value = os.environ.get("GOLDENMATCH_FS_LINEAR_CUT", "").strip().lower()
+    if not value:
+        return _FS_LINEAR_CUT_DEFAULT
+    if value in _FS_LINEAR_CUT_OFF:
+        return None
+    if value in _FS_LINEAR_CUT_RULES:
+        return value
+    logger.warning(
+        "GOLDENMATCH_FS_LINEAR_CUT=%r is not one of %s or off; using %s",
+        value, "/".join(_FS_LINEAR_CUT_RULES), _FS_LINEAR_CUT_DEFAULT,
+    )
+    return _FS_LINEAR_CUT_DEFAULT
+
+
+def _fs_linear_rule_link_threshold(
+    mk: MatchkeyConfig, em_result: EMResult, calibrated: bool
+) -> float | None:
+    """Linear link cutoff placed by evidence bits (``GOLDENMATCH_FS_LINEAR_CUT``, default ``prior_mid``).
+
+    The linear score is ``(W - lo) / (hi - lo)``, where ``lo``/``hi`` sum every field's
+    min/max match weight plus the negative-evidence range. The fixed 0.50 cutoff therefore
+    links at ``W >= (lo + hi) / 2``: a point set by the per-field extremes, not by the
+    evidence. A u estimate that stops inflating one field's top weight moves it -- ncvr at
+    50,000 random pairs: +7.4 -> -1.9 bits, floored at 0 by the positive-evidence guard,
+    F1 0.9976 -> 0.9743.
+
+    ``prior``: link at ``W >= max(log2((1 - lambda) / lambda), 0)``, the evidence at which
+    the posterior crosses 0.5. ``prior_mid``: the larger of that and the old midpoint.
+    Returned as the equivalent normalized cutoff so every scorer, native kernel included,
+    applies it unchanged. None when off, in posterior mode, or with a degenerate range.
+
+    MEASURED (fs-lever-gate full panel, both arms with the 50,000-pair u sample, run
+    34551694684), midpoint vs ``prior_mid``: ncvr_synthetic 0.9743 -> 0.9990, dblp_acm 0.8058
+    -> 0.8159, amazon_google 0.0217 -> 0.0475; the other seven datasets' clusters identical.
+    historical_50k (midpoint +10.8 bits, lambda 0.661) and dblp_scholar (+22.2, 0.065) keep
+    their midpoint, which is why pure ``prior`` is not the default: it would drop historical's
+    cut to 0 bits.
+    """
+    rule = _fs_linear_cut_rule()
+    if rule is None or calibrated:
+        return None
+    match_weights = getattr(em_result, "match_weights", None)
+    lam = getattr(em_result, "proportion_matched", None)
+    if not match_weights or lam is None:
+        return None  # nothing to place a cut from: fall through to the fixed default
+    lo, hi = _fs_ne_weight_range(em_result, mk)
+    for f in mk.fields:
+        weights = match_weights.get(f.field)
+        if weights:
+            lo += min(weights)
+            hi += max(weights)
+    if hi <= lo:
+        return None
+    cut_bits = max(-prior_weight(em_result.proportion_matched), 0.0)
+    if rule == "prior_mid":
+        cut_bits = max(cut_bits, (lo + hi) / 2.0)
+    return min(max((cut_bits - lo) / (hi - lo), 0.0), 1.0)
+
+
 def _fs_link_threshold(
     mk: MatchkeyConfig, em_result: EMResult, calibrated: bool
 ) -> float:
     """The FS link cutoff: configured ``mk.link_threshold`` when set, else the
-    calibrated per-dataset cutoff (when EM produced one), else the
-    calibration-aware value from ``compute_thresholds``. Extracted verbatim from
-    the scalar / vectorized / batched scorers (#1804 item 4) so they cannot
-    drift on how the cutoff is resolved."""
+    calibrated per-dataset cutoff (when EM produced one), else the evidence-bit
+    rule (``GOLDENMATCH_FS_LINEAR_CUT``, default ``prior_mid``), else the calibration-aware
+    value from ``compute_thresholds``. Extracted verbatim from the scalar /
+    vectorized / batched scorers (#1804 item 4) so they cannot drift on how the
+    cutoff is resolved; ``resolve_thresholds`` mirrors the same precedence."""
     if mk.link_threshold is not None:
         return mk.link_threshold
     cal = getattr(em_result, "calibrated_link_threshold", None)
     if cal is not None:
         return cal
+    rule_cut = _fs_linear_rule_link_threshold(mk, em_result, calibrated)
+    if rule_cut is not None:
+        return rule_cut
     link_threshold, _ = compute_thresholds(em_result, calibrated=calibrated)
     return link_threshold
 
