@@ -105,3 +105,16 @@ def test_explicit_link_threshold_still_wins(monkeypatch):
     monkeypatch.setenv("GOLDENMATCH_FS_LINEAR_CUT", "prior")
     mk = _mk().model_copy(update={"link_threshold": 0.42})
     assert _fs_link_threshold(mk, _em(0.01), calibrated=False) == 0.42
+
+
+def test_unknown_value_warning_does_not_list_midpoint(monkeypatch, caplog):
+    """M6: `midpoint` as an env value means off, not a rule pin -- listing it among the valid
+    names in this warning would mislead about what the env var itself accepts."""
+    import logging
+
+    monkeypatch.setenv("GOLDENMATCH_FS_LINEAR_CUT", "median")
+    with caplog.at_level(logging.WARNING):
+        _fs_linear_rule_link_threshold(_mk(), _em(0.01), calibrated=False)
+    assert caplog.records, "expected a warning to be logged"
+    message = caplog.records[-1].getMessage()
+    assert "midpoint" not in message

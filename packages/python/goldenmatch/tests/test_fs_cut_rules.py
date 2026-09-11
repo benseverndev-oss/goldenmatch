@@ -6,11 +6,13 @@ import math
 from types import SimpleNamespace
 
 import pytest
-from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
+from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField, NegativeEvidenceField
 from goldenmatch.core.fs_cut_rules import (
     CUT_RULES,
     Envelope,
     bits_to_normalized,
+    otsu_bits,
+    otsu_split,
     prior_bits,
     rule_bits,
     weight_envelope,
@@ -128,8 +130,6 @@ def test_link_cut_rule_rejects_unknown_names():
 def test_otsu_splits_the_training_histogram_with_the_calibrator_clamp():
     """KNOWN-POSITIVE for the clamp: two point masses make every split between them tie,
     argmax takes the first (0.11), and the calibrator's 0.40 floor lifts it."""
-    from goldenmatch.core.fs_cut_rules import otsu_bits
-
     counts = [0] * 100
     counts[10], counts[80] = 500, 200
     em = _em(0.01, training_score_histogram={"lo": -10.0, "hi": 14.0, "counts": counts})
@@ -141,8 +141,6 @@ def test_otsu_splits_the_training_histogram_with_the_calibrator_clamp():
 
 def test_otsu_needs_more_than_50_training_pairs():
     """Same floor as _calibrate_link_threshold: 50 pairs is too few to split."""
-    from goldenmatch.core.fs_cut_rules import otsu_bits
-
     env = Envelope(lo=-10.0, hi=14.0)
     few = [0] * 100
     few[10], few[80] = 25, 25
@@ -184,3 +182,63 @@ def test_cut_diagnostics_is_none_without_weights():
     from goldenmatch.core.fs_cut_rules import cut_diagnostics
 
     assert cut_diagnostics(_mk(), SimpleNamespace(proportion_matched=0.01)) is None
+
+
+def test_otsu_reports_the_calibrators_t_exactly_not_a_bits_round_trip():
+    """I1: a pinned otsu's normalized cut must be the calibrator's ``t`` VERBATIM. Round-
+    tripping the bits through bits_to_normalized instead can land a ulp off (measured: 12.5%
+    of 100,000 random envelopes) -- this deterministically finds one such envelope and proves
+    _fs_resolved_cut does not take that round trip."""
+    from goldenmatch.core.probabilistic import _fs_resolved_cut
+
+    env = weight_envelope(_mk(), _em(0.01))
+    assert env == Envelope(lo=-10.0, hi=14.0)
+
+    # Two well-separated masses straddling bin 39/40 give an UNCLAMPED otsu split of exactly
+    # 0.40 -- and 0.40 is one of the (lo, hi)=(-10, 14) values whose bits round trip is
+    # inexact (verified separately: bits_to_normalized(-10 + 0.40*24, env) != 0.40).
+    counts = [0] * 100
+    counts[39], counts[60] = 300, 300
+    em = _em(0.01, training_score_histogram={"lo": -10.0, "hi": 14.0, "counts": counts})
+
+    t = otsu_split(em)
+    assert t == 0.40
+    bits = otsu_bits(em, env)
+    assert bits_to_normalized(bits, env) != t, "expected the known bits round-trip gap"
+
+    mk = _mk().model_copy(update={"link_cut_rule": "otsu"})
+    resolved = _fs_resolved_cut(mk, em, calibrated=False)
+    assert resolved.rule == "otsu"
+    assert resolved.normalized == t
+
+
+def test_otsu_with_negative_evidence_normalizes_on_the_scoring_envelope():
+    """M1: a negative-evidence field widens the scoring envelope past the training
+    histogram's own (regular-field-only) lo/hi. otsu_bits places its cut on that wider
+    envelope, and the resolved cut must still equal otsu_split(em) -- not a value computed on
+    the histogram scale."""
+    from goldenmatch.core.probabilistic import _fs_resolved_cut
+
+    ne = NegativeEvidenceField(
+        field="ssn", transforms=[], scorer="exact", threshold=0.9, penalty_bits=6.0,
+    )
+    mk = _mk().model_copy(update={"negative_evidence": [ne]})
+
+    counts = [0] * 100
+    counts[10], counts[80] = 500, 200
+    hist = {"lo": -10.0, "hi": 14.0, "counts": counts}
+    em = _em(0.01, training_score_histogram=hist)
+
+    env = weight_envelope(mk, em)
+    assert env == Envelope(lo=-16.0, hi=14.0), "the NE penalty must widen lo past the histogram"
+    assert (env.lo, env.hi) != (hist["lo"], hist["hi"])
+
+    t = otsu_split(em)
+    bits = otsu_bits(em, env)
+    assert bits_to_normalized(bits, env) == t
+    assert rule_bits("otsu", env, em) == bits
+
+    pinned = mk.model_copy(update={"link_cut_rule": "otsu"})
+    resolved = _fs_resolved_cut(pinned, em, calibrated=False)
+    assert resolved.rule == "otsu"
+    assert resolved.normalized == t

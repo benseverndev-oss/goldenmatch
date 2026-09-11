@@ -90,13 +90,15 @@ def bits_to_normalized(bits: float, envelope: Envelope) -> float:
     return min(max((bits - envelope.lo) / (envelope.hi - envelope.lo), 0.0), 1.0)
 
 
-def otsu_bits(em_result: Any, envelope: Envelope) -> float | None:
-    """The Otsu calibrator's cut, in bits.
+def otsu_split(em_result: Any) -> float | None:
+    """The Otsu calibrator's split ``t``, exactly as ``_calibrate_link_threshold``
+    (GOLDENMATCH_FS_CALIBRATE_THRESHOLD) computes it: clamp and 4-dp rounding included.
 
-    Splits ``EMResult.training_score_histogram`` exactly as ``_calibrate_link_threshold``
-    (GOLDENMATCH_FS_CALIBRATE_THRESHOLD) does, clamp and rounding included. The calibrator
-    applies its split ``t`` directly as the linear cutoff, so the bits are placed on the
-    scoring envelope: ``bits_to_normalized(otsu_bits(em, env), env)`` is ``t``.
+    ``t`` is on the normalized [0, 1] scale directly -- it is what the calibrator applies as
+    the linear cutoff, with no envelope involved. Callers that need it in bits should place it
+    on an envelope with ``otsu_bits``, but the normalized cut for the ``otsu`` rule must be
+    this value VERBATIM (not a bits round trip through ``bits_to_normalized``, which can be a
+    ulp off -- see ``_fs_resolved_cut``).
 
     None when the model carries no training histogram, or too little of one.
     """
@@ -116,8 +118,16 @@ def otsu_bits(em_result: Any, envelope: Envelope) -> float | None:
     t = _otsu_split_from_counts(hist["counts"])
     if t is None:
         return None
-    t = round(float(np.clip(t, _CALIBRATE_MIN, _CALIBRATE_MAX)), 4)
-    return envelope.lo + t * (envelope.hi - envelope.lo)
+    return round(float(np.clip(t, _CALIBRATE_MIN, _CALIBRATE_MAX)), 4)
+
+
+def otsu_bits(em_result: Any, envelope: Envelope) -> float | None:
+    """The Otsu calibrator's cut, in bits: ``otsu_split(em_result)`` placed on ``envelope``.
+
+    None when the model carries no training histogram, or too little of one.
+    """
+    t = otsu_split(em_result)
+    return None if t is None else envelope.lo + t * (envelope.hi - envelope.lo)
 
 
 @dataclass(frozen=True)
@@ -160,6 +170,10 @@ def cut_diagnostics(mk: Any, em_result: Any) -> CutDiagnostics | None:
             bits = rule_bits(rule, envelope, em_result)
             if bits is None:
                 continue
+            # `hist["lo"]`/`hist["hi"]` are the REGULAR-field-only scale the training
+            # histogram was built on; `bits` (and the linear score / `otsu`'s cut) are
+            # placed on the full `envelope`, which also folds in negative evidence. With
+            # NE fields the two scales diverge, so this admitted fraction is approximate.
             t = min(max((bits - hist["lo"]) / (hist["hi"] - hist["lo"]), 0.0), 1.0)
             start = min(math.ceil(t * len(counts)), len(counts))
             admitted[rule] = sum(counts[start:]) / total

@@ -687,6 +687,27 @@ def _training_config_manifest(mk: MatchkeyConfig) -> dict:
     }
 
 
+def _validated_training_score_histogram(value: Any) -> dict | None:
+    """Drop a malformed ``training_score_histogram`` on load (M4) rather than let a hand-edited
+    or corrupted model file raise deep inside the ``otsu`` rule or the cut-diagnostics reader.
+
+    Valid: a dict with numeric ``lo`` < ``hi`` and a list ``counts`` of non-negative ints.
+    Anything else, including a missing ``counts`` key, loads as None.
+    """
+    if not isinstance(value, dict):
+        return None
+    lo, hi, counts = value.get("lo"), value.get("hi"), value.get("counts")
+    if not isinstance(lo, (int, float)) or not isinstance(hi, (int, float)):
+        return None
+    if not lo < hi:
+        return None
+    if not isinstance(counts, list) or not all(
+        isinstance(c, int) and c >= 0 for c in counts
+    ):
+        return None
+    return value
+
+
 @dataclass
 class EMResult:
     """Result of EM training for Fellegi-Sunter model."""
@@ -796,7 +817,9 @@ class EMResult:
                     if data.get("joint_corrections") else None
                 ),
                 training_config=data.get("training_config"),
-                training_score_histogram=data.get("training_score_histogram"),
+                training_score_histogram=_validated_training_score_histogram(
+                    data.get("training_score_histogram")
+                ),
                 _source_schema_version=version,
             )
         except KeyError as exc:
@@ -3816,15 +3839,22 @@ def _fs_unresolved_cut_reason(mk: MatchkeyConfig, em_result: EMResult) -> str | 
         or getattr(em_result, "proportion_matched", None) is None
     ):
         return "degenerate model: no usable weight envelope or match rate"
-    return f"{rule} unavailable: no training histogram on this model; fixed 0.50 cut applies"
+    return f"{rule} unavailable: needs a training histogram of more than 50 pairs; fixed 0.50 cut applies"
 
 
 def link_cut_report(mk: MatchkeyConfig, em_result: EMResult) -> dict:
     """``cut_rule`` / ``cut_reason`` / ``cut_diagnostics`` for the per-matchkey cutoff report.
 
-    - ``cut_rule`` and ``cut_reason`` are None when a configured or calibrated cutoff decided
-      first, in posterior mode, or when no rule was asked for.
-    - ``cut_reason`` alone is set when a rule was asked for but could not place the cut.
+    - ``cut_rule`` and ``cut_reason`` are None when no rule was asked for (no pin, and the
+      rule step never applied -- see below).
+    - When a rule WAS asked for (``mk.link_cut_rule`` pinned) but an earlier precedence step
+      decided first -- a configured ``link_threshold``, an EM-calibrated cutoff, or posterior
+      scoring -- ``cut_rule`` stays None but ``cut_reason`` says which step overrode the pin,
+      so a leaked env var (``GOLDENMATCH_FS_EVIDENCE_CUT`` / ``GOLDENMATCH_FS_CALIBRATED``)
+      forcing posterior mode does not silently disable a pin with no trace (spec's Error
+      handling section).
+    - ``cut_reason`` alone is also set when a rule was asked for but could not place the cut
+      (:func:`_fs_unresolved_cut_reason`).
     - ``cut_diagnostics`` is reported whenever the model has usable weights, so the
       measurement harness can read it even when no rule applied.
 
@@ -3840,11 +3870,20 @@ def link_cut_report(mk: MatchkeyConfig, em_result: EMResult) -> dict:
         "cut_reason": None,
         "cut_diagnostics": asdict(diagnostics) if diagnostics is not None else None,
     }
+    pinned = getattr(mk, "link_cut_rule", None)
     if mk.link_threshold is not None:
+        if pinned:
+            report["cut_reason"] = f"link_cut_rule={pinned} not applied: link_threshold is set"
         return report
     if getattr(em_result, "calibrated_link_threshold", None) is not None:
+        if pinned:
+            report["cut_reason"] = (
+                f"link_cut_rule={pinned} not applied: calibrated cutoff decided first"
+            )
         return report
     if _fs_calibration_mode() == "posterior":
+        if pinned:
+            report["cut_reason"] = f"link_cut_rule={pinned} not applied: posterior scoring"
         return report
     resolved = _fs_resolved_cut(mk, em_result, calibrated=False)
     if resolved is not None:
@@ -3919,7 +3958,7 @@ def _otsu_threshold(scores) -> float | None:
     well-separated (unimodal-ish) data the exact split barely matters (flat F1 curve), so it
     stays safe.
     """
-    hist, _ = np.histogram(scores, bins=100, range=(0.0, 1.0))
+    hist, _ = np.histogram(scores, bins=_TRAINING_HISTOGRAM_BINS, range=(0.0, 1.0))
     return _otsu_split_from_counts(hist)
 
 
@@ -4722,7 +4761,7 @@ def _fs_linear_cut_rule() -> str | None:
         return value
     logger.warning(
         "GOLDENMATCH_FS_LINEAR_CUT=%r is not one of %s or off; using %s",
-        value, "/".join(CUT_RULES), _FS_LINEAR_CUT_DEFAULT,
+        value, "/".join(r for r in CUT_RULES if r != "midpoint"), _FS_LINEAR_CUT_DEFAULT,
     )
     return _FS_LINEAR_CUT_DEFAULT
 
@@ -4752,7 +4791,12 @@ def _fs_resolved_cut(
     computable.
     Spec: docs/superpowers/specs/2026-09-11-fs-cut-rule-routing-design.md.
     """
-    from goldenmatch.core.fs_cut_rules import bits_to_normalized, rule_bits, weight_envelope
+    from goldenmatch.core.fs_cut_rules import (
+        bits_to_normalized,
+        otsu_split,
+        rule_bits,
+        weight_envelope,
+    )
 
     if calibrated:
         return None
@@ -4770,13 +4814,16 @@ def _fs_resolved_cut(
     for rule, reason in candidates:
         bits = rule_bits(rule, envelope, em_result)
         if bits is None:
-            note = f"{rule} unavailable: no training histogram on this model; "
+            note = f"{rule} unavailable: needs a training histogram of more than 50 pairs; "
             continue
+        # `otsu`'s normalized cut is the calibrator's `t` VERBATIM, not a bits round trip
+        # through bits_to_normalized -- that round trip can land a ulp off (I1).
+        normalized = otsu_split(em_result) if rule == "otsu" else bits_to_normalized(bits, envelope)
         return ResolvedCut(
             rule=rule,
             reason=note + reason,
             bits=float(bits),
-            normalized=bits_to_normalized(bits, envelope),
+            normalized=normalized,
         )
     return None
 

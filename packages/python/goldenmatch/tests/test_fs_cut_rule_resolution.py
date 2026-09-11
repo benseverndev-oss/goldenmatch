@@ -5,10 +5,14 @@ from __future__ import annotations
 import math
 from types import SimpleNamespace
 
+import pytest
 from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 from goldenmatch.core.probabilistic import (
+    LINK_THRESHOLD_CALIBRATED,
+    LINK_THRESHOLD_CONFIGURED,
     LINK_THRESHOLD_EVIDENCE_RULE,
     LINK_THRESHOLD_FALLBACK,
+    _fs_calibration_mode,
     _fs_link_threshold,
     _fs_resolved_cut,
     link_threshold_source,
@@ -85,7 +89,9 @@ def test_uncomputable_pin_falls_back_to_the_default_with_a_reason(monkeypatch):
     monkeypatch.delenv("GOLDENMATCH_FS_LINEAR_CUT", raising=False)
     got = _fs_resolved_cut(_mk(link_cut_rule="otsu"), _em(), calibrated=False)
     assert got.rule == "prior_mid"
-    assert got.reason.startswith("otsu unavailable: no training histogram")
+    assert got.reason.startswith(
+        "otsu unavailable: needs a training histogram of more than 50 pairs"
+    )
 
 
 def test_uncomputable_pin_with_default_off_resolves_nothing(monkeypatch):
@@ -105,16 +111,45 @@ def test_explicit_threshold_and_calibrated_cutoff_still_win(monkeypatch):
     assert _fs_link_threshold(_mk(link_cut_rule="evidence_12"), _em(calibrated=0.61), False) == 0.61
 
 
-def test_both_resolvers_and_the_source_agree_on_a_pinned_rule(monkeypatch):
-    monkeypatch.setenv("GOLDENMATCH_FS_LINEAR_CUT", "off")
-    monkeypatch.delenv("GOLDENMATCH_FS_CALIBRATED", raising=False)
-    monkeypatch.delenv("GOLDENMATCH_FS_EVIDENCE_CUT", raising=False)
-    mk, em = _mk(link_cut_rule="evidence_9"), _em()
+@pytest.mark.parametrize(
+    "case",
+    ["configured", "calibrated", "pinned", "default", "fallback", "posterior"],
+)
+def test_both_resolvers_and_the_source_agree_on_a_pinned_rule(monkeypatch, case):
+    """M2: at every precedence step, resolve_thresholds and _fs_link_threshold must agree on
+    the link cutoff, and link_threshold_source must name the step that actually decided."""
+    _clear_cut_env(monkeypatch)
+    expected_norm = None
+    if case == "configured":
+        mk, em = _mk(link_cut_rule="evidence_9", link_threshold=0.42), _em()
+        expected_source, expected_norm = LINK_THRESHOLD_CONFIGURED, 0.42
+    elif case == "calibrated":
+        mk, em = _mk(link_cut_rule="evidence_9"), _em(calibrated=0.61)
+        expected_source, expected_norm = LINK_THRESHOLD_CALIBRATED, 0.61
+    elif case == "pinned":
+        # Default rule is off, but a pinned rule applies regardless.
+        monkeypatch.setenv("GOLDENMATCH_FS_LINEAR_CUT", "off")
+        mk, em = _mk(link_cut_rule="evidence_9"), _em()
+        expected_source, expected_norm = LINK_THRESHOLD_EVIDENCE_RULE, _norm(9.0)
+    elif case == "default":
+        mk, em = _mk(), _em()  # GOLDENMATCH_FS_LINEAR_CUT unset -> prior_mid
+        expected_source = LINK_THRESHOLD_EVIDENCE_RULE
+    elif case == "fallback":
+        monkeypatch.setenv("GOLDENMATCH_FS_LINEAR_CUT", "off")
+        mk, em = _mk(), _em()
+        expected_source = LINK_THRESHOLD_FALLBACK
+    else:  # posterior mode overrides even a pinned rule
+        monkeypatch.setenv("GOLDENMATCH_FS_CALIBRATED", "posterior")
+        mk, em = _mk(link_cut_rule="evidence_9"), _em()
+        expected_source = LINK_THRESHOLD_FALLBACK
+
+    posterior = _fs_calibration_mode() == "posterior"
     link, review = resolve_thresholds(mk, em)
-    assert math.isclose(link, _fs_link_threshold(mk, em, calibrated=False), rel_tol=1e-12)
-    assert math.isclose(link, _norm(9.0), rel_tol=1e-12)
+    assert math.isclose(link, _fs_link_threshold(mk, em, calibrated=posterior), rel_tol=1e-12)
     assert review <= link
-    assert link_threshold_source(mk, em) == LINK_THRESHOLD_EVIDENCE_RULE
+    assert link_threshold_source(mk, em) == expected_source
+    if expected_norm is not None:
+        assert math.isclose(link, expected_norm, rel_tol=1e-12)
 
 
 def _clear_cut_env(monkeypatch):
@@ -134,14 +169,40 @@ def test_link_cut_report_names_the_rule_and_reason(monkeypatch):
     assert report["cut_reason"] == "pinned by link_cut_rule"
 
 
-def test_link_cut_report_is_empty_when_a_threshold_decided_first(monkeypatch):
+def test_link_cut_report_says_why_a_pinned_rule_did_not_apply_when_a_threshold_decided_first(
+    monkeypatch,
+):
+    """I2: a pinned link_cut_rule an earlier precedence step overrode must not silently vanish
+    from the report -- cut_rule stays None, but cut_reason says which step decided first. With
+    no pin, all three paths keep cut_reason None too (unchanged)."""
     from goldenmatch.core.probabilistic import link_cut_report
 
     _clear_cut_env(monkeypatch)
+
     configured = link_cut_report(_mk(link_cut_rule="evidence_3", link_threshold=0.4), _em())
-    assert configured["cut_rule"] is None and configured["cut_reason"] is None
-    calibrated = link_cut_report(_mk(), _em(calibrated=0.6))
-    assert calibrated["cut_rule"] is None and calibrated["cut_reason"] is None
+    assert configured["cut_rule"] is None
+    assert configured["cut_reason"] == "link_cut_rule=evidence_3 not applied: link_threshold is set"
+
+    calibrated = link_cut_report(_mk(link_cut_rule="evidence_3"), _em(calibrated=0.6))
+    assert calibrated["cut_rule"] is None
+    assert calibrated["cut_reason"] == (
+        "link_cut_rule=evidence_3 not applied: calibrated cutoff decided first"
+    )
+
+    monkeypatch.setenv("GOLDENMATCH_FS_CALIBRATED", "posterior")
+    posterior = link_cut_report(_mk(link_cut_rule="evidence_3"), _em())
+    assert posterior["cut_rule"] is None
+    assert posterior["cut_reason"] == "link_cut_rule=evidence_3 not applied: posterior scoring"
+    monkeypatch.delenv("GOLDENMATCH_FS_CALIBRATED", raising=False)
+
+    # No pin: all three paths still keep cut_reason None.
+    no_pin_configured = link_cut_report(_mk(link_threshold=0.4), _em())
+    assert no_pin_configured["cut_rule"] is None and no_pin_configured["cut_reason"] is None
+    no_pin_calibrated = link_cut_report(_mk(), _em(calibrated=0.6))
+    assert no_pin_calibrated["cut_rule"] is None and no_pin_calibrated["cut_reason"] is None
+    monkeypatch.setenv("GOLDENMATCH_FS_CALIBRATED", "posterior")
+    no_pin_posterior = link_cut_report(_mk(), _em())
+    assert no_pin_posterior["cut_rule"] is None and no_pin_posterior["cut_reason"] is None
 
 
 def test_link_cut_report_is_silent_when_no_rule_was_asked_for(monkeypatch):
@@ -170,7 +231,8 @@ def test_link_cut_report_says_why_a_requested_rule_did_not_apply(monkeypatch):
     otsu = link_cut_report(_mk(link_cut_rule="otsu"), _em())
     assert otsu["cut_rule"] is None
     assert otsu["cut_reason"] == (
-        "otsu unavailable: no training histogram on this model; fixed 0.50 cut applies"
+        "otsu unavailable: needs a training histogram of more than 50 pairs; "
+        "fixed 0.50 cut applies"
     )
 
 

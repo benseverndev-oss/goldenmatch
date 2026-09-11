@@ -85,10 +85,12 @@ def test_otsu_on_counts_equals_otsu_on_scores():
 
 
 def test_otsu_rule_equals_the_existing_calibrator(monkeypatch):
-    """Pinning `otsu` reproduces GOLDENMATCH_FS_CALIBRATE_THRESHOLD's cut."""
-    import math
+    """Pinning `otsu` reproduces GOLDENMATCH_FS_CALIBRATE_THRESHOLD's cut EXACTLY (I1),
+    through the real resolver -- not bits_to_normalized(otsu_bits(...)), whose abs_tol=1e-12
+    round trip hid a up-to-1-ulp gap from the calibrator's own `t`."""
+    import dataclasses
 
-    from goldenmatch.core.fs_cut_rules import bits_to_normalized, otsu_bits, weight_envelope
+    from goldenmatch.core.probabilistic import _fs_link_threshold
 
     monkeypatch.setenv("GOLDENMATCH_FS_CALIBRATE_THRESHOLD", "1")
     monkeypatch.delenv("GOLDENMATCH_FS_CALIBRATED", raising=False)
@@ -96,7 +98,24 @@ def test_otsu_rule_equals_the_existing_calibrator(monkeypatch):
     em = train_em(df, mk, n_sample_pairs=1000, max_iterations=10,
                   blocks=blocks, blocking_fields=["zip"])
     assert em.calibrated_link_threshold is not None, "fixture too small for the calibrator"
-    env = weight_envelope(mk, em)
-    assert math.isclose(
-        bits_to_normalized(otsu_bits(em, env), env), em.calibrated_link_threshold, abs_tol=1e-12
+
+    em_nocal = dataclasses.replace(em, calibrated_link_threshold=None)
+    pinned_mk = mk.model_copy(update={"link_cut_rule": "otsu"})
+    assert (
+        _fs_link_threshold(pinned_mk, em_nocal, calibrated=False)
+        == em.calibrated_link_threshold
     )
+
+
+def test_malformed_histogram_is_dropped_on_load(tmp_path):
+    """M4: EMResult.from_dict must not raise on a hand-edited/corrupted histogram -- it drops
+    the value instead, so a bad training_score_histogram fails safe rather than KeyError-ing
+    deep inside the otsu rule or the cut-diagnostics reader."""
+    hist = {"lo": -3.0, "hi": 5.0}  # missing "counts"
+    em = EMResult(
+        m_probs={}, u_probs={}, match_weights={}, converged=True, iterations=1,
+        proportion_matched=0.1, training_score_histogram=hist,
+    )
+    path = str(tmp_path / "malformed.json")
+    em.save_json(path)
+    assert EMResult.load_json(path).training_score_histogram is None
