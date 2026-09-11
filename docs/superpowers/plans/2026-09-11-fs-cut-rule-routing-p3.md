@@ -1800,7 +1800,7 @@ SKIP_DOCS_CHECK=1 git push -u origin feat/fs-cut-rule-matrix
 gh pr create --repo benseverndev-oss/goldenmatch --draft \
   --base feat/fs-cut-rule-router --head feat/fs-cut-rule-matrix \
   --title "feat(quality): FS link-cut routing P3 -- frozen held-out corpus + per-rule matrix" \
-  --body-file <path to the body file>
+  --body-file D:/Temp/claude/pr-fs-cut-rule-matrix-body.md
 ```
 
 Do NOT run `gh pr merge --auto`: the base is a feature branch, and an armed stacked PR merges into it immediately. Retarget to `main` after #2939 and #2942 merge; the #2940 cherry-pick then drops out on rebase.
