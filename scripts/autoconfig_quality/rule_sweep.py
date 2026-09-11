@@ -1,7 +1,8 @@
 """Per-rule link-cut matrix (spec 2026-09-11-fs-cut-rule-routing-design, P3).
 
 For one dataset: auto-configure the probabilistic config once, then run the full
-pipeline once per arm. Every probabilistic matchkey is pinned to one
+pipeline once per arm, each arm in its own child process under a memory cap and a
+timeout (``run_arm``). Every probabilistic matchkey is pinned to one
 ``link_cut_rule`` and points at one saved EM model (``model_path``), so the arms
 differ only in where the cut lands.
 
@@ -157,76 +158,238 @@ def _model_hashes(model_dir: Path) -> dict[str, str]:
     }
 
 
-def sweep_frame(df, gt: set, model_dir: Path) -> dict:
-    """Run every arm on one labelled frame. ``model_dir`` must start empty."""
+#: Watchdog limits for one arm's child process. The memory cap leaves headroom on
+#: the 16 GB hosted runner, so an over-merging rule is killed and recorded before
+#: the runner itself dies and takes every other arm's measurement with it.
+ARM_MEMORY_CAP_MB = 12000
+ARM_TIMEOUT_S = 3600
+ARM_MEMORY_CAP_ENV = "GOLDENMATCH_CUT_RULES_ARM_MEM_MB"
+ARM_TIMEOUT_ENV = "GOLDENMATCH_CUT_RULES_ARM_TIMEOUT_S"
+
+
+def _limit(value: float | None, env_var: str, default: float) -> float:
+    """``value`` when given, else the env override, else ``default``."""
+    if value is not None:
+        return value
+    raw = (os.environ.get(env_var) or "").strip()
+    return float(raw) if raw else default
+
+
+def killed_record(
+    status: str, returncode: int | None, peak_rss_mb: float, wall_seconds: float
+) -> dict:
+    """The record of an arm whose child was killed or crashed: no measurement, not
+    voided (nothing claimed a result it did not measure), and the reason."""
+    return {
+        "f1": None,
+        "precision": None,
+        "recall": None,
+        "pairs": None,
+        "digest": None,
+        "matchkeys": {},
+        "applied": False,
+        "voided": False,
+        "crashed": status,
+        "returncode": returncode,
+        "peak_rss_mb": round(peak_rss_mb, 1),
+        "wall_seconds": round(wall_seconds, 1),
+    }
+
+
+def _tree_rss_mb(proc) -> float:
+    """RSS of ``proc`` plus all its recursive children, in MB. On Windows a venv
+    ``python.exe`` is a launcher whose real interpreter is a child, so the tree
+    is what holds the memory."""
+    import psutil
+
+    try:
+        procs = [proc, *proc.children(recursive=True)]
+    except psutil.NoSuchProcess:
+        return 0.0
+    total = 0
+    for p in procs:
+        try:
+            total += p.memory_info().rss
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    return total / 2**20
+
+
+def _kill_tree(pid: int) -> None:
+    """Kill ``pid`` and every descendant; no POSIX-only signals."""
+    import psutil
+
+    try:
+        parent = psutil.Process(pid)
+        procs = [*parent.children(recursive=True), parent]
+    except psutil.NoSuchProcess:
+        return
+    for p in procs:
+        try:
+            p.kill()
+        except psutil.NoSuchProcess:
+            pass
+    psutil.wait_procs(procs, timeout=10)
+
+
+def run_arm(
+    argv: list[str],
+    out_path: Path,
+    arm: str,
+    expected_matchkeys: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    memory_cap_mb: float | None = None,
+    timeout_s: float | None = None,
+    poll_s: float = 0.5,
+) -> tuple[dict, dict | None]:
+    """Run one arm's child (``argv``) under the watchdog. Never raises for the child.
+
+    Returns ``(arm record, child payload)``. The payload is None when the child was
+    killed (``memory_cap`` / ``timeout``) or ``crashed`` (non-zero exit or no JSON
+    at ``out_path``); the record then says which, instead of the sweep dying."""
+    import json
+    import subprocess
+    import time
+
+    import psutil
+
+    cap = _limit(memory_cap_mb, ARM_MEMORY_CAP_ENV, ARM_MEMORY_CAP_MB)
+    limit = _limit(timeout_s, ARM_TIMEOUT_ENV, ARM_TIMEOUT_S)
+    out_path.unlink(missing_ok=True)  # a stale result must not pass for this run's
+    start = time.perf_counter()
+    popen = subprocess.Popen(argv, env=env)
+    peak = 0.0
+    status: str | None = None
+    try:
+        proc = psutil.Process(popen.pid)
+        while True:
+            peak = max(peak, _tree_rss_mb(proc))
+            if peak > cap:
+                status = "memory_cap"
+            elif time.perf_counter() - start > limit:
+                status = "timeout"
+            if status is not None:
+                _kill_tree(popen.pid)
+                popen.wait()
+                break
+            try:
+                popen.wait(timeout=poll_s)
+                break
+            except subprocess.TimeoutExpired:
+                continue
+    except psutil.NoSuchProcess:
+        popen.wait()  # exited before the first sample; classified below
+    except BaseException:
+        _kill_tree(popen.pid)  # a cancelled sweep must not orphan a capped child
+        raise
+    wall = time.perf_counter() - start
+    returncode = popen.returncode
+    if status is not None:
+        return killed_record(status, returncode, peak, wall), None
+    try:
+        payload = json.loads(out_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        payload = None
+    if returncode != 0 or payload is None:
+        return killed_record("crashed", returncode, peak, wall), None
+    record = arm_record(
+        arm,
+        payload["summary"],
+        {"fs_link_thresholds": payload["report"]},
+        tuple(payload["partition"]),
+        expected_matchkeys,
+    )
+    record.update(crashed=None, peak_rss_mb=round(peak, 1), wall_seconds=payload["wall_seconds"])
+    return record, payload
+
+
+def execute_arm(df, gt: set, cfg, arm: str, model_dir: Path) -> dict:
+    """Run one arm on one labelled frame and return its JSON-able result.
+
+    The only place an arm's pipeline runs: the ``arm`` child process calls it, and
+    so does any in-process caller."""
     import time
 
     import goldenmatch
-    from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
     from goldenmatch.core.evaluate import evaluate_clusters
 
     from scripts.bench_er_headtohead.ab_lever import _partition_fingerprint
 
     start = time.perf_counter()
-    base = auto_configure_probabilistic_df(df)
-    probabilistic_matchkeys = sorted(
-        mk.name for mk in base.get_matchkeys() if mk.type == "probabilistic"
-    )
-    arms: dict[str, dict] = {}
-    diagnostics: dict[str, dict | None] = {}
-    models_saved: list[str] = []
-    hashes_after_default: dict[str, str] = {}
-    for arm in ARMS:
-        rule = None if arm in ("default", BASELINE_ARM) else arm
-        result = goldenmatch.dedupe_df(df, config=pin_rule(base, rule, model_dir))
-        summary = evaluate_clusters(result.clusters, gt).summary()
-        arms[arm] = arm_record(
-            arm,
-            summary,
-            result.stats,
-            _partition_fingerprint(result.clusters),
-            probabilistic_matchkeys,
-        )
-        if arm == "default":
-            models_saved = sorted(p.name for p in model_dir.glob("*.json"))
-            hashes_after_default = _model_hashes(model_dir)
-        if arm == BASELINE_ARM:
-            report = (result.stats or {}).get("fs_link_thresholds") or {}
-            diagnostics = {
-                name: entry.get("cut_diagnostics") for name, entry in sorted(report.items())
-            }
-    hashes_after_last = _model_hashes(model_dir)
-    baseline = arms[BASELINE_ARM]["f1"]
-    model_complete = bool(models_saved) and sorted(models_saved) == sorted(
-        f"{name}.json" for name in probabilistic_matchkeys
-    )
-    model_stable = (
-        bool(hashes_after_default)
-        and bool(hashes_after_last)
-        and hashes_after_default == hashes_after_last
-    )
+    rule = None if arm in ("default", BASELINE_ARM) else arm
+    result = goldenmatch.dedupe_df(df, config=pin_rule(cfg, rule, model_dir))
+    summary = evaluate_clusters(result.clusters, gt).summary()
+    pairs, digest = _partition_fingerprint(result.clusters)
     return {
-        "rows": df.height,
-        "gt_pairs": len(gt),
-        "probabilistic_matchkeys": probabilistic_matchkeys,
-        "arms": arms,
-        "cut_diagnostics": diagnostics,
-        "models_saved": models_saved,
-        "model_complete": model_complete,
-        "model_stable": model_stable,
-        "reload_partition_match": arms["default"]["digest"] == arms[BASELINE_ARM]["digest"],
-        "model_reload_delta": float(baseline - arms["default"]["f1"]),
-        "below_default": sorted(
-            rule
-            for rule in CUT_RULES
-            if arms[rule]["applied"] and arms[rule]["f1"] < baseline - TOLERANCE
-        ),
+        "summary": {key: summary[key] for key in ("f1", "precision", "recall")},
+        "report": (result.stats or {}).get("fs_link_thresholds") or {},
+        "partition": [pairs, digest],
         "wall_seconds": round(time.perf_counter() - start, 1),
     }
 
 
-def sweep_dataset(name: str, work_dir: Path) -> dict | None:
-    """Sweep one corpus dataset, or None when it is unavailable or unlabelled."""
+def arm_env() -> dict[str, str]:
+    """A child's env: the parent's, plus one hash seed shared by every arm and no
+    autoconfig memory."""
+    return {**os.environ, "PYTHONHASHSEED": "0", "GOLDENMATCH_AUTOCONFIG_MEMORY": "0"}
+
+
+def arm_argv(name: str, config_path: Path, arm: str, model_dir: Path, out_path: Path) -> list[str]:
+    """The command that runs one arm in a child process (the ``arm`` subcommand)."""
+    return [
+        sys.executable,
+        "-m",
+        "scripts.autoconfig_quality.rule_sweep",
+        "arm",
+        "--dataset",
+        name,
+        "--config",
+        str(config_path),
+        "--arm",
+        arm,
+        "--model-dir",
+        str(model_dir),
+        "--out",
+        str(out_path),
+    ]
+
+
+def arm_main(argv: list[str]) -> int:
+    """Hidden ``arm`` subcommand: one arm on one dataset, result JSON at ``--out``."""
+    import json
+
+    from goldenmatch.config.schemas import GoldenMatchConfig
+
+    ap = argparse.ArgumentParser(description="Run one link-cut sweep arm (the sweep's child).")
+    ap.add_argument("--dataset", required=True)
+    ap.add_argument("--config", required=True, type=Path)
+    ap.add_argument("--arm", required=True, choices=ARMS)
+    ap.add_argument("--model-dir", required=True, type=Path)
+    ap.add_argument("--out", required=True, type=Path)
+    args = ap.parse_args(argv)
+
+    loaded = resolve_loader(args.dataset)()
+    if loaded is None or not loaded[1]:
+        print(f"arm: dataset {args.dataset!r} unavailable or unlabelled", file=sys.stderr)
+        return 1
+    df, gt = loaded
+    cfg = GoldenMatchConfig.model_validate_json(args.config.read_text(encoding="utf-8"))
+    payload = execute_arm(df, gt, cfg, args.arm, args.model_dir)
+    args.out.write_text(json.dumps(payload), encoding="utf-8")
+    return 0
+
+
+def sweep_dataset(name: str, work_dir: Path, arms: tuple[str, ...] = ARMS) -> dict | None:
+    """Sweep one corpus dataset, or None when it is unavailable or unlabelled.
+
+    Loads and auto-configures once, writes the config every arm reads to
+    ``<work_dir>/<name>/config.json``, then runs each arm in its own child process
+    under the watchdog (``run_arm``)."""
+    import time
+
+    from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
+
     from scripts.autoconfig_quality.corpus import corpus_of
 
     loaded = resolve_loader(name)()
@@ -235,11 +398,81 @@ def sweep_dataset(name: str, work_dir: Path) -> dict | None:
     df, gt = loaded
     if not gt:
         return None
-    model_dir = work_dir / name
+    start = time.perf_counter()
+    dataset_dir = work_dir / name
+    model_dir = dataset_dir / "models"
     model_dir.mkdir(parents=True, exist_ok=True)
-    record = sweep_frame(df, gt, model_dir)
-    record["corpus"] = corpus_of(name)
-    return record
+    cfg = auto_configure_probabilistic_df(df)
+    config_path = dataset_dir / "config.json"
+    config_path.write_text(cfg.model_dump_json(), encoding="utf-8")
+    probabilistic_matchkeys = sorted(
+        mk.name for mk in cfg.get_matchkeys() if mk.type == "probabilistic"
+    )
+    rows, gt_pairs = df.height, len(gt)
+    del loaded, df, gt  # every child reloads the dataset; the parent holds none of it
+
+    env = arm_env()
+    records: dict[str, dict] = {}
+    diagnostics: dict[str, dict | None] = {}
+    models_saved: list[str] = []
+    hashes_after_default: dict[str, str] = {}
+    for arm in arms:
+        out_path = dataset_dir / f"arm_{arm}.json"
+        argv = arm_argv(name, config_path, arm, model_dir, out_path)
+        records[arm], payload = run_arm(argv, out_path, arm, probabilistic_matchkeys, env=env)
+        rec = records[arm]
+        print(
+            f"[cut-rules] {name}:{arm} crashed={rec['crashed']} f1={rec['f1']} "
+            f"peak_rss_mb={rec['peak_rss_mb']} wall_seconds={rec['wall_seconds']}",
+            file=sys.stderr,
+        )
+        if arm == "default":
+            models_saved = sorted(p.name for p in model_dir.glob("*.json"))
+            hashes_after_default = _model_hashes(model_dir)
+        if arm == BASELINE_ARM and payload is not None:
+            diagnostics = {
+                mk: entry.get("cut_diagnostics") for mk, entry in sorted(payload["report"].items())
+            }
+    hashes_after_last = _model_hashes(model_dir)
+    baseline = records[BASELINE_ARM]["f1"]
+    rules = [arm for arm in arms if arm in CUT_RULES]
+    # Without both baselines there is nothing to compare a rule against; run() fails it.
+    baseline_ok = not records["default"]["crashed"] and not records[BASELINE_ARM]["crashed"]
+    model_complete = bool(models_saved) and sorted(models_saved) == sorted(
+        f"{mk}.json" for mk in probabilistic_matchkeys
+    )
+    model_stable = (
+        bool(hashes_after_default)
+        and bool(hashes_after_last)
+        and hashes_after_default == hashes_after_last
+    )
+    return {
+        "corpus": corpus_of(name),
+        "rows": rows,
+        "gt_pairs": gt_pairs,
+        "probabilistic_matchkeys": probabilistic_matchkeys,
+        "arms": records,
+        "cut_diagnostics": diagnostics,
+        "models_saved": models_saved,
+        "model_complete": model_complete,
+        "model_stable": model_stable,
+        "reload_partition_match": (
+            records["default"]["digest"] == records[BASELINE_ARM]["digest"] if baseline_ok else None
+        ),
+        "model_reload_delta": (float(baseline - records["default"]["f1"]) if baseline_ok else None),
+        # A rule arm that was killed or crashed is worse than the baseline.
+        "below_default": sorted(
+            rule
+            for rule in rules
+            if baseline_ok
+            and (
+                records[rule]["crashed"]
+                or (records[rule]["applied"] and records[rule]["f1"] < baseline - TOLERANCE)
+            )
+        ),
+        "crashed": {rule: records[rule]["crashed"] for rule in rules if records[rule]["crashed"]},
+        "wall_seconds": round(time.perf_counter() - start, 1),
+    }
 
 
 def run(argv: list[str]) -> int:
@@ -304,6 +537,10 @@ def run(argv: list[str]) -> int:
         for arm, rec in record["arms"].items():
             if rec["voided"]:
                 failures.append(f"{name}:{arm} voided")
+        for arm in ("default", BASELINE_ARM):
+            status = record["arms"].get(arm, {}).get("crashed")
+            if status:
+                failures.append(f"{name}: baseline arm {arm} {status}")
         if not record.get("model_complete"):
             failures.append(f"{name}: shared EM model not saved for every probabilistic matchkey")
         if not record.get("model_stable"):
@@ -365,26 +602,35 @@ def merge_cards(cards: list[dict], expected: list[str] | None = None) -> dict:
 
 
 def best_rule(record: dict) -> tuple[str, float]:
-    """The highest-F1 applied rule arm; ties go to the earlier ``CUT_RULES`` name.
-    Falls back to the baseline arm (``BASELINE_ARM``) when no rule applied --
-    callers rendering this for humans should treat that sentinel as "no rule
-    applied", not as a real rule name."""
+    """The highest-F1 applied rule arm that did not crash; ties go to the earlier
+    ``CUT_RULES`` name. Falls back to the baseline arm (``BASELINE_ARM``) when no
+    rule applied -- callers rendering this for humans should treat that sentinel as
+    "no rule applied", not as a real rule name."""
     best: tuple[str, float] | None = None
     for rule in CUT_RULES:
         arm = record["arms"][rule]
+        if arm.get("crashed"):
+            continue
         if arm["applied"] and (best is None or arm["f1"] > best[1]):
             best = (rule, arm["f1"])
     return best or (BASELINE_ARM, record["arms"][BASELINE_ARM]["f1"])
 
 
 def _not_applied_rules(record: dict) -> list[str]:
-    """Rules whose arm neither applied nor voided (e.g. otsu falling back
-    on too few training pairs)."""
+    """Rules whose arm ran but neither applied nor voided (e.g. otsu falling back
+    on too few training pairs). A crashed arm is reported as crashed instead."""
     return sorted(
         rule
         for rule in CUT_RULES
-        if not record["arms"][rule]["applied"] and not record["arms"][rule]["voided"]
+        if not record["arms"][rule]["applied"]
+        and not record["arms"][rule]["voided"]
+        and not record["arms"][rule].get("crashed")
     )
+
+
+def _f1_cell(value: float | None) -> str:
+    """An F1 table cell; a crashed baseline has none."""
+    return "crashed" if value is None else f"{value:.4f}"
 
 
 def render_markdown(card: dict, holdout_card: dict | None = None) -> str:
@@ -402,25 +648,29 @@ def render_markdown(card: dict, holdout_card: dict | None = None) -> str:
         "### Design",
         "",
         "| dataset | default F1 | best rule | best F1 | Δ best | below default"
-        " | not applied | reload digest |",
-        "|---|---|---|---|---|---|---|---|",
+        " | not applied | crashed | reload digest |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for name in sorted(card["datasets"]):
         record = card["datasets"][name]
         baseline = record["arms"][BASELINE_ARM]["f1"]
         rule, f1 = best_rule(record)
         label = "no rule applied" if rule == BASELINE_ARM else rule
+        delta = "crashed" if baseline is None or f1 is None else f"{f1 - baseline:+.4f}"
         below = ", ".join(record.get("below_default") or []) or "none"
         not_applied = ", ".join(_not_applied_rules(record)) or "none"
-        digest = "same" if record.get("reload_partition_match", True) else "DIFFERS"
+        crashed = (
+            ", ".join(f"{r}:{s}" for r, s in sorted((record.get("crashed") or {}).items()))
+            or "none"
+        )
+        match = record.get("reload_partition_match", True)
+        digest = "n/a" if match is None else ("same" if match else "DIFFERS")
         lines.append(
-            f"| {name} | {baseline:.4f} | {label} | {f1:.4f} "
-            f"| {f1 - baseline:+.4f} | {below} | {not_applied} | {digest} |"
+            f"| {name} | {_f1_cell(baseline)} | {label} | {_f1_cell(f1)} "
+            f"| {delta} | {below} | {not_applied} | {crashed} | {digest} |"
         )
     for name in design_missing:
-        lines.append(
-            f"| {name} | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING |"
-        )
+        lines.append(f"| {name} |" + " MISSING |" * 8)
 
     out = "\n".join(lines) + "\n"
 
@@ -429,17 +679,20 @@ def render_markdown(card: dict, holdout_card: dict | None = None) -> str:
             "",
             "### Held-out (gate view)",
             "",
-            "| dataset | default F1 | rules below default | rules not applied |",
-            "|---|---|---|---|",
+            "| dataset | default F1 | rules below default | rules not applied | rules crashed |",
+            "|---|---|---|---|---|",
         ]
         for name in sorted(holdout_card["datasets"]):
             record = holdout_card["datasets"][name]
             baseline = record["arms"][BASELINE_ARM]["f1"]
             below_n = len(record.get("below_default") or [])
             not_applied_n = len(_not_applied_rules(record))
-            h_lines.append(f"| {name} | {baseline:.4f} | {below_n} | {not_applied_n} |")
+            crashed_n = len(record.get("crashed") or {})
+            h_lines.append(
+                f"| {name} | {_f1_cell(baseline)} | {below_n} | {not_applied_n} | {crashed_n} |"
+            )
         for name in holdout_missing:
-            h_lines.append(f"| {name} | MISSING | MISSING | MISSING |")
+            h_lines.append(f"| {name} |" + " MISSING |" * 4)
         out += "\n".join(h_lines) + "\n"
 
     failures = card["meta"].get("failures") or []
@@ -506,6 +759,8 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv and argv[0] == "merge":
         return merge(argv[1:])
+    if argv and argv[0] == "arm":
+        return arm_main(argv[1:])
     return run(argv)
 
 
