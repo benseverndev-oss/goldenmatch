@@ -844,9 +844,10 @@ def _f1_cell(value: float | None) -> str:
 
 def render_markdown(card: dict, holdout_card: dict | None = None) -> str:
     """The design table (full detail), and -- when ``holdout_card`` is given -- the
-    held-out gate view (counts only, no rule names or per-rule F1: the held-out set
-    stays out of view of row-writing). Missing datasets (``card["meta"]["missing"]``)
-    render as an all-MISSING row in whichever table matches their corpus."""
+    held-out gate view (set-level counts only: no held-out dataset name and no
+    held-out F1 anywhere in that section -- the held-out set stays out of view of
+    row-writing). Design's missing datasets (``card["meta"]["missing"]``) render as
+    an all-MISSING row; a missing held-out dataset is counted, never named."""
     from scripts.autoconfig_quality.corpus import corpus_of
 
     missing = sorted(card["meta"].get("missing") or [])
@@ -884,24 +885,20 @@ def render_markdown(card: dict, holdout_card: dict | None = None) -> str:
     out = "\n".join(lines) + "\n"
 
     if holdout_card is not None:
+        n_measured = len(holdout_card["datasets"])
+        n_expected = n_measured + len(holdout_missing)
+        k_below = sum(
+            1 for record in holdout_card["datasets"].values() if record.get("below_default")
+        )
+        c_crashed = sum(1 for record in holdout_card["datasets"].values() if record.get("crashed"))
         h_lines = [
             "",
             "### Held-out (gate view)",
             "",
-            "| dataset | default F1 | rules below default | rules not applied | rules crashed |",
-            "|---|---|---|---|---|",
+            f"Measured {n_measured} of {n_expected} held-out datasets. Datasets with at "
+            f"least one rule below default: {k_below}. Datasets with a crashed rule: "
+            f"{c_crashed}.",
         ]
-        for name in sorted(holdout_card["datasets"]):
-            record = holdout_card["datasets"][name]
-            baseline = record["arms"][BASELINE_ARM]["f1"]
-            below_n = len(record.get("below_default") or [])
-            not_applied_n = len(_not_applied_rules(record))
-            crashed_n = len(record.get("crashed") or {})
-            h_lines.append(
-                f"| {name} | {_f1_cell(baseline)} | {below_n} | {not_applied_n} | {crashed_n} |"
-            )
-        for name in holdout_missing:
-            h_lines.append(f"| {name} |" + " MISSING |" * 4)
         out += "\n".join(h_lines) + "\n"
 
     failures = card["meta"].get("failures") or []
