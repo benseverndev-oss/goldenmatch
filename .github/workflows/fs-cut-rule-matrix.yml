@@ -138,6 +138,12 @@ jobs:
       - name: Sweep every link-cut rule
         env:
           DATASET: ${{ matrix.dataset }}
+          # Arm watchdog (rule_sweep.py). The dataset budget keeps every arm inside the
+          # 150-minute job after setup, so a slow dataset records timed-out arms
+          # instead of the job timing out and the dataset going MISSING.
+          GOLDENMATCH_CUT_RULES_ARM_TIMEOUT_S: "1200"
+          GOLDENMATCH_CUT_RULES_DATASET_BUDGET_S: "7200"
+          GOLDENMATCH_CUT_RULES_ARM_MEM_MB: "12000"
         run: |
           uv run python -m scripts.autoconfig_quality.rule_sweep \
             --datasets "$DATASET" --require-datasets "$DATASET" \
