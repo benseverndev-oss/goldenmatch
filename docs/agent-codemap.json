@@ -4268,6 +4268,8 @@
             "_fs_evidence_cut",
             "_fs_fd_classes",
             "_fs_field_dependence_enabled",
+            "_fs_linear_cut_rule",
+            "_fs_linear_rule_link_threshold",
             "_fs_link_threshold",
             "_fs_monotonic_mode",
             "_fs_name_refdata_available",

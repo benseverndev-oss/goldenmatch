@@ -3736,10 +3736,15 @@ def resolve_thresholds(
     computed_link, computed_review = compute_thresholds(em_result)
     # Precedence: explicit user config > EM-calibrated cutoff > fixed default.
     calibrated = getattr(em_result, "calibrated_link_threshold", None)
+    rule_cut = _fs_linear_rule_link_threshold(
+        mk, em_result, _fs_calibration_mode() == "posterior"
+    )
     if mk.link_threshold is not None:
         link = float(mk.link_threshold)
     elif calibrated is not None:
         link = float(calibrated)
+    elif rule_cut is not None:
+        link = float(rule_cut)
     else:
         link = computed_link
     review = (
@@ -4583,19 +4588,66 @@ def _posterior_split(scores) -> float | None:
     return float(valley + 0.5 / _REFIT_BINS)
 
 
+_FS_LINEAR_CUT_RULES = ("prior", "prior_mid")
+
+
+def _fs_linear_cut_rule() -> str | None:
+    """``GOLDENMATCH_FS_LINEAR_CUT``: ``prior`` or ``prior_mid``; anything else = off."""
+    value = os.environ.get("GOLDENMATCH_FS_LINEAR_CUT", "").strip().lower()
+    return value if value in _FS_LINEAR_CUT_RULES else None
+
+
+def _fs_linear_rule_link_threshold(
+    mk: MatchkeyConfig, em_result: EMResult, calibrated: bool
+) -> float | None:
+    """Linear link cutoff placed by evidence bits (``GOLDENMATCH_FS_LINEAR_CUT``); default off.
+
+    The linear score is ``(W - lo) / (hi - lo)``, where ``lo``/``hi`` sum every field's
+    min/max match weight plus the negative-evidence range. The fixed 0.50 cutoff therefore
+    links at ``W >= (lo + hi) / 2``: a point set by the per-field extremes, not by the
+    evidence. A u estimate that stops inflating one field's top weight moves it -- ncvr at
+    50,000 random pairs: +7.4 -> -1.9 bits, floored at 0 by the positive-evidence guard,
+    F1 0.9976 -> 0.9743.
+
+    ``prior``: link at ``W >= max(log2((1 - lambda) / lambda), 0)``, the evidence at which
+    the posterior crosses 0.5. ``prior_mid``: the larger of that and the old midpoint.
+    Returned as the equivalent normalized cutoff so every scorer, native kernel included,
+    applies it unchanged. None when off, in posterior mode, or with a degenerate range.
+    """
+    rule = _fs_linear_cut_rule()
+    if rule is None or calibrated:
+        return None
+    lo, hi = _fs_ne_weight_range(em_result, mk)
+    for f in mk.fields:
+        weights = em_result.match_weights.get(f.field)
+        if weights:
+            lo += min(weights)
+            hi += max(weights)
+    if hi <= lo:
+        return None
+    cut_bits = max(-prior_weight(em_result.proportion_matched), 0.0)
+    if rule == "prior_mid":
+        cut_bits = max(cut_bits, (lo + hi) / 2.0)
+    return min(max((cut_bits - lo) / (hi - lo), 0.0), 1.0)
+
+
 def _fs_link_threshold(
     mk: MatchkeyConfig, em_result: EMResult, calibrated: bool
 ) -> float:
     """The FS link cutoff: configured ``mk.link_threshold`` when set, else the
-    calibrated per-dataset cutoff (when EM produced one), else the
-    calibration-aware value from ``compute_thresholds``. Extracted verbatim from
-    the scalar / vectorized / batched scorers (#1804 item 4) so they cannot
-    drift on how the cutoff is resolved."""
+    calibrated per-dataset cutoff (when EM produced one), else the evidence-bit
+    rule when ``GOLDENMATCH_FS_LINEAR_CUT`` is set, else the calibration-aware
+    value from ``compute_thresholds``. Extracted verbatim from the scalar /
+    vectorized / batched scorers (#1804 item 4) so they cannot drift on how the
+    cutoff is resolved; ``resolve_thresholds`` mirrors the same precedence."""
     if mk.link_threshold is not None:
         return mk.link_threshold
     cal = getattr(em_result, "calibrated_link_threshold", None)
     if cal is not None:
         return cal
+    rule_cut = _fs_linear_rule_link_threshold(mk, em_result, calibrated)
+    if rule_cut is not None:
+        return rule_cut
     link_threshold, _ = compute_thresholds(em_result, calibrated=calibrated)
     return link_threshold
 
