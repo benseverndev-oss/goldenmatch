@@ -103,7 +103,8 @@ jobs:
             local dest="$BASE/$name"
             mkdir -p "$dest"
             if curl -fsSL --retry 3 -o "/tmp/$name.zip" "$url"; then
-              mkdir -p "/tmp/$name" && unzip -o -q "/tmp/$name.zip" -d "/tmp/$name"
+              mkdir -p "/tmp/$name"
+              unzip -o -q "/tmp/$name.zip" -d "/tmp/$name" || echo "::warning::$name: unzip failed"
               for f in "$@"; do
                 found=$(find "/tmp/$name" -name "$f" | head -1)
                 if [ -n "$found" ]; then cp "$found" "$dest/$f"
@@ -171,9 +172,12 @@ jobs:
           merge-multiple: true
           path: cut-rules
       - name: Merge and summarize
+        env:
+          EXPECT: ${{ needs.plan.outputs.datasets }}
         run: |
           uv run python -m scripts.autoconfig_quality.rule_sweep merge cut-rules/*.json \
-            --out cut-rule-matrix.json --summary-md cut-rule-matrix.md
+            --out cut-rule-matrix.json --holdout-out cut-rule-matrix-holdout.json \
+            --summary-md cut-rule-matrix.md --expect-json "$EXPECT"
           {
             echo "## FS link-cut rule matrix"
             echo ""
@@ -182,9 +186,17 @@ jobs:
             cat cut-rule-matrix.md
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload the merged matrix
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
         with:
           name: cut-rule-matrix
           path: |
             cut-rule-matrix.json
             cut-rule-matrix.md
+      - name: Upload the held-out gate scorecard
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        with:
+          name: cut-rule-matrix-holdout
+          path: cut-rule-matrix-holdout.json
+          if-no-files-found: warn

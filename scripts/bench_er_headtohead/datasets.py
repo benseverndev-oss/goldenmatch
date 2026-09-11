@@ -475,9 +475,11 @@ def _magellan(subdir: str) -> tuple[pa.Table, pa.Table]:
     never committed; Konda et al. 2016, Mudgal et al. 2018).
 
     Records are tableA + tableB with ``a:<id>`` / ``b:<id>`` ids. Truth links the
-    ``label == 1`` pairs of the train/valid/test candidate splits, so a true match
-    DeepMatcher's own blocking never proposed counts as a non-match -- identically
-    for every arm a sweep compares."""
+    ``label == 1`` pairs of the train/valid/test candidate splits: it covers only
+    DeepMatcher's labelled candidate positives. An unlabelled true match that a
+    rule links is scored as a false positive, so lower cuts are penalised; recall
+    a higher cut loses on unlabelled matches is not counted. The bias therefore
+    favours high-cut rules such as ``evidence_12`` and ``posterior_099``."""
     base = DATASETS_DIR / "Magellan" / subdir
     paths = [base / "tableA.csv", base / "tableB.csv", *(base / s for s in _MAGELLAN_SPLITS)]
     missing = [p for p in paths if not p.exists()]
@@ -566,7 +568,7 @@ _HELDOUT_SYNTH_SEED = 1009
 #: name -> (shape, corruption, dupe_rate). c05 = corruption 0.5, c20 = 2.0;
 #: d10 = dupe_rate 0.10, d40 = 0.40.
 _SYNTH_HELDOUT: dict[str, tuple[str, float, float]] = {
-    f"synth_{shape}_c{int(c * 10):02d}_d{int(round(d * 100)):02d}": (shape, c, d)
+    f"synth_{shape}_c{int(round(c * 10)):02d}_d{int(round(d * 100)):02d}": (shape, c, d)
     for shape in ("person", "biblio")
     for c in (0.5, 2.0)
     for d in (0.10, 0.40)
@@ -598,7 +600,8 @@ _LOADERS = {
     # agreeing byte-for-byte while person's diverge, and only a labelled score
     # distribution can say whether an empty band is why.
     "synthetic_biblio": _synthetic_biblio,
-    # Held-out (never in the FS-lever tuning panel) -- generalisation tests.
+    # Not in the FS threshold-refit tuning panel (these are DESIGN datasets for
+    # link-cut routing).
     "febrl4": _febrl4,
     "dblp_scholar": _dblp_scholar,
     "amazon_google": _amazon_google,

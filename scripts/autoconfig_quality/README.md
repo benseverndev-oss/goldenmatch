@@ -117,6 +117,25 @@ The held-out set is frozen: a routing row ships only if it is never more than 0.
 F1 below the default on every design **and** held-out dataset. Changing the
 held-out list after any row exists means re-running the full gate.
 
+**Row authors (P4) read the `cut-rule-matrix` design artifact only.** The
+held-out json and the per-dataset `cut-rules-<holdout dataset>` artifacts are
+gate inputs, not evidence -- they must not be read while writing a row, or the
+held-out set stops being held out.
+
+**Magellan truth bias.** The Magellan/DeepMatcher truth (walmart_amazon,
+itunes_amazon, fodors_zagats) covers only DeepMatcher's labelled candidate
+pairs, so an unlabelled true match a rule links is scored as a false positive
+and lower cuts are penalised -- the bias favours high-cut rules such as
+`evidence_12` and `posterior_099`. A labelled-pairs-only metric is a P4
+prerequisite before these datasets gate a row.
+
+**Held-out independence.** Not every held-out dataset is an independent check:
+`febrl1`/`febrl2` share the FEBRL generator with design's `febrl3`/`febrl4`, the
+eight `synth_*` variants share one generator, and `fodors_zagats` is
+near-saturated (F1 ~1.0, little room to show a regression). The genuinely
+independent real held-out sets are `abt_buy`, `walmart_amazon` and
+`itunes_amazon`.
+
 ## The gate
 
 `gate` diffs the current scorecard against the committed baseline
