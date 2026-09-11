@@ -14,8 +14,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   diagnostics, where the first match wins and no match keeps the default rule. A pinned
   `link_cut_rule`, an explicit `link_threshold`, a calibrated cutoff and posterior scoring all
   still win. A routed cut reports source `evidence_rule` and `cut_reason`
-  `routed by <row>: <reason>`. No row ships yet: a row reaches the table only by passing the
-  design and held-out link-cut gate.
+  `routed by <row>: <reason>`. It ships with 2 rows that passed the design and held-out
+  link-cut gate: `sparse_prior_binds`, `midpoint_binds_wide`.
 
 - **Probabilistic (FS) matchkeys can pin how the linear link cutoff is placed, as an
   evidence-bits rule instead of the fixed 0.50 midpoint.** `MatchkeyConfig.link_cut_rule`

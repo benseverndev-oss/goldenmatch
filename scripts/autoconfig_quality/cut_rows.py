@@ -13,23 +13,4 @@ from __future__ import annotations
 
 from goldenmatch.core.fs_cut_rules import CutRow
 
-CANDIDATES: tuple[CutRow, ...] = (
-    # A'. Design: dblp_acm +0.0918, synth_biblio_d02 +0.0000.
-    CutRow(
-        name="sparse_prior_binds",
-        rule="posterior_099",
-        reason="match rate under 0.004, the prior cutoff above the midpoint, at most 3 fields",
-        when=lambda d: (
-            d.proportion_matched < 0.004 and d.prior_bits > d.midpoint_bits and d.n_fields <= 3
-        ),
-    ),
-    # B. Design: musicbrainz_20k +0.2673, febrl3 +0.004, febrl4 +0.0002.
-    CutRow(
-        name="midpoint_binds_wide",
-        rule="evidence_5",
-        reason="match rate under 0.1, the midpoint cutoff above the prior, at least 5 fields",
-        when=lambda d: (
-            d.proportion_matched < 0.1 and d.midpoint_bits > d.prior_bits and d.n_fields >= 5
-        ),
-    ),
-)
+CANDIDATES: tuple[CutRow, ...] = ()

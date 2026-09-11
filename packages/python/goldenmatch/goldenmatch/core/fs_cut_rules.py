@@ -215,7 +215,26 @@ class CutRow:
 #: A row lands here only after passing the design AND held-out gate
 #: (``scripts/autoconfig_quality/cut_gate.py``); unshipped candidates live in
 #: ``scripts/autoconfig_quality/cut_rows.py``.
-ROWS: tuple[CutRow, ...] = ()
+ROWS: tuple[CutRow, ...] = (
+    # Gated on matrix run 34649964888: design PASS (dblp_acm +0.0918, synth_biblio_d02 +0.0000), held-out PASS.
+    CutRow(
+        name="sparse_prior_binds",
+        rule="posterior_099",
+        reason="match rate under 0.004, the prior cutoff above the midpoint, at most 3 fields",
+        when=lambda d: (
+            d.proportion_matched < 0.004 and d.prior_bits > d.midpoint_bits and d.n_fields <= 3
+        ),
+    ),
+    # Gated on matrix run 34649964888: design PASS (febrl3 +0.0038, febrl4 +0.0002, musicbrainz_20k +0.2673), held-out PASS.
+    CutRow(
+        name="midpoint_binds_wide",
+        rule="evidence_5",
+        reason="match rate under 0.1, the midpoint cutoff above the prior, at least 5 fields",
+        when=lambda d: (
+            d.proportion_matched < 0.1 and d.midpoint_bits > d.prior_bits and d.n_fields >= 5
+        ),
+    ),
+)
 
 
 def choose_cut_rule(
