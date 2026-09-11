@@ -1121,14 +1121,19 @@ def _fs_u_random_pairs(n_sample_pairs: int) -> int:
     so its ``u`` falls to the 1e-6 smoothing floor and its agreement weight explodes
     (dblp_acm: title and authors ~+25-28 bits, above their own exact levels). Splink
     samples 1,000,000 random pairs by default and recommends 1e7-1e9; GoldenMatch's
-    Spark EM uses ``u_max_pairs=1_000_000``. Measurement lever: unset is byte-identical.
+    Spark EM uses ``u_max_pairs=1_000_000``. Measurement lever: unset, ``0`` or any
+    non-positive value is byte-identical -- ``0`` is the lever gate's OFF arm, and reading
+    it as a 10-pair sample once turned the gate's baseline into a broken model.
     """
     raw = os.environ.get("GOLDENMATCH_FS_U_PAIRS", "").strip()
     if raw:
         try:
-            return max(10, int(raw))
+            value = int(raw)
         except ValueError:
             logger.warning("GOLDENMATCH_FS_U_PAIRS=%r is not an integer; using the default", raw)
+        else:
+            if value > 0:
+                return max(10, value)
     return min(n_sample_pairs, 5000)
 
 

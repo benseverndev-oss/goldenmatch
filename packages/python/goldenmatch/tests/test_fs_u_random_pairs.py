@@ -28,6 +28,15 @@ def test_override_has_a_floor(monkeypatch):
     assert _fs_u_random_pairs(10_000) == 10
 
 
+def test_zero_is_the_default_not_a_tiny_sample(monkeypatch):
+    """KNOWN-POSITIVE: fs-lever-gate runs its OFF arm with the lever set to "0". Read as
+    max(10, 0) = 10 random pairs, that arm scored household_hardneg F1 0.2579 and
+    dblp_acm 0.8323 instead of the real default's 1.0000 and 0.3758 (run 34546541515)."""
+    for off in ("0", "-5"):
+        monkeypatch.setenv("GOLDENMATCH_FS_U_PAIRS", off)
+        assert _fs_u_random_pairs(10_000) == 5000
+
+
 def test_non_integer_falls_back_to_default(monkeypatch):
     monkeypatch.setenv("GOLDENMATCH_FS_U_PAIRS", "lots")
     assert _fs_u_random_pairs(10_000) == 5000
