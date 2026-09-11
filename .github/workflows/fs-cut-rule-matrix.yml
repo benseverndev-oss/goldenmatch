@@ -21,6 +21,8 @@ on:
       - "scripts/autoconfig_quality/corpus.py"
       - "scripts/autoconfig_quality/cut_gate.py"
       - "scripts/autoconfig_quality/cut_rows.py"
+      - "scripts/autoconfig_quality/datasets.py"
+      - "scripts/bench_er_headtohead/datasets.py"
       - "packages/python/goldenmatch/goldenmatch/core/fs_cut_rules.py"
       - ".github/workflows/fs-cut-rule-matrix.yml"
   schedule:
@@ -68,6 +70,7 @@ jobs:
           uv run python -m pytest -q
           scripts/autoconfig_quality/tests/test_corpus.py
           scripts/autoconfig_quality/tests/test_rule_sweep.py
+          scripts/autoconfig_quality/tests/test_cut_gate.py
           scripts/bench_er_headtohead/test_heldout_loaders.py
           scripts/bench_er_headtohead/test_design_loaders.py
           scripts/bench_er_headtohead/test_generate_fixture_corruption.py
@@ -211,13 +214,13 @@ jobs:
             cat cut-rule-matrix.md
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Gate the candidate routing rows (report only)
-        if: always() && hashFiles('cut-rule-matrix.json') != '' && hashFiles('cut-rule-matrix-holdout.json') != ''
+        if: always() && (github.event_name != 'workflow_dispatch' || inputs.corpus == 'all') && hashFiles('cut-rule-matrix.json') != '' && hashFiles('cut-rule-matrix-holdout.json') != ''
         run: |
           uv run python -m scripts.autoconfig_quality.cut_gate \
             --design cut-rule-matrix.json --holdout cut-rule-matrix-holdout.json \
             --table candidates --out cut-rule-gate-candidates.md --report-only
       - name: Gate the shipped routing table
-        if: always() && hashFiles('cut-rule-matrix.json') != '' && hashFiles('cut-rule-matrix-holdout.json') != ''
+        if: always() && (github.event_name != 'workflow_dispatch' || inputs.corpus == 'all') && hashFiles('cut-rule-matrix.json') != '' && hashFiles('cut-rule-matrix-holdout.json') != ''
         run: |
           uv run python -m scripts.autoconfig_quality.cut_gate \
             --design cut-rule-matrix.json --holdout cut-rule-matrix-holdout.json \
