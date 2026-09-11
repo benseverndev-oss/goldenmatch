@@ -46,6 +46,9 @@ CUT_ENV_VARS = (
     "GOLDENMATCH_FS_CALIBRATED",
     "GOLDENMATCH_FS_EVIDENCE_CUT",
     "GOLDENMATCH_FS_CALIBRATE_THRESHOLD",
+    # Passes a pair_filter to load_or_train_em, which stops model_path from
+    # saving, so arms would retrain their own model instead of sharing one.
+    "GOLDENMATCH_FS_SIGNATURE_PRUNE",
 )
 
 
@@ -86,14 +89,27 @@ def pin_rule(cfg, rule: str | None, model_dir: Path):
     return cfg.model_copy(update={"matchkeys": pinned, "match_settings": None})
 
 
-def arm_record(arm: str, summary: dict, stats: dict | None, partition: tuple[int, str]) -> dict:
+def arm_record(
+    arm: str,
+    summary: dict,
+    stats: dict | None,
+    partition: tuple[int, str],
+    expected_matchkeys: list[str],
+) -> dict:
     """One arm's result from ``evaluate_clusters(...).summary()`` and the run's stats.
 
-    ``applied``: every probabilistic matchkey's cut came from the pinned rule.
+    ``expected_matchkeys``: the probabilistic matchkey names ``pin_rule`` pinned.
+    Every one of them must show up in the ``fs_link_thresholds`` report or the arm
+    is voided -- a matchkey silently missing from the report is not distinguishable
+    from one that never ran.
 
-    ``voided``: the arm measured something other than what it claims, and the sweep
-    fails. That happens when the run reported no FS cutoff at all, or when an
-    earlier precedence step overrode a pin (``cut_reason`` starts ``link_cut_rule=``).
+    ``applied``: every expected matchkey is present and its cut came from the
+    pinned rule.
+
+    ``voided``: the arm measured something other than what it claims, and the
+    sweep fails. That happens when the run reported no FS cutoff at all, an
+    expected matchkey is missing from the report, or when an earlier precedence
+    step overrode a pin (``cut_reason`` starts ``link_cut_rule=``).
 
     A rule this model cannot compute is not applied but not voided: for example
     ``otsu`` on 50 or fewer training pairs, which falls back to the default rule. The
@@ -106,11 +122,18 @@ def arm_record(arm: str, summary: dict, stats: dict | None, partition: tuple[int
         for name, entry in sorted(report.items())
     }
     rule = None if arm in ("default", BASELINE_ARM) else arm
-    voided = not per_mk or any(
-        (entry["cut_reason"] or "").startswith("link_cut_rule=") for entry in per_mk.values()
+    missing_expected = [name for name in expected_matchkeys if name not in per_mk]
+    voided = (
+        not per_mk
+        or bool(missing_expected)
+        or any(
+            (entry["cut_reason"] or "").startswith("link_cut_rule=") for entry in per_mk.values()
+        )
     )
-    applied = bool(per_mk) and (
-        rule is None or all(entry["cut_rule"] == rule for entry in per_mk.values())
+    applied = (
+        bool(per_mk)
+        and not missing_expected
+        and (rule is None or all(per_mk[name]["cut_rule"] == rule for name in expected_matchkeys))
     )
     pairs, digest = partition
     return {
@@ -125,43 +148,80 @@ def arm_record(arm: str, summary: dict, stats: dict | None, partition: tuple[int
     }
 
 
+def _model_hashes(model_dir: Path) -> dict[str, str]:
+    """``{file name: sha256 hex of bytes}`` for every saved model in ``model_dir``."""
+    import hashlib
+
+    return {
+        p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(model_dir.glob("*.json"))
+    }
+
+
 def sweep_frame(df, gt: set, model_dir: Path) -> dict:
     """Run every arm on one labelled frame. ``model_dir`` must start empty."""
+    import time
+
     import goldenmatch
     from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
     from goldenmatch.core.evaluate import evaluate_clusters
 
     from scripts.bench_er_headtohead.ab_lever import _partition_fingerprint
 
+    start = time.perf_counter()
     base = auto_configure_probabilistic_df(df)
+    probabilistic_matchkeys = sorted(
+        mk.name for mk in base.get_matchkeys() if mk.type == "probabilistic"
+    )
     arms: dict[str, dict] = {}
     diagnostics: dict[str, dict | None] = {}
     models_saved: list[str] = []
+    hashes_after_default: dict[str, str] = {}
     for arm in ARMS:
         rule = None if arm in ("default", BASELINE_ARM) else arm
         result = goldenmatch.dedupe_df(df, config=pin_rule(base, rule, model_dir))
         summary = evaluate_clusters(result.clusters, gt).summary()
-        arms[arm] = arm_record(arm, summary, result.stats, _partition_fingerprint(result.clusters))
+        arms[arm] = arm_record(
+            arm,
+            summary,
+            result.stats,
+            _partition_fingerprint(result.clusters),
+            probabilistic_matchkeys,
+        )
         if arm == "default":
             models_saved = sorted(p.name for p in model_dir.glob("*.json"))
+            hashes_after_default = _model_hashes(model_dir)
         if arm == BASELINE_ARM:
             report = (result.stats or {}).get("fs_link_thresholds") or {}
             diagnostics = {
                 name: entry.get("cut_diagnostics") for name, entry in sorted(report.items())
             }
+    hashes_after_last = _model_hashes(model_dir)
     baseline = arms[BASELINE_ARM]["f1"]
+    model_complete = bool(models_saved) and sorted(models_saved) == sorted(
+        f"{name}.json" for name in probabilistic_matchkeys
+    )
+    model_stable = (
+        bool(hashes_after_default)
+        and bool(hashes_after_last)
+        and hashes_after_default == hashes_after_last
+    )
     return {
         "rows": df.height,
         "gt_pairs": len(gt),
+        "probabilistic_matchkeys": probabilistic_matchkeys,
         "arms": arms,
         "cut_diagnostics": diagnostics,
         "models_saved": models_saved,
+        "model_complete": model_complete,
+        "model_stable": model_stable,
+        "reload_partition_match": arms["default"]["digest"] == arms[BASELINE_ARM]["digest"],
         "model_reload_delta": float(baseline - arms["default"]["f1"]),
         "below_default": sorted(
             rule
             for rule in CUT_RULES
             if arms[rule]["applied"] and arms[rule]["f1"] < baseline - TOLERANCE
         ),
+        "wall_seconds": round(time.perf_counter() - start, 1),
     }
 
 
@@ -230,53 +290,61 @@ def run(argv: list[str]) -> int:
     card = build_scorecard(results, native_version=native_version, git_sha=git_sha, skipped=skipped)
     card["meta"]["cut_env_overrides"] = overrides
     card["meta"]["tolerance"] = TOLERANCE
+    card["meta"]["goldenmatch_env"] = {
+        k: v for k, v in sorted(os.environ.items()) if k.startswith("GOLDENMATCH_")
+    }
+    card["meta"]["pythonhashseed"] = os.environ.get("PYTHONHASHSEED")
+
+    required = [d.strip() for d in args.require_datasets.split(",") if d.strip()]
+    failures: list[str] = []
+    for name in required:
+        if name not in results:
+            failures.append(f"{name}: required dataset not measured")
+    for name, record in results.items():
+        for arm, rec in record["arms"].items():
+            if rec["voided"]:
+                failures.append(f"{name}:{arm} voided")
+        if not record.get("model_complete"):
+            failures.append(f"{name}: shared EM model not saved for every probabilistic matchkey")
+        if not record.get("model_stable"):
+            failures.append(f"{name}: shared EM model changed between arms")
+    if not results:
+        failures.append("0 datasets measured")
+    failures.sort()
+
+    card["meta"]["failures"] = failures
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(dumps(card) + "\n", encoding="utf-8")
 
-    required = [d.strip() for d in args.require_datasets.split(",") if d.strip()]
-    missing = [d for d in required if d not in results]
-    voided = sorted(
-        f"{name}:{arm}"
-        for name, record in results.items()
-        for arm, rec in record["arms"].items()
-        if rec["voided"]
-    )
     print(
         f"[cut-rules] measured {len(results)}, skipped {len(skipped)} -> {args.out}",
         file=sys.stderr,
     )
-    if not results:
-        print(
-            "FAIL: 0 datasets measured; a sweep that measures nothing cannot pass", file=sys.stderr
-        )
-        return 1
-    if missing:
-        print(f"FAIL: required datasets not measured: {missing}", file=sys.stderr)
-        return 1
-    if voided:
-        print(
-            f"FAIL: voided arms (a pin was overridden or no FS cutoff reported): {voided}",
-            file=sys.stderr,
-        )
-        return 1
-    return 0
+    for failure in failures:
+        print(f"FAIL: {failure}", file=sys.stderr)
+    return 1 if failures else 0
 
 
-def merge_cards(cards: list[dict]) -> dict:
+def merge_cards(cards: list[dict], expected: list[str] | None = None) -> dict:
     """One scorecard from per-dataset sweep scorecards (the CI matrix writes one per job)."""
     from scripts.autoconfig_quality.scorecard import build_scorecard
+
+    if not cards:
+        raise ValueError("no sweep results to merge")
 
     datasets: dict[str, dict] = {}
     skipped: dict[str, str] = {}
     overrides: dict[str, str] = {}
     shas: set[str] = set()
     natives: set[str] = set()
+    failures: list[str] = []
     for card in cards:
         meta = card["meta"]
         shas.add(meta["git_sha"])
         natives.add(meta["native_version"])
         skipped.update(meta.get("datasets_skipped") or {})
         overrides.update(meta.get("cut_env_overrides") or {})
+        failures.extend(meta.get("failures") or [])
         for name, record in card["datasets"].items():
             if name in datasets:
                 raise ValueError(f"dataset {name!r} appears in two sweep results")
@@ -291,12 +359,16 @@ def merge_cards(cards: list[dict]) -> dict:
     )
     merged["meta"]["cut_env_overrides"] = overrides
     merged["meta"]["tolerance"] = TOLERANCE
+    merged["meta"]["failures"] = sorted(failures)
+    merged["meta"]["missing"] = sorted(set(expected) - set(datasets)) if expected else []
     return merged
 
 
 def best_rule(record: dict) -> tuple[str, float]:
     """The highest-F1 applied rule arm; ties go to the earlier ``CUT_RULES`` name.
-    Falls back to the baseline arm when no rule applied."""
+    Falls back to the baseline arm (``BASELINE_ARM``) when no rule applied --
+    callers rendering this for humans should treat that sentinel as "no rule
+    applied", not as a real rule name."""
     best: tuple[str, float] | None = None
     for rule in CUT_RULES:
         arm = record["arms"][rule]
@@ -305,27 +377,85 @@ def best_rule(record: dict) -> tuple[str, float]:
     return best or (BASELINE_ARM, record["arms"][BASELINE_ARM]["f1"])
 
 
-def render_markdown(card: dict) -> str:
-    """One table row per dataset, design set first, for the CI step summary."""
-    order = {"design": 0, "holdout": 1}
-    lines = [
-        "| dataset | corpus | default F1 | best rule | best F1 | Δ best | below default |",
-        "|---|---|---|---|---|---|---|",
-    ]
-    names = sorted(
-        card["datasets"],
-        key=lambda n: (order.get(card["datasets"][n].get("corpus"), 2), n),
+def _not_applied_rules(record: dict) -> list[str]:
+    """Rules whose arm neither applied nor voided (e.g. otsu falling back
+    on too few training pairs)."""
+    return sorted(
+        rule
+        for rule in CUT_RULES
+        if not record["arms"][rule]["applied"] and not record["arms"][rule]["voided"]
     )
-    for name in names:
+
+
+def render_markdown(card: dict, holdout_card: dict | None = None) -> str:
+    """The design table (full detail), and -- when ``holdout_card`` is given -- the
+    held-out gate view (counts only, no rule names or per-rule F1: the held-out set
+    stays out of view of row-writing). Missing datasets (``card["meta"]["missing"]``)
+    render as an all-MISSING row in whichever table matches their corpus."""
+    from scripts.autoconfig_quality.corpus import corpus_of
+
+    missing = sorted(card["meta"].get("missing") or [])
+    design_missing = [n for n in missing if corpus_of(n) != "holdout"]
+    holdout_missing = [n for n in missing if corpus_of(n) == "holdout"]
+
+    lines = [
+        "### Design",
+        "",
+        "| dataset | default F1 | best rule | best F1 | Δ best | below default"
+        " | not applied | reload digest |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for name in sorted(card["datasets"]):
         record = card["datasets"][name]
         baseline = record["arms"][BASELINE_ARM]["f1"]
         rule, f1 = best_rule(record)
+        label = "no rule applied" if rule == BASELINE_ARM else rule
         below = ", ".join(record.get("below_default") or []) or "none"
+        not_applied = ", ".join(_not_applied_rules(record)) or "none"
+        digest = "same" if record.get("reload_partition_match", True) else "DIFFERS"
         lines.append(
-            f"| {name} | {record.get('corpus', '')} | {baseline:.4f} | {rule} | {f1:.4f} "
-            f"| {f1 - baseline:+.4f} | {below} |"
+            f"| {name} | {baseline:.4f} | {label} | {f1:.4f} "
+            f"| {f1 - baseline:+.4f} | {below} | {not_applied} | {digest} |"
         )
-    return "\n".join(lines) + "\n"
+    for name in design_missing:
+        lines.append(
+            f"| {name} | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING |"
+        )
+
+    out = "\n".join(lines) + "\n"
+
+    if holdout_card is not None:
+        h_lines = [
+            "",
+            "### Held-out (gate view)",
+            "",
+            "| dataset | default F1 | rules below default | rules not applied |",
+            "|---|---|---|---|",
+        ]
+        for name in sorted(holdout_card["datasets"]):
+            record = holdout_card["datasets"][name]
+            baseline = record["arms"][BASELINE_ARM]["f1"]
+            below_n = len(record.get("below_default") or [])
+            not_applied_n = len(_not_applied_rules(record))
+            h_lines.append(f"| {name} | {baseline:.4f} | {below_n} | {not_applied_n} |")
+        for name in holdout_missing:
+            h_lines.append(f"| {name} | MISSING | MISSING | MISSING |")
+        out += "\n".join(h_lines) + "\n"
+
+    failures = card["meta"].get("failures") or []
+    if failures:
+        out += "\n**Failures**\n\n" + "\n".join(f"- {f}" for f in failures) + "\n"
+
+    return out
+
+
+def _split_by_corpus(card: dict) -> tuple[dict, dict]:
+    """``card``'s datasets split into (design + unlisted, holdout), same meta."""
+    from scripts.autoconfig_quality.corpus import corpus_of
+
+    design = {n: r for n, r in card["datasets"].items() if corpus_of(n) != "holdout"}
+    holdout = {n: r for n, r in card["datasets"].items() if corpus_of(n) == "holdout"}
+    return {"meta": card["meta"], "datasets": design}, {"meta": card["meta"], "datasets": holdout}
 
 
 def merge(argv: list[str]) -> int:
@@ -335,15 +465,41 @@ def merge(argv: list[str]) -> int:
 
     ap = argparse.ArgumentParser(description="Merge per-dataset link-cut sweep scorecards.")
     ap.add_argument("files", nargs="+", type=Path)
-    ap.add_argument("--out", required=True, type=Path)
+    ap.add_argument("--out", required=True, type=Path, help="design + unlisted datasets only")
+    ap.add_argument("--holdout-out", type=Path, default=None, help="held-out datasets, gate input")
     ap.add_argument("--summary-md", type=Path, default=None)
+    ap.add_argument("--expect-json", default=None, help="JSON array of expected dataset names")
     args = ap.parse_args(argv)
-    card = merge_cards([json.loads(p.read_text(encoding="utf-8")) for p in args.files])
+
+    expected = json.loads(args.expect_json) if args.expect_json else None
+    card = merge_cards(
+        [json.loads(p.read_text(encoding="utf-8")) for p in args.files], expected=expected
+    )
+    design_card, holdout_card = _split_by_corpus(card)
+
+    if holdout_card["datasets"] and args.holdout_out is None:
+        print(
+            "FAIL: merged results include held-out datasets but --holdout-out was not given",
+            file=sys.stderr,
+        )
+        return 2
+
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(dumps(card) + "\n", encoding="utf-8")
+    args.out.write_text(dumps(design_card) + "\n", encoding="utf-8")
+    if args.holdout_out is not None:
+        args.holdout_out.parent.mkdir(parents=True, exist_ok=True)
+        args.holdout_out.write_text(dumps(holdout_card) + "\n", encoding="utf-8")
     if args.summary_md is not None:
-        args.summary_md.write_text(render_markdown(card), encoding="utf-8")
-    return 0
+        rendered = render_markdown(design_card, holdout_card if holdout_card["datasets"] else None)
+        args.summary_md.write_text(rendered, encoding="utf-8")
+
+    failures = card["meta"].get("failures") or []
+    missing = card["meta"].get("missing") or []
+    for failure in failures:
+        print(f"FAIL: {failure}", file=sys.stderr)
+    for name in missing:
+        print(f"FAIL: missing dataset {name}", file=sys.stderr)
+    return 1 if (failures or missing) else 0
 
 
 def main(argv: list[str] | None = None) -> int:
