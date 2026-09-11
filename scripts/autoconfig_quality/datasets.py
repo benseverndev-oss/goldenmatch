@@ -244,6 +244,36 @@ def _from_headtohead(name: str) -> tuple[pl.DataFrame, set] | None:
     return _records_truth_to_frame(records, truth)
 
 
+def labelled_pairs(name: str) -> dict[tuple[int, int], bool] | None:
+    """For a DeepMatcher/Magellan dataset: every labelled candidate pair, in this registry's
+    row-index space (the order ``_records_truth_to_frame`` keeps), mapped to whether it is a
+    match.
+
+    None for any other dataset, or when the data is absent. Magellan truth covers only the
+    labelled candidate positives, so plain F1 counts an unlabelled true match a rule links as a
+    false positive; scoring only these pairs removes that bias (spec P4). A pair labelled in
+    more than one split is a match when any split says so, as the truth builder counts it."""
+    from scripts.bench_er_headtohead import datasets as headtohead
+
+    subdir = headtohead.MAGELLAN_SUBDIRS.get(name)
+    if subdir is None:
+        return None
+    try:
+        records, _truth = headtohead.load_dataset(name)
+        labels = headtohead.magellan_labels(subdir)
+    except headtohead.DatasetUnavailable:
+        return None
+    row_of = {str(rid): row for row, rid in enumerate(records.column("record_id").to_pylist())}
+    pairs: dict[tuple[int, int], bool] = {}
+    for left, right, is_match in labels:
+        i, j = row_of.get(left), row_of.get(right)
+        if i is None or j is None or i == j:
+            continue
+        key = (min(i, j), max(i, j))
+        pairs[key] = pairs.get(key, False) or is_match
+    return pairs
+
+
 def _febrl4() -> tuple[pl.DataFrame, set] | None:
     """recordlinkage's Febrl4 person LINKAGE set (5k originals + 5k duplicates,
     1:1 links). None when recordlinkage isn't installed."""
