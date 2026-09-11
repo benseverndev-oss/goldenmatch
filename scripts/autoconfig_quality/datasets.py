@@ -118,6 +118,28 @@ def _ncvr_synthetic() -> tuple[pl.DataFrame, set]:
     return df, _pairs_to_row_index(df, "ncid", ncid_pairs)
 
 
+def _household_hardneg_s7() -> tuple[pl.DataFrame, set]:
+    """DESIGN seed variant for link-cut routing (P3): household_hardneg at seed 7."""
+    from scripts.autoconfig_quality.anchors import gen_household_hardneg
+
+    return gen_household_hardneg(n_households=350, seed=7)
+
+
+def _cotenant_hardneg_s7() -> tuple[pl.DataFrame, set]:
+    """DESIGN seed variant for link-cut routing (P3): cotenant_hardneg at seed 7."""
+    from scripts.autoconfig_quality.anchors import gen_cotenant_hardneg
+
+    return gen_cotenant_hardneg(n_addresses=300, seed=7)
+
+
+def _ncvr_synthetic_s7() -> tuple[pl.DataFrame, set]:
+    """DESIGN seed variant for link-cut routing (P3): ncvr_synthetic at seed 7."""
+    from scripts.dqbench_adapters.ncvr import build_ncvr_synthetic_df_and_gt
+
+    df, ncid_pairs = build_ncvr_synthetic_df_and_gt(seed=7)
+    return df, _pairs_to_row_index(df, "ncid", ncid_pairs)
+
+
 def _ncvr_real() -> tuple[pl.DataFrame, set] | None:
     """Real NCVR sample (gitignored PII, local-only). None when the file is absent."""
     from scripts.dqbench_adapters.ncvr import build_ncvr_df_and_gt

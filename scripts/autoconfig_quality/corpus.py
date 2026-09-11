@@ -27,6 +27,16 @@ DESIGN: tuple[str, ...] = (
     "dblp_acm",
     "dblp_scholar",
     "amazon_google",
+    "musicbrainz_20k",
+    "geo_settlements",
+    "affiliations",
+    "synth_biblio_d02",
+    "synth_person_d02",
+    "synth_product_d02",
+    "synth_product_d20",
+    "ncvr_synthetic_s7",
+    "household_hardneg_s7",
+    "cotenant_hardneg_s7",
 )
 
 HOLDOUT: tuple[str, ...] = (

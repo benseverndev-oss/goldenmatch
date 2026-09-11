@@ -125,6 +125,9 @@ Measurement only: it writes no routing row. Large datasets run in the
 | Corpus | Datasets | Source and licence |
 |---|---|---|
 | design | person, household_hardneg, cotenant_hardneg, febrl3, febrl4, ncvr_synthetic, ncvr_real (local only), historical_50k, dblp_acm, dblp_scholar, amazon_google | as listed above |
+| design | musicbrainz_20k, geo_settlements, affiliations | Leipzig clustering trio, CC-BY: Database Group Leipzig; Saeedi, Peukert & Rahm, ADBIS 2017 |
+| design | synth_biblio_d02, synth_person_d02, synth_product_d02, synth_product_d20 | `generate_fixture.py`, seed 7, corruption 1.0, dupe rate 0.02/0.20 |
+| design | ncvr_synthetic_s7, household_hardneg_s7, cotenant_hardneg_s7 | seed-7 variants of the same generators as their default-seed design entries |
 | holdout | abt_buy | Leipzig, CC-BY: Database Group Leipzig; Köpcke, Thor & Rahm, VLDB 2010 |
 | holdout | walmart_amazon, itunes_amazon, fodors_zagats | Magellan/DeepMatcher, cite-only, fetched for evaluation and never committed: Konda et al. 2016; Mudgal et al. 2018 |
 | holdout | febrl1, febrl2 | FEBRL raw CSVs from recordlinkage, ANU open-source licence: Christen 2008 |
@@ -151,7 +154,9 @@ prerequisite before these datasets gate a row.
 eight `synth_*` variants share one generator, and `fodors_zagats` is
 near-saturated (F1 ~1.0, little room to show a regression). The genuinely
 independent real held-out sets are `abt_buy`, `walmart_amazon` and
-`itunes_amazon`.
+`itunes_amazon`. The design synthetic variants (`synth_*_d02`, `synth_product_d20`)
+share a generator with the held-out synthetic variants, so they are weaker
+evidence than the real datasets.
 
 ## The gate
 

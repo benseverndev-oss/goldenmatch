@@ -65,6 +65,7 @@ jobs:
           scripts/autoconfig_quality/tests/test_corpus.py
           scripts/autoconfig_quality/tests/test_rule_sweep.py
           scripts/bench_er_headtohead/test_heldout_loaders.py
+          scripts/bench_er_headtohead/test_design_loaders.py
           scripts/bench_er_headtohead/test_generate_fixture_corruption.py
       - name: List the corpus
         id: list
@@ -102,6 +103,7 @@ jobs:
             local name="$1" url="$2"; shift 2
             local dest="$BASE/$name"
             mkdir -p "$dest"
+            mkdir -p "$(dirname "/tmp/$name")"
             if curl -fsSL --retry 3 -o "/tmp/$name.zip" "$url"; then
               mkdir -p "/tmp/$name"
               unzip -o -q "/tmp/$name.zip" -d "/tmp/$name" || echo "::warning::$name: unzip failed"
@@ -135,6 +137,19 @@ jobs:
               "https://raw.githubusercontent.com/J535D165/recordlinkage/master/recordlinkage/datasets/febrl/$f.csv" \
               || echo "::warning::FEBRL $f download failed"
           done
+          # Leipzig clustering trio (DESIGN, P3 widening): CC-BY, Database Group
+          # Leipzig; Saeedi, Peukert & Rahm, ADBIS 2017.
+          LC="$BASE/Leipzig-Clustering"
+          mkdir -p "$LC/MusicBrainz"
+          curl -fsSL --retry 3 -o "$LC/MusicBrainz/musicbrainz-20-A01.csv" \
+            "https://dbs.uni-leipzig.de/files/datasets/saeedi/musicbrainz-20-A01.csv.dapo" \
+            || echo "::warning::MusicBrainz musicbrainz-20-A01.csv download failed"
+          fetch_zip Leipzig-Clustering/GeoSettlements \
+            "https://dbs.uni-leipzig.de/files/datasets/geographicalSettelments.zip" \
+            settlements.json "combinedSettlements(PerfectMatch).json"
+          fetch_zip Leipzig-Clustering/Affiliations \
+            "https://dbs.uni-leipzig.de/files/datasets/affiliationstrings.zip" \
+            affiliationstrings_ids.csv affiliationstrings_mapping.csv
       - name: Sweep every link-cut rule
         env:
           DATASET: ${{ matrix.dataset }}

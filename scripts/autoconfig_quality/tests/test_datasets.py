@@ -113,3 +113,27 @@ def test_historical_50k_registered_full_scan():
 
     h = next(d for d in REGISTRY if d.name == "historical_50k")
     assert h.full_scan is True
+
+
+@pytest.mark.parametrize(
+    ("s7_name", "default_name"),
+    [
+        ("_household_hardneg_s7", "_household_hardneg"),
+        ("_cotenant_hardneg_s7", "_cotenant_hardneg"),
+        ("_ncvr_synthetic_s7", "_ncvr_synthetic"),
+    ],
+)
+def test_s7_seed_variant_loads_and_differs_from_default_seed(s7_name, default_name):
+    """DESIGN seed variants (link-cut routing P3): a non-empty frame, non-empty
+    row-index truth, and a different frame than the default-seed loader."""
+    import scripts.autoconfig_quality.datasets as ds
+
+    s7_fn = getattr(ds, s7_name)
+    default_fn = getattr(ds, default_name)
+
+    s7_df, s7_gt = s7_fn()
+    assert s7_df.height > 0
+    assert s7_gt and all(0 <= a < b < s7_df.height for a, b in s7_gt)
+
+    default_df, _ = default_fn()
+    assert not s7_df.equals(default_df)
