@@ -262,8 +262,95 @@ def run(argv: list[str]) -> int:
     return 0
 
 
+def merge_cards(cards: list[dict]) -> dict:
+    """One scorecard from per-dataset sweep scorecards (the CI matrix writes one per job)."""
+    from scripts.autoconfig_quality.scorecard import build_scorecard
+
+    datasets: dict[str, dict] = {}
+    skipped: dict[str, str] = {}
+    overrides: dict[str, str] = {}
+    shas: set[str] = set()
+    natives: set[str] = set()
+    for card in cards:
+        meta = card["meta"]
+        shas.add(meta["git_sha"])
+        natives.add(meta["native_version"])
+        skipped.update(meta.get("datasets_skipped") or {})
+        overrides.update(meta.get("cut_env_overrides") or {})
+        for name, record in card["datasets"].items():
+            if name in datasets:
+                raise ValueError(f"dataset {name!r} appears in two sweep results")
+            datasets[name] = record
+    if len(shas) > 1:
+        raise ValueError(f"sweep results come from different commits: {sorted(shas)}")
+    merged = build_scorecard(
+        datasets,
+        native_version=",".join(sorted(natives)),
+        git_sha=next(iter(shas), "unknown"),
+        skipped={name: why for name, why in skipped.items() if name not in datasets},
+    )
+    merged["meta"]["cut_env_overrides"] = overrides
+    merged["meta"]["tolerance"] = TOLERANCE
+    return merged
+
+
+def best_rule(record: dict) -> tuple[str, float]:
+    """The highest-F1 applied rule arm; ties go to the earlier ``CUT_RULES`` name.
+    Falls back to the baseline arm when no rule applied."""
+    best: tuple[str, float] | None = None
+    for rule in CUT_RULES:
+        arm = record["arms"][rule]
+        if arm["applied"] and (best is None or arm["f1"] > best[1]):
+            best = (rule, arm["f1"])
+    return best or (BASELINE_ARM, record["arms"][BASELINE_ARM]["f1"])
+
+
+def render_markdown(card: dict) -> str:
+    """One table row per dataset, design set first, for the CI step summary."""
+    order = {"design": 0, "holdout": 1}
+    lines = [
+        "| dataset | corpus | default F1 | best rule | best F1 | Δ best | below default |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    names = sorted(
+        card["datasets"],
+        key=lambda n: (order.get(card["datasets"][n].get("corpus"), 2), n),
+    )
+    for name in names:
+        record = card["datasets"][name]
+        baseline = record["arms"][BASELINE_ARM]["f1"]
+        rule, f1 = best_rule(record)
+        below = ", ".join(record.get("below_default") or []) or "none"
+        lines.append(
+            f"| {name} | {record.get('corpus', '')} | {baseline:.4f} | {rule} | {f1:.4f} "
+            f"| {f1 - baseline:+.4f} | {below} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def merge(argv: list[str]) -> int:
+    import json
+
+    from scripts.autoconfig_quality.scorecard import dumps
+
+    ap = argparse.ArgumentParser(description="Merge per-dataset link-cut sweep scorecards.")
+    ap.add_argument("files", nargs="+", type=Path)
+    ap.add_argument("--out", required=True, type=Path)
+    ap.add_argument("--summary-md", type=Path, default=None)
+    args = ap.parse_args(argv)
+    card = merge_cards([json.loads(p.read_text(encoding="utf-8")) for p in args.files])
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(dumps(card) + "\n", encoding="utf-8")
+    if args.summary_md is not None:
+        args.summary_md.write_text(render_markdown(card), encoding="utf-8")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
-    return run(sys.argv[1:] if argv is None else argv)
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "merge":
+        return merge(argv[1:])
+    return run(argv)
 
 
 if __name__ == "__main__":
