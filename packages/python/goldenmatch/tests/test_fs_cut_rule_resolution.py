@@ -149,7 +149,8 @@ def test_link_cut_report_is_silent_when_no_rule_was_asked_for(monkeypatch):
 
     _clear_cut_env(monkeypatch)
     monkeypatch.setenv("GOLDENMATCH_FS_LINEAR_CUT", "off")
-    assert link_cut_report(_mk(), _em()) == {"cut_rule": None, "cut_reason": None}
+    report = link_cut_report(_mk(), _em())
+    assert report["cut_rule"] is None and report["cut_reason"] is None
 
 
 def test_link_cut_report_says_why_a_requested_rule_did_not_apply(monkeypatch):
@@ -212,3 +213,16 @@ def test_dedupe_result_reports_the_cut_rule(monkeypatch):
     assert entry["cut_rule"] == "evidence_3"
     assert entry["cut_reason"] == "pinned by link_cut_rule"
     assert entry["source"] == LINK_THRESHOLD_EVIDENCE_RULE
+
+
+def test_link_cut_report_carries_diagnostics(monkeypatch):
+    from goldenmatch.core.probabilistic import link_cut_report
+
+    _clear_cut_env(monkeypatch)
+    report = link_cut_report(_mk(), _em())
+    assert report["cut_rule"] == "prior_mid"
+    assert report["cut_diagnostics"]["midpoint_bits"] == 2.0
+    assert report["cut_diagnostics"]["admitted_fraction"] is None
+    configured = link_cut_report(_mk(link_threshold=0.4), _em())
+    assert configured["cut_rule"] is None
+    assert configured["cut_diagnostics"]["midpoint_bits"] == 2.0

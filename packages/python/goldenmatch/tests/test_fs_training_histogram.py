@@ -82,3 +82,21 @@ def test_otsu_on_counts_equals_otsu_on_scores():
     scores = np.concatenate([rng.normal(0.2, 0.05, 500), rng.normal(0.8, 0.05, 200)]).clip(0, 1)
     counts, _ = np.histogram(scores, bins=100, range=(0.0, 1.0))
     assert _otsu_split_from_counts(counts) == _otsu_threshold(scores)
+
+
+def test_otsu_rule_equals_the_existing_calibrator(monkeypatch):
+    """Pinning `otsu` reproduces GOLDENMATCH_FS_CALIBRATE_THRESHOLD's cut."""
+    import math
+
+    from goldenmatch.core.fs_cut_rules import bits_to_normalized, otsu_bits, weight_envelope
+
+    monkeypatch.setenv("GOLDENMATCH_FS_CALIBRATE_THRESHOLD", "1")
+    monkeypatch.delenv("GOLDENMATCH_FS_CALIBRATED", raising=False)
+    df, mk, blocks = _blocked_fixture()
+    em = train_em(df, mk, n_sample_pairs=1000, max_iterations=10,
+                  blocks=blocks, blocking_fields=["zip"])
+    assert em.calibrated_link_threshold is not None, "fixture too small for the calibrator"
+    env = weight_envelope(mk, em)
+    assert math.isclose(
+        bits_to_normalized(otsu_bits(em, env), env), em.calibrated_link_threshold, abs_tol=1e-12
+    )
