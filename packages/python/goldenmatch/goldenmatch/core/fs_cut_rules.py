@@ -237,6 +237,10 @@ ROWS: tuple[CutRow, ...] = (
 )
 
 
+#: Prefix of every ``cut_reason`` the router writes; the link-cut sweep keys the routed arm on it.
+ROUTED_REASON_PREFIX = "routed by "
+
+
 def choose_cut_rule(
     diagnostics: CutDiagnostics | None, rows: Sequence[CutRow] | None = None
 ) -> tuple[str, str] | None:
@@ -250,5 +254,5 @@ def choose_cut_rule(
         return None
     for row in table:
         if row.when(diagnostics):
-            return row.rule, f"routed by {row.name}: {row.reason}"
+            return row.rule, f"{ROUTED_REASON_PREFIX}{row.name}: {row.reason}"
     return None

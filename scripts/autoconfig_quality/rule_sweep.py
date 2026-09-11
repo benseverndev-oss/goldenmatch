@@ -33,7 +33,7 @@ import tempfile  # noqa: E402
 from collections.abc import Callable  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-from goldenmatch.core.fs_cut_rules import CUT_RULES  # noqa: E402
+from goldenmatch.core.fs_cut_rules import CUT_RULES, ROUTED_REASON_PREFIX  # noqa: E402
 
 BASELINE_ARM = "default_loaded"
 #: link_cut_rule unset, GOLDENMATCH_FS_CUT_ROUTER on, model loaded: the shipped routing table
@@ -528,7 +528,9 @@ def routed_check(arms: dict[str, dict]) -> tuple[dict[str, str | None], bool | N
     if routed is None or routed.get("crashed") or routed.get("voided"):
         return {}, None
     rules = {
-        mk: entry["cut_rule"] if (entry.get("cut_reason") or "").startswith("routed by ") else None
+        mk: entry["cut_rule"]
+        if (entry.get("cut_reason") or "").startswith(ROUTED_REASON_PREFIX)
+        else None
         for mk, entry in routed["matchkeys"].items()
     }
     picked = set(rules.values())
