@@ -4596,76 +4596,109 @@ def _posterior_split(scores) -> float | None:
     return float(valley + 0.5 / _REFIT_BINS)
 
 
-_FS_LINEAR_CUT_RULES = ("prior", "prior_mid")
-
-
 _FS_LINEAR_CUT_DEFAULT = "prior_mid"
 _FS_LINEAR_CUT_OFF = ("off", "0", "false", "none", "midpoint")
 
 
 def _fs_linear_cut_rule() -> str | None:
-    """``GOLDENMATCH_FS_LINEAR_CUT``: ``prior_mid`` (default) or ``prior``.
+    """``GOLDENMATCH_FS_LINEAR_CUT``: the default link-cut rule for matchkeys that pin none.
 
-    ``off`` (or ``0``/``false``/``none``/``midpoint``) restores the fixed 0.50 midpoint cut.
-    An unrecognised value warns and keeps the default rather than silently reverting.
+    Any ``fs_cut_rules.CUT_RULES`` name; unset means ``prior_mid``. ``off`` (or
+    ``0``/``false``/``none``/``midpoint``) turns the rule step off, so the fixed 0.50 midpoint
+    cut applies and reports as a fallback. A matchkey that pins ``link_cut_rule="midpoint"``
+    is a chosen rule instead, and reports as one. An unrecognised value warns and keeps the
+    default rather than silently reverting.
     """
+    from goldenmatch.core.fs_cut_rules import CUT_RULES
+
     value = os.environ.get("GOLDENMATCH_FS_LINEAR_CUT", "").strip().lower()
     if not value:
         return _FS_LINEAR_CUT_DEFAULT
     if value in _FS_LINEAR_CUT_OFF:
         return None
-    if value in _FS_LINEAR_CUT_RULES:
+    if value in CUT_RULES:
         return value
     logger.warning(
         "GOLDENMATCH_FS_LINEAR_CUT=%r is not one of %s or off; using %s",
-        value, "/".join(_FS_LINEAR_CUT_RULES), _FS_LINEAR_CUT_DEFAULT,
+        value, "/".join(CUT_RULES), _FS_LINEAR_CUT_DEFAULT,
     )
     return _FS_LINEAR_CUT_DEFAULT
+
+
+@dataclass(frozen=True)
+class ResolvedCut:
+    """The linear link cut a rule placed: which rule, why, and where."""
+
+    rule: str
+    reason: str
+    bits: float
+    normalized: float
+
+
+def _fs_resolved_cut(
+    mk: MatchkeyConfig, em_result: EMResult, calibrated: bool
+) -> ResolvedCut | None:
+    """The linear link cut placed by rule, or None when no rule applies.
+
+    Callers check an explicit ``mk.link_threshold`` and an EM-calibrated cutoff first. Within
+    the rule step, a pinned ``mk.link_cut_rule`` beats the ``GOLDENMATCH_FS_LINEAR_CUT``
+    default. A pinned rule this model cannot supply (``otsu`` without a training histogram)
+    falls back to the default rule, and the reason says so.
+
+    Returns None in posterior mode (the score is a probability, not the linear scale), when
+    the model has no usable weights, or when the default is off and nothing pinned is
+    computable.
+    Spec: docs/superpowers/specs/2026-09-11-fs-cut-rule-routing-design.md.
+    """
+    from goldenmatch.core.fs_cut_rules import bits_to_normalized, rule_bits, weight_envelope
+
+    if calibrated:
+        return None
+    envelope = weight_envelope(mk, em_result)
+    if envelope is None or getattr(em_result, "proportion_matched", None) is None:
+        return None
+    candidates: list[tuple[str, str]] = []
+    pinned = getattr(mk, "link_cut_rule", None)
+    if pinned:
+        candidates.append((pinned, "pinned by link_cut_rule"))
+    default = _fs_linear_cut_rule()
+    if default is not None and default != pinned:
+        candidates.append((default, "default rule"))
+    note = ""
+    for rule, reason in candidates:
+        bits = rule_bits(rule, envelope, em_result)
+        if bits is None:
+            note = f"{rule} unavailable: no training histogram on this model; "
+            continue
+        return ResolvedCut(
+            rule=rule,
+            reason=note + reason,
+            bits=float(bits),
+            normalized=bits_to_normalized(bits, envelope),
+        )
+    return None
 
 
 def _fs_linear_rule_link_threshold(
     mk: MatchkeyConfig, em_result: EMResult, calibrated: bool
 ) -> float | None:
-    """Linear link cutoff placed by evidence bits (``GOLDENMATCH_FS_LINEAR_CUT``, default ``prior_mid``).
+    """Normalized linear link cutoff from :func:`_fs_resolved_cut`, or None.
 
-    The linear score is ``(W - lo) / (hi - lo)``, where ``lo``/``hi`` sum every field's
-    min/max match weight plus the negative-evidence range. The fixed 0.50 cutoff therefore
-    links at ``W >= (lo + hi) / 2``: a point set by the per-field extremes, not by the
-    evidence. A u estimate that stops inflating one field's top weight moves it -- ncvr at
-    50,000 random pairs: +7.4 -> -1.9 bits, floored at 0 by the positive-evidence guard,
-    F1 0.9976 -> 0.9743.
+    The linear score is ``(W - lo) / (hi - lo)``, so the fixed 0.50 cut links at the midpoint
+    of the per-field weight extremes; a rule places the cut by evidence bits instead.
 
-    ``prior``: link at ``W >= max(log2((1 - lambda) / lambda), 0)``, the evidence at which
-    the posterior crosses 0.5. ``prior_mid``: the larger of that and the old midpoint.
-    Returned as the equivalent normalized cutoff so every scorer, native kernel included,
-    applies it unchanged. None when off, in posterior mode, or with a degenerate range.
+    MEASURED (fs-lever-gate full panel, 50,000-pair u sample, run 34551694684), midpoint vs
+    ``prior_mid``:
+    - ncvr_synthetic 0.9743 -> 0.9990;
+    - dblp_acm 0.8058 -> 0.8159;
+    - amazon_google 0.0217 -> 0.0475;
+    - the other seven datasets' clusters identical.
 
-    MEASURED (fs-lever-gate full panel, both arms with the 50,000-pair u sample, run
-    34551694684), midpoint vs ``prior_mid``: ncvr_synthetic 0.9743 -> 0.9990, dblp_acm 0.8058
-    -> 0.8159, amazon_google 0.0217 -> 0.0475; the other seven datasets' clusters identical.
     historical_50k (midpoint +10.8 bits, lambda 0.661) and dblp_scholar (+22.2, 0.065) keep
-    their midpoint, which is why pure ``prior`` is not the default: it would drop historical's
-    cut to 0 bits.
+    their midpoint, which is why pure ``prior`` is not the default.
     """
-    rule = _fs_linear_cut_rule()
-    if rule is None or calibrated:
-        return None
-    match_weights = getattr(em_result, "match_weights", None)
-    lam = getattr(em_result, "proportion_matched", None)
-    if not match_weights or lam is None:
-        return None  # nothing to place a cut from: fall through to the fixed default
-    lo, hi = _fs_ne_weight_range(em_result, mk)
-    for f in mk.fields:
-        weights = match_weights.get(f.field)
-        if weights:
-            lo += min(weights)
-            hi += max(weights)
-    if hi <= lo:
-        return None
-    cut_bits = max(-prior_weight(em_result.proportion_matched), 0.0)
-    if rule == "prior_mid":
-        cut_bits = max(cut_bits, (lo + hi) / 2.0)
-    return min(max((cut_bits - lo) / (hi - lo), 0.0), 1.0)
+    resolved = _fs_resolved_cut(mk, em_result, calibrated)
+    return None if resolved is None else resolved.normalized
 
 
 def _fs_link_threshold(
