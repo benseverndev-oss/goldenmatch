@@ -178,3 +178,34 @@ def test_an_unknown_router_value_warns_and_stays_off(monkeypatch, caplog):
         resolved = _fs_resolved_cut(_mk(), _em(), calibrated=False)
     assert resolved.rule == "prior_mid"
     assert "GOLDENMATCH_FS_CUT_ROUTER" in caplog.text
+
+
+#: (λ, midpoint bits, prior bits, n_fields) recorded by design matrix run 34638483397.
+_DESIGN_SHAPES = {
+    "dblp_acm": (0.00196, 2.87, 8.99, 3),
+    "synth_biblio_d02": (0.0005, 5.39, 10.97, 3),
+    "synth_person_d02": (0.00185, 0.0, 9.08, 5),
+    "musicbrainz_20k": (0.0757, 17.3, 3.61, 5),
+    "febrl3": (0.0826, 10.5, 3.47, 9),
+    "febrl4": (0.042, 13.96, 4.51, 9),
+    "dblp_scholar": (0.0646, 22.23, 3.86, 3),
+    "historical_50k": (0.661, 10.82, -0.96, 6),
+}
+
+# Both rows shipped:
+_EXPECTED_ROUTES = {
+    "dblp_acm": "posterior_099", "synth_biblio_d02": "posterior_099", "synth_person_d02": None,
+    "musicbrainz_20k": "evidence_5", "febrl3": "evidence_5", "febrl4": "evidence_5",
+    "dblp_scholar": None, "historical_50k": None,
+}
+
+
+def test_the_shipped_rows_fire_where_the_design_matrix_says():
+    """Known positives: removing a shipped row turns its datasets back to None and fails this."""
+    routed = {}
+    for name, (lam, mid, prior, n_fields) in _DESIGN_SHAPES.items():
+        choice = R.choose_cut_rule(
+            _diag(proportion_matched=lam, midpoint_bits=mid, prior_bits=prior, n_fields=n_fields)
+        )
+        routed[name] = None if choice is None else choice[0]
+    assert routed == _EXPECTED_ROUTES

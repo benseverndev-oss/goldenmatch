@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from goldenmatch.core import fs_cut_rules
-from goldenmatch.core.fs_cut_rules import CutDiagnostics, CutRow, choose_cut_rule
+from goldenmatch.core.fs_cut_rules import CutRow
 
 from scripts.autoconfig_quality import cut_gate as G
 from scripts.autoconfig_quality import cut_rows
@@ -234,33 +234,7 @@ def test_the_empty_shipped_table_passes_when_every_routed_arm_kept_the_default(
 
 # ─── the candidates, as written from the design matrix ────────────────────────
 
-#: (λ, midpoint bits, prior bits, n_fields) recorded by design matrix run 34638483397.
-_DESIGN_SHAPES = {
-    "dblp_acm": (0.00196, 2.87, 8.99, 3),
-    "synth_biblio_d02": (0.0005, 5.39, 10.97, 3),
-    "synth_person_d02": (0.00185, 0.0, 9.08, 5),
-    "musicbrainz_20k": (0.0757, 17.3, 3.61, 5),
-    "febrl3": (0.0826, 10.5, 3.47, 9),
-    "febrl4": (0.042, 13.96, 4.51, 9),
-    "dblp_scholar": (0.0646, 22.23, 3.86, 3),
-    "historical_50k": (0.661, 10.82, -0.96, 6),
-}
 
-
-def test_candidates_fire_where_the_design_matrix_says():
-    routed = {}
-    for name, (lam, mid, prior, n_fields) in _DESIGN_SHAPES.items():
-        choice = choose_cut_rule(
-            CutDiagnostics(**_diag(lam, mid, prior, n_fields)), cut_rows.CANDIDATES
-        )
-        routed[name] = None if choice is None else choice[0]
-    assert routed == {
-        "dblp_acm": "posterior_099",
-        "synth_biblio_d02": "posterior_099",
-        "synth_person_d02": None,
-        "musicbrainz_20k": "evidence_5",
-        "febrl3": "evidence_5",
-        "febrl4": "evidence_5",
-        "dblp_scholar": None,
-        "historical_50k": None,
-    }
+def test_no_candidate_is_already_shipped():
+    shipped = {row.name for row in fs_cut_rules.ROWS}
+    assert not shipped & {row.name for row in cut_rows.CANDIDATES}
