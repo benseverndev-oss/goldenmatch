@@ -26,6 +26,7 @@ Usage:
         --out fixtures/bench_1000000.parquet \
         --ground-truth fixtures/bench_1000000.truth.parquet
 """
+
 from __future__ import annotations
 
 import argparse
@@ -181,7 +182,10 @@ def _build_pools(seed: int):
     base = np.datetime64("1940-01-01")
     dobs = (base + np.arange(DOB_DAYS).astype("timedelta64[D]")).astype("datetime64[D]")
     dob_pool = np.datetime_as_string(dobs)
-    postcodes = [f"{int(rng.integers(10,99))}{rng.choice(_ALPHA).upper()}{rng.choice(_ALPHA).upper()} {int(rng.integers(0,9))}{rng.choice(_ALPHA).upper()}{rng.choice(_ALPHA).upper()}" for _ in range(N_POSTCODE)]
+    postcodes = [
+        f"{int(rng.integers(10, 99))}{rng.choice(_ALPHA).upper()}{rng.choice(_ALPHA).upper()} {int(rng.integers(0, 9))}{rng.choice(_ALPHA).upper()}{rng.choice(_ALPHA).upper()}"
+        for _ in range(N_POSTCODE)
+    ]
     return {
         # Combined [base | typo] arrays so a single fancy-index picks exact-or-typo.
         "first": np.array(first_base + first_typo, dtype=object),
@@ -273,9 +277,18 @@ def generate(
     seed: int,
     batch: int,
     shape: str = "person",
+    corruption: float = 1.0,
 ) -> dict:
     if shape not in ("person", "biblio", "product"):
         raise ValueError(f"unknown shape: {shape!r}")
+    if corruption < 0:
+        raise ValueError(f"corruption must be >= 0, got {corruption!r}")
+
+    def noise(base: float) -> float:
+        # Scale one duplicate-noise probability. corruption=1.0 leaves every
+        # threshold, the RNG draw sequence, and so every written byte unchanged.
+        return min(1.0, base * corruption)
+
     schema = {"person": SCHEMA, "biblio": BIBLIO_SCHEMA, "product": PRODUCT_SCHEMA}[shape]
     if shape == "person":
         pools = _build_pools(seed)
@@ -344,9 +357,9 @@ def generate(
                 # Duplicate variation (vectorised masks). Typo => offset into
                 # [base|typo] half.
                 r = rng.random(total)
-                fi_pick = fi + np.where(is_dup & (r < 0.40), n_first, 0)
+                fi_pick = fi + np.where(is_dup & (r < noise(0.40)), n_first, 0)
                 r = rng.random(total)
-                si_pick = si + np.where(is_dup & (r < 0.50), n_surname, 0)
+                si_pick = si + np.where(is_dup & (r < noise(0.50)), n_surname, 0)
 
                 first = pools["first"][fi_pick]
                 surname = pools["surname"][si_pick]
@@ -355,10 +368,10 @@ def generate(
                 city = pools["city"][ci].copy()
 
                 # Occasional nulls on weaker / strong fields for duplicate rows.
-                city = np.where(is_dup & (rng.random(total) < 0.20), None, city)
-                dnull = is_dup & (rng.random(total) < 0.05)
+                city = np.where(is_dup & (rng.random(total) < noise(0.20)), None, city)
+                dnull = is_dup & (rng.random(total) < noise(0.05))
                 dob = np.where(dnull, None, dob)
-                pnull = is_dup & (rng.random(total) < 0.05)
+                pnull = is_dup & (rng.random(total) < noise(0.05))
                 postcode = np.where(pnull, None, postcode)
 
                 columns = {
@@ -385,17 +398,23 @@ def generate(
                         wi_pick = wi
                     else:
                         r = rng.random(total)
-                        wi_pick = wi + np.where(is_dup & (r < 0.30), n_title_words, 0)
+                        wi_pick = wi + np.where(is_dup & (r < noise(0.30)), n_title_words, 0)
                     word = pools["title_words"][wi_pick]
                     title = word if title is None else (title + " " + word)
 
                 # Authors: 1-3 surnames per identity, broadcast. Duplicate variation
                 # = author-order permutation (swap first two) on ~half of duplicates.
-                a0 = pools["author_surnames"][np.repeat(rng.integers(0, n_author, len(sizes)), sizes)]
-                a1 = pools["author_surnames"][np.repeat(rng.integers(0, n_author, len(sizes)), sizes)]
-                a2 = pools["author_surnames"][np.repeat(rng.integers(0, n_author, len(sizes)), sizes)]
+                a0 = pools["author_surnames"][
+                    np.repeat(rng.integers(0, n_author, len(sizes)), sizes)
+                ]
+                a1 = pools["author_surnames"][
+                    np.repeat(rng.integers(0, n_author, len(sizes)), sizes)
+                ]
+                a2 = pools["author_surnames"][
+                    np.repeat(rng.integers(0, n_author, len(sizes)), sizes)
+                ]
                 n_auth = np.repeat(rng.integers(1, 4, len(sizes)), sizes)
-                reorder = is_dup & (rng.random(total) < 0.50)
+                reorder = is_dup & (rng.random(total) < noise(0.50))
                 b0 = np.where(reorder & (n_auth >= 2), a1, a0)
                 b1 = np.where(reorder & (n_auth >= 2), a0, a1)
                 authors = b0
@@ -407,7 +426,7 @@ def generate(
                 # Occasional null year on duplicates (mirrors person null postcode);
                 # a null-year duplicate simply doesn't block, and year is unique per
                 # cluster where non-null.
-                year = np.where(is_dup & (rng.random(total) < 0.05), None, year)
+                year = np.where(is_dup & (rng.random(total) < noise(0.05)), None, year)
 
                 columns = {
                     "record_id": pa.array(rids, pa.int64()),
@@ -434,7 +453,7 @@ def generate(
                         wi_pick = wi
                     else:
                         r = rng.random(total)
-                        wi_pick = wi + np.where(is_dup & (r < 0.30), n_title_words, 0)
+                        wi_pick = wi + np.where(is_dup & (r < noise(0.30)), n_title_words, 0)
                     word = pools["title_words"][wi_pick]
                     title = word if title is None else (title + " " + word)
 
@@ -446,14 +465,14 @@ def generate(
                     rng.uniform(PRODUCT_PRICE_MIN, PRODUCT_PRICE_MAX, len(sizes)), 2
                 )
                 price_val = np.repeat(base_price, sizes)
-                pert = is_dup & (rng.random(total) < 0.40)
+                pert = is_dup & (rng.random(total) < noise(0.40))
                 factors = np.where(pert, 1.0 + rng.uniform(-0.05, 0.05, total), 1.0)
                 price_val = np.round(price_val * factors, 2)
                 price = np.char.mod("%.2f", price_val).astype(object)
                 # Occasional null price on duplicates (mirrors person null postcode /
                 # biblio null year); a null-price duplicate still blocks + scores on
                 # title, so the weighted matchkey degrades rather than drops it.
-                price = np.where(is_dup & (rng.random(total) < 0.05), None, price)
+                price = np.where(is_dup & (rng.random(total) < noise(0.05)), None, price)
 
                 brand = pools["brands"][bi]  # stable, never corrupted/nulled
                 category = pools["categories"][cati]  # stable, never corrupted/nulled
@@ -469,7 +488,10 @@ def generate(
             writer.write_table(pa.table(columns, schema=schema))
             twriter.write_table(
                 pa.table(
-                    {"record_id": pa.array(rids, pa.int64()), "cluster_id": pa.array(row_cid, pa.int64())},
+                    {
+                        "record_id": pa.array(rids, pa.int64()),
+                        "cluster_id": pa.array(row_cid, pa.int64()),
+                    },
                     schema=TRUTH_SCHEMA,
                 )
             )
@@ -517,6 +539,13 @@ def main() -> None:
     ap.add_argument("--batch", type=int, default=1_000_000)
     ap.add_argument("--shape", choices=["person", "biblio", "product"], default="person")
     ap.add_argument(
+        "--corruption",
+        type=float,
+        default=1.0,
+        help="multiplier on every duplicate-noise probability (typos, reorders, nulls); "
+        "1.0 is the historical fixture, 0 gives noise-free duplicates",
+    )
+    ap.add_argument(
         "--check-block-size",
         type=int,
         default=None,
@@ -542,7 +571,14 @@ def main() -> None:
         ap.error("--rows, --out, and --ground-truth are required to generate a fixture")
 
     meta = generate(
-        args.rows, args.dupe_rate, args.out, args.ground_truth, args.seed, args.batch, args.shape
+        args.rows,
+        args.dupe_rate,
+        args.out,
+        args.ground_truth,
+        args.seed,
+        args.batch,
+        args.shape,
+        corruption=args.corruption,
     )
     print(
         f"[generate] {meta['rows']:,} rows / {meta['clusters']:,} clusters / "
