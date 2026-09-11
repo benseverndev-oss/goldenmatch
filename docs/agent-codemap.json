@@ -4284,6 +4284,7 @@
             "_fs_require_positive_evidence",
             "_fs_scoring_workers",
             "_fs_tf_clamp_override",
+            "_fs_u_random_pairs",
             "_fs_vec_guard",
             "_fs_vec_max_elems",
             "_fs_vectorized_enabled",

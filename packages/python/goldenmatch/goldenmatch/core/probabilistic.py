@@ -1112,6 +1112,26 @@ def _sample_pairs(
     return list(pairs)
 
 
+def _fs_u_random_pairs(n_sample_pairs: int) -> int:
+    """Random-pair budget for the ``u`` estimate; ``GOLDENMATCH_FS_U_PAIRS`` overrides.
+
+    Default ``min(n_sample_pairs, 5000)``. ``u`` is a level's frequency among random
+    (overwhelmingly non-matching) pairs. A level random pairs almost never reach --
+    exact title or author agreement on bibliographic data -- counts 0 at 5,000 pairs,
+    so its ``u`` falls to the 1e-6 smoothing floor and its agreement weight explodes
+    (dblp_acm: title and authors ~+25-28 bits, above their own exact levels). Splink
+    samples 1,000,000 random pairs by default and recommends 1e7-1e9; GoldenMatch's
+    Spark EM uses ``u_max_pairs=1_000_000``. Measurement lever: unset is byte-identical.
+    """
+    raw = os.environ.get("GOLDENMATCH_FS_U_PAIRS", "").strip()
+    if raw:
+        try:
+            return max(10, int(raw))
+        except ValueError:
+            logger.warning("GOLDENMATCH_FS_U_PAIRS=%r is not an integer; using the default", raw)
+    return min(n_sample_pairs, 5000)
+
+
 def _record_concat_value(row: dict, columns, column_weights) -> str:
     """Concatenate a row's ``record_embedding`` columns into one string.
 
@@ -2345,7 +2365,12 @@ def train_em_counted(
 
     # u from RANDOM pairs, exactly as train_em estimates it -- the counted path
     # changes how m is estimated, not what u means.
-    random_pairs = _sample_pairs(df, min(10_000, 5000 * len(mk.fields)), seed)
+    _u_budget = os.environ.get("GOLDENMATCH_FS_U_PAIRS", "").strip()
+    random_pairs = _sample_pairs(
+        df,
+        _fs_u_random_pairs(n_pairs) if _u_budget else min(10_000, 5000 * len(mk.fields)),
+        seed,
+    )
     if len(random_pairs) < 10:
         return _fallback_result(mk)
     lookup = _row_lookup_for_pairs(df, cols, [random_pairs])
@@ -2501,7 +2526,7 @@ def train_em(
     # level distribution approximates u directly. No EM needed for u.
     random_pairs = _sample_pairs(
         df,
-        min(n_sample_pairs, 5000),
+        _fs_u_random_pairs(n_sample_pairs),
         seed,
         target_ids=target_ids,
     )
