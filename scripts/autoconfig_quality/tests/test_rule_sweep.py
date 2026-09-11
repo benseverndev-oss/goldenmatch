@@ -160,17 +160,55 @@ def _alive(pid: int) -> bool:
         return False
 
 
+# Tests that exercise another trigger pin ``min_available_mb=0``: the available-memory
+# floor reads the whole machine, and a busy laptop can sit below the 1500 MB default.
+
+
+def _sleeping_child(tmp_path) -> tuple[list[str], str]:
+    """A child that writes its interpreter's pid to ``tmp_path / "pid"``, then sleeps
+    30 s. Returns ``(argv, marker)``; the marker is in its argv, for cleanup."""
+    import sys
+    import uuid
+
+    marker = f"gm-arm-test-{uuid.uuid4().hex}"
+    code = (
+        f"import os, pathlib, time; marker = {marker!r}; "
+        f"pathlib.Path({str(tmp_path / 'pid')!r}).write_text(str(os.getpid())); "
+        "time.sleep(30)"
+    )
+    return [sys.executable, "-c", code], marker
+
+
+def _kill_marked(marker: str) -> None:
+    """Kill every process whose argv carries ``marker`` (cleanup after a kill-path test)."""
+    import psutil
+
+    victims = [
+        p for p in psutil.process_iter(["cmdline"]) if marker in " ".join(p.info["cmdline"] or [])
+    ]
+    for p in victims:
+        try:
+            p.kill()
+        except psutil.Error:
+            pass
+    psutil.wait_procs(victims, timeout=10)
+
+
 def test_run_arm_classifies_a_child_that_exits_non_zero_as_crashed(tmp_path):
     import sys
 
     argv = [sys.executable, "-c", "import os; os._exit(137)"]
-    rec, payload = S.run_arm(argv, tmp_path / "arm.json", "prior", ["fs"])
+    rec, payload = S.run_arm(argv, tmp_path / "arm.json", "prior", ["fs"], min_available_mb=0)
     assert rec["crashed"] == "crashed"
     assert rec["returncode"] == 137
+    assert rec["kill_reason"] is None
     assert rec["f1"] is None
     assert rec["voided"] is False
     assert rec["applied"] is False
     assert payload is None
+    # M4: no pipeline result came back, so no pipeline time; the parent still clocked it.
+    assert rec["wall_seconds"] is None
+    assert rec["process_seconds"] >= 0.0
 
 
 def test_run_arm_kills_a_child_over_the_memory_cap(tmp_path):
@@ -185,9 +223,16 @@ def test_run_arm_kills_a_child_over_the_memory_cap(tmp_path):
     )
     start = time.perf_counter()
     rec, _ = S.run_arm(
-        [sys.executable, "-c", code], tmp_path / "arm.json", "prior", ["fs"], memory_cap_mb=150
+        [sys.executable, "-c", code],
+        tmp_path / "arm.json",
+        "prior",
+        ["fs"],
+        memory_cap_mb=150,
+        min_available_mb=0,
     )
     assert rec["crashed"] == "memory_cap"
+    assert rec["kill_reason"] == "rss_cap"
+    assert rec["returncode"] != 0, "a killed arm never reports a clean exit"
     assert time.perf_counter() - start < 20, "the watchdog must kill before the child's sleep ends"
     assert rec["peak_rss_mb"] > 150
     assert not _alive(int(pid_file.read_text()))
@@ -204,10 +249,103 @@ def test_run_arm_kills_a_child_past_the_timeout(tmp_path):
         "prior",
         ["fs"],
         timeout_s=1,
+        min_available_mb=0,
     )
     assert rec["crashed"] == "timeout"
+    assert rec["kill_reason"] is None
+    assert rec["returncode"] != 0, "a killed arm never reports a clean exit"
     assert rec["f1"] is None
+    assert rec["process_seconds"] >= 1.0
     assert time.perf_counter() - start < 20
+
+
+def test_run_arm_kills_a_child_when_machine_available_memory_drops_below_the_floor(
+    tmp_path, monkeypatch
+):
+    """I2: the child's RSS stays tiny, but the machine runs out -- the floor fires."""
+    import time
+    from types import SimpleNamespace
+
+    import psutil
+
+    pid_file = tmp_path / "pid"
+
+    def low_once_the_child_runs():
+        mb = 100 if pid_file.exists() else 10**6
+        return SimpleNamespace(available=mb * 2**20)
+
+    monkeypatch.setattr(psutil, "virtual_memory", low_once_the_child_runs)
+    argv, marker = _sleeping_child(tmp_path)
+    start = time.perf_counter()
+    try:
+        rec, _ = S.run_arm(
+            argv, tmp_path / "arm.json", "prior", ["fs"], memory_cap_mb=10**6, min_available_mb=1500
+        )
+    finally:
+        _kill_marked(marker)  # no-op when the watchdog did its job
+    assert rec["crashed"] == "memory_cap"
+    assert rec["kill_reason"] == "available_floor"
+    assert time.perf_counter() - start < 20
+    assert not _alive(int(pid_file.read_text()))
+
+
+def test_run_arm_leaves_the_killed_root_to_popen_and_bounds_every_wait(tmp_path, monkeypatch):
+    """M1 + M2: psutil must not reap the direct child (on Linux Popen then reports
+    returncode 0 for a killed arm), and no wait after a kill may block forever."""
+    import subprocess
+
+    import psutil
+
+    waited_by_psutil: list[int] = []
+    popen_pids: set[int] = set()
+    popen_timeouts: list[float | None] = []
+    real_wait_procs = psutil.wait_procs
+    real_popen_wait = subprocess.Popen.wait
+
+    def wait_procs(procs, *args, **kwargs):
+        waited_by_psutil.extend(p.pid for p in procs)
+        return real_wait_procs(procs, *args, **kwargs)
+
+    def popen_wait(self, timeout=None):
+        popen_pids.add(self.pid)
+        popen_timeouts.append(timeout)
+        return real_popen_wait(self, timeout)
+
+    monkeypatch.setattr(psutil, "wait_procs", wait_procs)
+    monkeypatch.setattr(subprocess.Popen, "wait", popen_wait)
+    argv, marker = _sleeping_child(tmp_path)
+    try:
+        rec, _ = S.run_arm(
+            argv, tmp_path / "arm.json", "prior", ["fs"], timeout_s=1, min_available_mb=0
+        )
+    finally:
+        monkeypatch.undo()
+        _kill_marked(marker)
+    assert rec["crashed"] == "timeout"
+    assert rec["returncode"] != 0
+    assert popen_pids and not popen_pids & set(waited_by_psutil)
+    assert popen_timeouts and None not in popen_timeouts
+
+
+def test_run_arm_kill_path_cannot_mask_the_original_error(tmp_path, monkeypatch):
+    """M2: an AccessDenied while cleaning up must not replace the error that caused it."""
+    import psutil
+
+    def boom(proc):
+        raise RuntimeError("original")
+
+    def denied(self, recursive=False):
+        raise psutil.AccessDenied(self.pid)
+
+    monkeypatch.setattr(S, "_tree_rss_mb", boom)
+    monkeypatch.setattr(psutil.Process, "children", denied)
+    argv, marker = _sleeping_child(tmp_path)
+    try:
+        with pytest.raises(RuntimeError, match="original"):
+            S.run_arm(argv, tmp_path / "arm.json", "prior", ["fs"], min_available_mb=0)
+    finally:
+        monkeypatch.undo()
+        _kill_marked(marker)
 
 
 def test_execute_arm_applies_every_rule_on_one_saved_model(tmp_path, monkeypatch):
@@ -253,6 +391,9 @@ def test_sweep_dataset_runs_each_arm_in_its_own_child_on_one_saved_model(tmp_pat
     for var in S.CUT_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("GOLDENMATCH_AUTOCONFIG_MEMORY", "0")
+    # The floor reads the whole machine; this test is about isolation, not pressure.
+    monkeypatch.setenv("GOLDENMATCH_CUT_RULES_MIN_AVAILABLE_MB", "0")
+    monkeypatch.delenv("GOLDENMATCH_CUT_RULES_DATASET_BUDGET_S", raising=False)
     arms = ("default", "default_loaded", "evidence_9")
     out = S.sweep_dataset("person", tmp_path, arms=arms)
 
@@ -260,6 +401,8 @@ def test_sweep_dataset_runs_each_arm_in_its_own_child_on_one_saved_model(tmp_pat
     assert set(out["arms"]) == set(arms)
     assert all(rec["crashed"] is None for rec in out["arms"].values())
     assert all(rec["peak_rss_mb"] > 0 for rec in out["arms"].values())
+    # M4: the parent's clock spans interpreter start-up, so it covers the pipeline time.
+    assert all(rec["process_seconds"] >= rec["wall_seconds"] for rec in out["arms"].values())
     assert not [a for a, rec in out["arms"].items() if rec["voided"]]
     assert out["arms"]["evidence_9"]["applied"] is True
     assert out["crashed"] == {}
@@ -357,7 +500,8 @@ def test_run_records_goldenmatch_env_and_pythonhashseed_in_meta(tmp_path, monkey
     assert S.run(["--datasets", "person", "--out", str(out)]) == 0
     card = json.loads(out.read_text())
     assert card["meta"]["goldenmatch_env"].get("GOLDENMATCH_NATIVE") == "0"
-    assert card["meta"]["pythonhashseed"] == "7"
+    # I3: the sweep's own seed, and the seed every arm's child actually ran under.
+    assert card["meta"]["pythonhashseed"] == {"sweep": "7", "arms": "0"}
 
 
 def test_run_reports_failure_when_an_arm_is_voided(tmp_path, monkeypatch):
@@ -449,7 +593,7 @@ def _fake_run_arm(crash: dict[str, str]):
         rule = None if arm in ("default", S.BASELINE_ARM) else arm
         report = {mk: _entry(rule, "pinned by link_cut_rule") for mk in expected_matchkeys}
         rec = S.arm_record(arm, _SUMMARY, _stats(**report), (1, "d"), expected_matchkeys)
-        rec.update(crashed=None, peak_rss_mb=20.0, wall_seconds=0.1)
+        rec.update(crashed=None, peak_rss_mb=20.0, wall_seconds=0.1, process_seconds=0.2)
         payload = {
             "summary": _SUMMARY,
             "report": report,
@@ -503,6 +647,58 @@ def test_a_crashed_baseline_arm_fails_the_dataset(tmp_path, monkeypatch):
     assert rec["reload_partition_match"] is None
     # The matrix still renders a dataset whose baseline has no F1.
     assert _cells(S.render_markdown(card), "person")[1] == "crashed"
+
+
+def test_dataset_budget_times_out_the_arms_it_cannot_fit_without_starting_them(
+    tmp_path, monkeypatch
+):
+    """I1: every arm here needs 0.3 s against a 0.5 s dataset budget, so two arms
+    run and the rest are recorded as timed out, never started."""
+    import time
+
+    _small_person(monkeypatch)
+    started: list[str] = []
+    timeouts: list[float] = []
+    instant = _fake_run_arm({})
+
+    def slow(argv, out_path, arm, expected_matchkeys, **kwargs):
+        started.append(arm)
+        timeouts.append(kwargs["timeout_s"])
+        time.sleep(0.3)
+        return instant(argv, out_path, arm, expected_matchkeys, **kwargs)
+
+    monkeypatch.setattr(S, "run_arm", slow)
+    arms = ("default", "default_loaded", "evidence_9", "prior")
+    rec = S.sweep_dataset("person", tmp_path, arms=arms, budget_s=0.5)
+
+    assert started == ["default", "default_loaded"]
+    assert timeouts[0] <= 0.5 / len(arms), "each arm gets at most its share of what is left"
+    shape = set(S.killed_record("timeout", None, 0.0, 0.0))
+    for arm in ("evidence_9", "prior"):
+        assert rec["arms"][arm]["crashed"] == "timeout"
+        assert rec["arms"][arm]["kill_reason"] == "dataset_budget"
+        assert rec["arms"][arm]["returncode"] is None
+        assert set(rec["arms"][arm]) == shape
+    assert rec["below_default"] == ["evidence_9", "prior"]
+
+
+def test_arm_log_line_omits_f1_for_holdout_datasets(tmp_path, monkeypatch, capsys):
+    """M3: per-rule F1 on a held-out dataset must not reach the CI log."""
+    _small_person(monkeypatch)
+    monkeypatch.setattr(S, "run_arm", _fake_run_arm({}))
+    arms = ("default", "default_loaded", "evidence_9")
+
+    S.sweep_dataset("abt_buy", tmp_path, arms=arms)
+    holdout = [
+        ln for ln in capsys.readouterr().err.splitlines() if ln.startswith("[cut-rules] abt_buy:")
+    ]
+    S.sweep_dataset("person", tmp_path, arms=arms)
+    design = [
+        ln for ln in capsys.readouterr().err.splitlines() if ln.startswith("[cut-rules] person:")
+    ]
+
+    assert len(holdout) == len(arms) and not [ln for ln in holdout if "f1" in ln]
+    assert len(design) == len(arms) and all("f1=0.9" in ln for ln in design)
 
 
 # ─── best_rule / merge_cards / render_markdown / merge CLI ────────────────────

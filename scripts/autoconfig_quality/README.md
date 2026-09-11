@@ -98,12 +98,21 @@ nine copies of the default. The sweep also refuses to start while any cut-moving
 env var is set.
 
 Each arm runs in its own child process, reading one shared config file, under a
-memory cap (`GOLDENMATCH_CUT_RULES_ARM_MEM_MB`, default 12000) and a timeout
-(`GOLDENMATCH_CUT_RULES_ARM_TIMEOUT_S`, default 3600). A rule arm that is killed
-or crashes is recorded (`crashed`: `memory_cap`, `timeout` or `crashed`, with its
-peak RSS) and counts as below default, since blowing up is worse than the
-baseline; the rest of the dataset's arms still run. A crashed `default` or
-`default_loaded` arm leaves no baseline, so it fails the dataset.
+watchdog:
+
+- an RSS cap on the child tree (`GOLDENMATCH_CUT_RULES_ARM_MEM_MB`, default 12000);
+- a floor on the machine's available memory (`GOLDENMATCH_CUT_RULES_MIN_AVAILABLE_MB`,
+  default 1500; lower it on a laptop that already runs below that);
+- a per-arm timeout (`GOLDENMATCH_CUT_RULES_ARM_TIMEOUT_S`, default 3600);
+- an optional budget for all of a dataset's arms
+  (`GOLDENMATCH_CUT_RULES_DATASET_BUDGET_S`). Each arm gets at most its share of what
+  is left, and arms the budget cannot fit are recorded as timed out without starting.
+
+A rule arm that is killed or crashes is recorded (`crashed`: `memory_cap`, `timeout`
+or `crashed`, plus `kill_reason`, `peak_rss_mb` and `process_seconds`) and counts as
+below default, since blowing up is worse than the baseline; the rest of the
+dataset's arms still run. A crashed `default` or `default_loaded` arm leaves no
+baseline, so it fails the dataset.
 
 ```bash
 python -m scripts.autoconfig_quality.rule_sweep --datasets person --out person.json

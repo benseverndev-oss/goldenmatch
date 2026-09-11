@@ -163,11 +163,21 @@ def _model_hashes(model_dir: Path) -> dict[str, str]:
 #: the runner itself dies and takes every other arm's measurement with it.
 ARM_MEMORY_CAP_MB = 12000
 ARM_TIMEOUT_S = 3600
+#: The child's RSS misses the parent's memory, spikes between polls and swap, so an
+#: arm is also killed when the whole machine's available memory drops below this.
+MIN_AVAILABLE_MB = 1500
+#: Wall budget for all of one dataset's arms, from the first arm's start; None means
+#: no budget. CI sets it so every arm fits inside the job's own timeout.
+DATASET_BUDGET_S: float | None = None
 ARM_MEMORY_CAP_ENV = "GOLDENMATCH_CUT_RULES_ARM_MEM_MB"
 ARM_TIMEOUT_ENV = "GOLDENMATCH_CUT_RULES_ARM_TIMEOUT_S"
+MIN_AVAILABLE_ENV = "GOLDENMATCH_CUT_RULES_MIN_AVAILABLE_MB"
+DATASET_BUDGET_ENV = "GOLDENMATCH_CUT_RULES_DATASET_BUDGET_S"
+#: How long to wait for a killed process to go away before giving up on reaping it.
+KILL_WAIT_S = 10
 
 
-def _limit(value: float | None, env_var: str, default: float) -> float:
+def _limit(value: float | None, env_var: str, default: float | None) -> float | None:
     """``value`` when given, else the env override, else ``default``."""
     if value is not None:
         return value
@@ -175,11 +185,27 @@ def _limit(value: float | None, env_var: str, default: float) -> float:
     return float(raw) if raw else default
 
 
+# The two timing fields on every arm record:
+#   wall_seconds     pipeline time, measured inside execute_arm by the child; None
+#                    when no pipeline result came back (killed, crashed, not started).
+#   process_seconds  the parent's clock from starting the child to its exit or kill,
+#                    including interpreter start-up and loading; 0.0 if never started.
+
+
 def killed_record(
-    status: str, returncode: int | None, peak_rss_mb: float, wall_seconds: float
+    status: str,
+    returncode: int | None,
+    peak_rss_mb: float,
+    process_seconds: float,
+    kill_reason: str | None = None,
 ) -> dict:
-    """The record of an arm whose child was killed or crashed: no measurement, not
-    voided (nothing claimed a result it did not measure), and the reason."""
+    """The record of an arm whose child was killed, crashed or never started: no
+    measurement, not voided (nothing claimed a result it did not measure), and the
+    reason.
+
+    ``kill_reason`` says which trigger fired: ``rss_cap`` / ``available_floor`` for
+    ``memory_cap``, ``dataset_budget`` for a timeout the budget left no time to start,
+    else None."""
     return {
         "f1": None,
         "precision": None,
@@ -190,9 +216,11 @@ def killed_record(
         "applied": False,
         "voided": False,
         "crashed": status,
+        "kill_reason": kill_reason,
         "returncode": returncode,
         "peak_rss_mb": round(peak_rss_mb, 1),
-        "wall_seconds": round(wall_seconds, 1),
+        "wall_seconds": None,
+        "process_seconds": round(process_seconds, 1),
     }
 
 
@@ -216,20 +244,41 @@ def _tree_rss_mb(proc) -> float:
 
 
 def _kill_tree(pid: int) -> None:
-    """Kill ``pid`` and every descendant; no POSIX-only signals."""
+    """Kill ``pid`` and every descendant; no POSIX-only signals. Never raises: it
+    runs inside error handlers, where a cleanup error must not mask the original.
+
+    Waits only for the descendants. The root is the caller's ``Popen`` child, which
+    the caller reaps (``_reap``): if psutil reaped it first, ``Popen`` would get
+    ECHILD on Linux and report a killed arm as ``returncode`` 0."""
     import psutil
 
     try:
-        parent = psutil.Process(pid)
-        procs = [*parent.children(recursive=True), parent]
-    except psutil.NoSuchProcess:
+        root = psutil.Process(pid)
+    except psutil.Error:
         return
-    for p in procs:
+    try:
+        descendants = root.children(recursive=True)
+    except psutil.Error:
+        descendants = []
+    for p in [*descendants, root]:
         try:
             p.kill()
-        except psutil.NoSuchProcess:
+        except psutil.Error:
             pass
-    psutil.wait_procs(procs, timeout=10)
+    try:
+        psutil.wait_procs(descendants, timeout=KILL_WAIT_S)
+    except psutil.Error:
+        pass
+
+
+def _reap(popen) -> None:
+    """Wait for a killed ``Popen`` child, but never forever."""
+    import subprocess
+
+    try:
+        popen.wait(timeout=KILL_WAIT_S)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def run_arm(
@@ -241,13 +290,16 @@ def run_arm(
     env: dict[str, str] | None = None,
     memory_cap_mb: float | None = None,
     timeout_s: float | None = None,
+    min_available_mb: float | None = None,
     poll_s: float = 0.5,
 ) -> tuple[dict, dict | None]:
     """Run one arm's child (``argv``) under the watchdog. Never raises for the child.
 
     Returns ``(arm record, child payload)``. The payload is None when the child was
     killed (``memory_cap`` / ``timeout``) or ``crashed`` (non-zero exit or no JSON
-    at ``out_path``); the record then says which, instead of the sweep dying."""
+    at ``out_path``); the record then says which, instead of the sweep dying.
+    ``memory_cap`` fires on the child tree's RSS (``rss_cap``) or on the machine's
+    available memory (``available_floor``)."""
     import json
     import subprocess
     import time
@@ -256,22 +308,26 @@ def run_arm(
 
     cap = _limit(memory_cap_mb, ARM_MEMORY_CAP_ENV, ARM_MEMORY_CAP_MB)
     limit = _limit(timeout_s, ARM_TIMEOUT_ENV, ARM_TIMEOUT_S)
+    floor = _limit(min_available_mb, MIN_AVAILABLE_ENV, MIN_AVAILABLE_MB)
     out_path.unlink(missing_ok=True)  # a stale result must not pass for this run's
     start = time.perf_counter()
     popen = subprocess.Popen(argv, env=env)
     peak = 0.0
     status: str | None = None
+    kill_reason: str | None = None
     try:
         proc = psutil.Process(popen.pid)
         while True:
             peak = max(peak, _tree_rss_mb(proc))
             if peak > cap:
-                status = "memory_cap"
+                status, kill_reason = "memory_cap", "rss_cap"
+            elif psutil.virtual_memory().available / 2**20 < floor:
+                status, kill_reason = "memory_cap", "available_floor"
             elif time.perf_counter() - start > limit:
                 status = "timeout"
             if status is not None:
                 _kill_tree(popen.pid)
-                popen.wait()
+                _reap(popen)
                 break
             try:
                 popen.wait(timeout=poll_s)
@@ -279,20 +335,24 @@ def run_arm(
             except subprocess.TimeoutExpired:
                 continue
     except psutil.NoSuchProcess:
-        popen.wait()  # exited before the first sample; classified below
+        _reap(popen)  # exited before the first sample; classified below
     except BaseException:
         _kill_tree(popen.pid)  # a cancelled sweep must not orphan a capped child
+        _reap(popen)
         raise
-    wall = time.perf_counter() - start
+    process_seconds = time.perf_counter() - start
     returncode = popen.returncode
     if status is not None:
-        return killed_record(status, returncode, peak, wall), None
+        # A killed arm never reports a clean exit: 0 here could only be a child that
+        # finished in the instant between the sample and the kill, or a lost reap.
+        killed_rc = None if returncode == 0 else returncode
+        return killed_record(status, killed_rc, peak, process_seconds, kill_reason), None
     try:
         payload = json.loads(out_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         payload = None
     if returncode != 0 or payload is None:
-        return killed_record("crashed", returncode, peak, wall), None
+        return killed_record("crashed", returncode, peak, process_seconds), None
     record = arm_record(
         arm,
         payload["summary"],
@@ -300,7 +360,13 @@ def run_arm(
         tuple(payload["partition"]),
         expected_matchkeys,
     )
-    record.update(crashed=None, peak_rss_mb=round(peak, 1), wall_seconds=payload["wall_seconds"])
+    # wall_seconds from the child's pipeline, process_seconds from the parent's clock.
+    record.update(
+        crashed=None,
+        peak_rss_mb=round(peak, 1),
+        wall_seconds=payload["wall_seconds"],
+        process_seconds=round(process_seconds, 1),
+    )
     return record, payload
 
 
@@ -380,12 +446,22 @@ def arm_main(argv: list[str]) -> int:
     return 0
 
 
-def sweep_dataset(name: str, work_dir: Path, arms: tuple[str, ...] = ARMS) -> dict | None:
+def sweep_dataset(
+    name: str,
+    work_dir: Path,
+    arms: tuple[str, ...] = ARMS,
+    budget_s: float | None = None,
+) -> dict | None:
     """Sweep one corpus dataset, or None when it is unavailable or unlabelled.
 
     Loads and auto-configures once, writes the config every arm reads to
     ``<work_dir>/<name>/config.json``, then runs each arm in its own child process
-    under the watchdog (``run_arm``)."""
+    under the watchdog (``run_arm``).
+
+    ``budget_s`` (else ``GOLDENMATCH_CUT_RULES_DATASET_BUDGET_S``, else no budget)
+    bounds all the arms together, from the first arm's start: each arm's timeout is
+    at most its share of what is left, and once the budget is spent the remaining
+    arms are recorded as ``timeout`` without being started."""
     import time
 
     from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
@@ -412,18 +488,35 @@ def sweep_dataset(name: str, work_dir: Path, arms: tuple[str, ...] = ARMS) -> di
     del loaded, df, gt  # every child reloads the dataset; the parent holds none of it
 
     env = arm_env()
+    budget = _limit(budget_s, DATASET_BUDGET_ENV, DATASET_BUDGET_S)
+    arm_timeout = _limit(None, ARM_TIMEOUT_ENV, ARM_TIMEOUT_S)
+    # Held-out per-rule F1 stays out of CI logs, like it stays out of the gate view.
+    holdout = corpus_of(name) == "holdout"
     records: dict[str, dict] = {}
     diagnostics: dict[str, dict | None] = {}
     models_saved: list[str] = []
     hashes_after_default: dict[str, str] = {}
-    for arm in arms:
-        out_path = dataset_dir / f"arm_{arm}.json"
-        argv = arm_argv(name, config_path, arm, model_dir, out_path)
-        records[arm], payload = run_arm(argv, out_path, arm, probabilistic_matchkeys, env=env)
+    arms_start = time.perf_counter()
+    for index, arm in enumerate(arms):
+        timeout_s = arm_timeout
+        if budget is not None:
+            remaining = budget - (time.perf_counter() - arms_start)
+            timeout_s = min(arm_timeout, remaining / (len(arms) - index))
+        if budget is not None and timeout_s <= 0:
+            records[arm] = killed_record("timeout", None, 0.0, 0.0, "dataset_budget")
+            payload = None
+        else:
+            out_path = dataset_dir / f"arm_{arm}.json"
+            argv = arm_argv(name, config_path, arm, model_dir, out_path)
+            records[arm], payload = run_arm(
+                argv, out_path, arm, probabilistic_matchkeys, env=env, timeout_s=timeout_s
+            )
         rec = records[arm]
+        f1_part = "" if holdout else f" f1={rec['f1']}"
         print(
-            f"[cut-rules] {name}:{arm} crashed={rec['crashed']} f1={rec['f1']} "
-            f"peak_rss_mb={rec['peak_rss_mb']} wall_seconds={rec['wall_seconds']}",
+            f"[cut-rules] {name}:{arm} crashed={rec['crashed']}{f1_part} "
+            f"peak_rss_mb={rec['peak_rss_mb']} wall_seconds={rec['wall_seconds']} "
+            f"process_seconds={rec['process_seconds']}",
             file=sys.stderr,
         )
         if arm == "default":
@@ -526,7 +619,11 @@ def run(argv: list[str]) -> int:
     card["meta"]["goldenmatch_env"] = {
         k: v for k, v in sorted(os.environ.items()) if k.startswith("GOLDENMATCH_")
     }
-    card["meta"]["pythonhashseed"] = os.environ.get("PYTHONHASHSEED")
+    # The sweep process's own seed, and the one every arm's child runs under.
+    card["meta"]["pythonhashseed"] = {
+        "sweep": os.environ.get("PYTHONHASHSEED"),
+        "arms": arm_env()["PYTHONHASHSEED"],
+    }
 
     required = [d.strip() for d in args.require_datasets.split(",") if d.strip()]
     failures: list[str] = []
