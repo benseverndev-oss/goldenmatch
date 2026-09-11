@@ -7,7 +7,8 @@
 # the cut diagnostics. One job per dataset; a final job merges the per-dataset
 # scorecards into the cut-rule-matrix artifact and a step-summary table.
 #
-# Measurement only: it chooses no rule and gates nothing. NOT in ci-required.
+# P4: the merge job also gates routing rows (scripts/autoconfig_quality/cut_gate.py) --
+# the shipped table must pass, the candidate rows are reported. NOT in ci-required.
 # Held-out data is fetched here and never committed: Leipzig Abt-Buy (CC-BY),
 # Magellan/DeepMatcher (cite-only, evaluation only), FEBRL dataset1/2 (ANU
 # open-source licence). ncvr_real is local-only PII and never provisioned.
@@ -18,6 +19,9 @@ on:
     paths:
       - "scripts/autoconfig_quality/rule_sweep.py"
       - "scripts/autoconfig_quality/corpus.py"
+      - "scripts/autoconfig_quality/cut_gate.py"
+      - "scripts/autoconfig_quality/cut_rows.py"
+      - "packages/python/goldenmatch/goldenmatch/core/fs_cut_rules.py"
       - ".github/workflows/fs-cut-rule-matrix.yml"
   schedule:
     - cron: "0 9 * * 0" # weekly, Sunday 09:00 UTC
@@ -206,6 +210,24 @@ jobs:
             echo ""
             cat cut-rule-matrix.md
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Gate the candidate routing rows (report only)
+        if: always() && hashFiles('cut-rule-matrix.json') != '' && hashFiles('cut-rule-matrix-holdout.json') != ''
+        run: |
+          uv run python -m scripts.autoconfig_quality.cut_gate \
+            --design cut-rule-matrix.json --holdout cut-rule-matrix-holdout.json \
+            --table candidates --out cut-rule-gate-candidates.md --report-only
+      - name: Gate the shipped routing table
+        if: always() && hashFiles('cut-rule-matrix.json') != '' && hashFiles('cut-rule-matrix-holdout.json') != ''
+        run: |
+          uv run python -m scripts.autoconfig_quality.cut_gate \
+            --design cut-rule-matrix.json --holdout cut-rule-matrix-holdout.json \
+            --table shipped --out cut-rule-gate-shipped.md
+      - name: Summarize the gate
+        if: always()
+        run: |
+          for f in cut-rule-gate-shipped.md cut-rule-gate-candidates.md; do
+            if [ -f "$f" ]; then cat "$f" >> "$GITHUB_STEP_SUMMARY"; fi
+          done
       - name: Upload the merged matrix
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
@@ -214,6 +236,8 @@ jobs:
           path: |
             cut-rule-matrix.json
             cut-rule-matrix.md
+            cut-rule-gate-shipped.md
+            cut-rule-gate-candidates.md
       - name: Upload the held-out gate scorecard
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
