@@ -667,8 +667,8 @@
       "statements": 1148
     },
     "goldenmatch/core/fs_cut_rules.py": {
-      "rate": 0.98,
-      "statements": 50
+      "rate": 0.9684,
+      "statements": 95
     },
     "goldenmatch/core/fused_match.py": {
       "rate": 0.9303,
