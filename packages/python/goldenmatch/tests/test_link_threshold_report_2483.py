@@ -28,6 +28,7 @@ from goldenmatch.config.schemas import MatchkeyConfig, MatchkeyField
 from goldenmatch.core.probabilistic import (
     LINK_THRESHOLD_CALIBRATED,
     LINK_THRESHOLD_CONFIGURED,
+    LINK_THRESHOLD_EVIDENCE_RULE,
     LINK_THRESHOLD_FALLBACK,
     EMResult,
     link_threshold_source,
@@ -62,7 +63,14 @@ def test_calibrated_when_nothing_configured() -> None:
     assert link_threshold_source(_mk(), _EM(0.7)) == LINK_THRESHOLD_CALIBRATED
 
 
-def test_fallback_when_neither() -> None:
+def test_evidence_rule_when_nothing_configured_or_calibrated() -> None:
+    """The linear cutoff's default evidence rule (GOLDENMATCH_FS_LINEAR_CUT=prior_mid) is
+    chosen from the trained model, so it is not reported as a fallback."""
+    assert link_threshold_source(_mk(), _EM(None)) == LINK_THRESHOLD_EVIDENCE_RULE
+
+
+def test_fallback_when_the_rule_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GOLDENMATCH_FS_LINEAR_CUT", "off")
     assert link_threshold_source(_mk(), _EM(None)) == LINK_THRESHOLD_FALLBACK
 
 

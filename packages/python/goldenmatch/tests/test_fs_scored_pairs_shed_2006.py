@@ -63,6 +63,8 @@ def _run(monkeypatch, *, flag: bool, cap: str | None):
 
     monkeypatch.setenv("GOLDENMATCH_FS_COLUMNAR_CLUSTER", "1" if flag else "0")
     monkeypatch.setenv("GOLDENMATCH_FS_WORKERS", "1")
+    # _ANCHOR was set at the fixed 0.50 midpoint cut; this pins the shed, not the cutoff.
+    monkeypatch.setenv("GOLDENMATCH_FS_LINEAR_CUT", "off")
     if cap is not None:
         monkeypatch.setenv("GOLDENMATCH_FS_SCORED_PAIRS_MAX", cap)
     return gm.dedupe_df(_df(), config=_cfg(), confidence_required=False)

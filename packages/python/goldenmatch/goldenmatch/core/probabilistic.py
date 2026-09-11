@@ -3759,6 +3759,9 @@ def resolve_thresholds(
 LINK_THRESHOLD_CONFIGURED = "configured"
 LINK_THRESHOLD_CALIBRATED = "calibrated"
 LINK_THRESHOLD_FALLBACK = "fallback"
+#: The linear cutoff came from the ``GOLDENMATCH_FS_LINEAR_CUT`` evidence rule. Chosen from
+#: the trained model, so it is neither warned about as a fallback nor stamped as calibrated.
+LINK_THRESHOLD_EVIDENCE_RULE = "evidence_rule"
 
 
 def link_threshold_source(mk: MatchkeyConfig, em_result: EMResult) -> str:
@@ -3766,7 +3769,8 @@ def link_threshold_source(mk: MatchkeyConfig, em_result: EMResult) -> str:
 
     Mirrors -- and must keep mirroring -- the precedence in `resolve_thresholds`
     and `_fs_link_threshold`: explicit `mk.link_threshold`, then the
-    EM-calibrated per-dataset cutoff, then the fixed default. Derived here
+    EM-calibrated per-dataset cutoff, then the ``GOLDENMATCH_FS_LINEAR_CUT`` evidence
+    rule (default ``prior_mid``), then the fixed default. Derived here
     rather than re-inferred at the reporting site so the two cannot drift; a
     reporting layer that disagrees with the resolver about where the number
     came from is worse than no report at all.
@@ -3780,6 +3784,10 @@ def link_threshold_source(mk: MatchkeyConfig, em_result: EMResult) -> str:
         return LINK_THRESHOLD_CONFIGURED
     if getattr(em_result, "calibrated_link_threshold", None) is not None:
         return LINK_THRESHOLD_CALIBRATED
+    if _fs_linear_rule_link_threshold(
+        mk, em_result, _fs_calibration_mode() == "posterior"
+    ) is not None:
+        return LINK_THRESHOLD_EVIDENCE_RULE
     return LINK_THRESHOLD_FALLBACK
 
 
@@ -4591,16 +4599,34 @@ def _posterior_split(scores) -> float | None:
 _FS_LINEAR_CUT_RULES = ("prior", "prior_mid")
 
 
+_FS_LINEAR_CUT_DEFAULT = "prior_mid"
+_FS_LINEAR_CUT_OFF = ("off", "0", "false", "none", "midpoint")
+
+
 def _fs_linear_cut_rule() -> str | None:
-    """``GOLDENMATCH_FS_LINEAR_CUT``: ``prior`` or ``prior_mid``; anything else = off."""
+    """``GOLDENMATCH_FS_LINEAR_CUT``: ``prior_mid`` (default) or ``prior``.
+
+    ``off`` (or ``0``/``false``/``none``/``midpoint``) restores the fixed 0.50 midpoint cut.
+    An unrecognised value warns and keeps the default rather than silently reverting.
+    """
     value = os.environ.get("GOLDENMATCH_FS_LINEAR_CUT", "").strip().lower()
-    return value if value in _FS_LINEAR_CUT_RULES else None
+    if not value:
+        return _FS_LINEAR_CUT_DEFAULT
+    if value in _FS_LINEAR_CUT_OFF:
+        return None
+    if value in _FS_LINEAR_CUT_RULES:
+        return value
+    logger.warning(
+        "GOLDENMATCH_FS_LINEAR_CUT=%r is not one of %s or off; using %s",
+        value, "/".join(_FS_LINEAR_CUT_RULES), _FS_LINEAR_CUT_DEFAULT,
+    )
+    return _FS_LINEAR_CUT_DEFAULT
 
 
 def _fs_linear_rule_link_threshold(
     mk: MatchkeyConfig, em_result: EMResult, calibrated: bool
 ) -> float | None:
-    """Linear link cutoff placed by evidence bits (``GOLDENMATCH_FS_LINEAR_CUT``); default off.
+    """Linear link cutoff placed by evidence bits (``GOLDENMATCH_FS_LINEAR_CUT``, default ``prior_mid``).
 
     The linear score is ``(W - lo) / (hi - lo)``, where ``lo``/``hi`` sum every field's
     min/max match weight plus the negative-evidence range. The fixed 0.50 cutoff therefore
@@ -4613,13 +4639,24 @@ def _fs_linear_rule_link_threshold(
     the posterior crosses 0.5. ``prior_mid``: the larger of that and the old midpoint.
     Returned as the equivalent normalized cutoff so every scorer, native kernel included,
     applies it unchanged. None when off, in posterior mode, or with a degenerate range.
+
+    MEASURED (fs-lever-gate full panel, both arms with the 50,000-pair u sample, run
+    34551694684), midpoint vs ``prior_mid``: ncvr_synthetic 0.9743 -> 0.9990, dblp_acm 0.8058
+    -> 0.8159, amazon_google 0.0217 -> 0.0475; the other seven datasets' clusters identical.
+    historical_50k (midpoint +10.8 bits, lambda 0.661) and dblp_scholar (+22.2, 0.065) keep
+    their midpoint, which is why pure ``prior`` is not the default: it would drop historical's
+    cut to 0 bits.
     """
     rule = _fs_linear_cut_rule()
     if rule is None or calibrated:
         return None
+    match_weights = getattr(em_result, "match_weights", None)
+    lam = getattr(em_result, "proportion_matched", None)
+    if not match_weights or lam is None:
+        return None  # nothing to place a cut from: fall through to the fixed default
     lo, hi = _fs_ne_weight_range(em_result, mk)
     for f in mk.fields:
-        weights = em_result.match_weights.get(f.field)
+        weights = match_weights.get(f.field)
         if weights:
             lo += min(weights)
             hi += max(weights)
@@ -4636,7 +4673,7 @@ def _fs_link_threshold(
 ) -> float:
     """The FS link cutoff: configured ``mk.link_threshold`` when set, else the
     calibrated per-dataset cutoff (when EM produced one), else the evidence-bit
-    rule when ``GOLDENMATCH_FS_LINEAR_CUT`` is set, else the calibration-aware
+    rule (``GOLDENMATCH_FS_LINEAR_CUT``, default ``prior_mid``), else the calibration-aware
     value from ``compute_thresholds``. Extracted verbatim from the scalar /
     vectorized / batched scorers (#1804 item 4) so they cannot drift on how the
     cutoff is resolved; ``resolve_thresholds`` mirrors the same precedence."""

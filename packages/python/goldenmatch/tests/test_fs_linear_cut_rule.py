@@ -43,14 +43,22 @@ def _norm(bits: float) -> float:
     return (bits - -10.0) / (14.0 - -10.0)
 
 
-def test_off_by_default(monkeypatch):
+def test_prior_mid_is_the_default(monkeypatch):
     monkeypatch.delenv("GOLDENMATCH_FS_LINEAR_CUT", raising=False)
-    assert _fs_linear_rule_link_threshold(_mk(), _em(0.01), calibrated=False) is None
+    got = _fs_linear_rule_link_threshold(_mk(), _em(0.01), calibrated=False)
+    assert math.isclose(got, _norm(math.log2(99.0)), rel_tol=1e-9)
 
 
-def test_unknown_value_is_off(monkeypatch):
+def test_off_restores_the_midpoint_cut(monkeypatch):
+    for off in ("off", "0", "midpoint"):
+        monkeypatch.setenv("GOLDENMATCH_FS_LINEAR_CUT", off)
+        assert _fs_linear_rule_link_threshold(_mk(), _em(0.01), calibrated=False) is None
+
+
+def test_unknown_value_keeps_the_default(monkeypatch):
     monkeypatch.setenv("GOLDENMATCH_FS_LINEAR_CUT", "median")
-    assert _fs_linear_rule_link_threshold(_mk(), _em(0.01), calibrated=False) is None
+    got = _fs_linear_rule_link_threshold(_mk(), _em(0.01), calibrated=False)
+    assert math.isclose(got, _norm(math.log2(99.0)), rel_tol=1e-9)
 
 
 def test_posterior_mode_is_untouched(monkeypatch):
