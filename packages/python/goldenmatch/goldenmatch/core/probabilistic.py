@@ -3791,6 +3791,46 @@ def link_threshold_source(mk: MatchkeyConfig, em_result: EMResult) -> str:
     return LINK_THRESHOLD_FALLBACK
 
 
+def _fs_unresolved_cut_reason(mk: MatchkeyConfig, em_result: EMResult) -> str | None:
+    """Why the rule step placed no cut, for the report; None when no rule was asked for."""
+    from goldenmatch.core.fs_cut_rules import weight_envelope
+
+    rule = getattr(mk, "link_cut_rule", None) or _fs_linear_cut_rule()
+    if rule is None:
+        return None
+    if (
+        weight_envelope(mk, em_result) is None
+        or getattr(em_result, "proportion_matched", None) is None
+    ):
+        return "degenerate model: no usable weight envelope or match rate"
+    return f"{rule} unavailable: no training histogram on this model; fixed 0.50 cut applies"
+
+
+def link_cut_report(mk: MatchkeyConfig, em_result: EMResult) -> dict:
+    """``cut_rule`` / ``cut_reason`` for the per-matchkey cutoff report.
+
+    - Both are None when a configured or calibrated cutoff decided first, in posterior mode,
+      or when no rule was asked for.
+    - ``cut_reason`` alone is set when a rule was asked for but could not place the cut.
+
+    Mirrors the precedence in :func:`_fs_link_threshold` / :func:`resolve_thresholds`.
+    """
+    report = {"cut_rule": None, "cut_reason": None}
+    if mk.link_threshold is not None:
+        return report
+    if getattr(em_result, "calibrated_link_threshold", None) is not None:
+        return report
+    if _fs_calibration_mode() == "posterior":
+        return report
+    resolved = _fs_resolved_cut(mk, em_result, calibrated=False)
+    if resolved is not None:
+        report["cut_rule"] = resolved.rule
+        report["cut_reason"] = resolved.reason
+    else:
+        report["cut_reason"] = _fs_unresolved_cut_reason(mk, em_result)
+    return report
+
+
 def _fs_calibrate_threshold_enabled() -> bool:
     """Unsupervised per-dataset link-threshold calibration. **Default OFF.**
 

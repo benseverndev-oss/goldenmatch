@@ -989,12 +989,13 @@ def _score_probabilistic_matchkey(
         # #2483: record the cutoff AND where it came from, so the result can
         # report it. Without this a run gives no way to tell a deliberate
         # threshold from a fixed default nothing about the data chose.
-        from goldenmatch.core.probabilistic import link_threshold_source
+        from goldenmatch.core.probabilistic import link_cut_report, link_threshold_source
 
         threshold_out[mk.name] = {
             "link_threshold": float(link_threshold),
             "source": link_threshold_source(mk, em_result),
             "refit": _refit_decision,
+            **link_cut_report(mk, em_result),
         }
     if em_results is not None:
         em_results[mk.name] = em_result
