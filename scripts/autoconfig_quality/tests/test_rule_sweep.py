@@ -141,3 +141,108 @@ def test_sweep_frame_runs_every_arm_on_one_saved_model(tmp_path, monkeypatch):
     assert all(d and "midpoint_bits" in d for d in out["cut_diagnostics"].values())
     assert set(out["below_default"]) <= set(CUT_RULES)
     assert isinstance(out["model_reload_delta"], float)
+
+
+def _record(corpus: str, f1_by_arm: dict, applied: dict | None = None) -> dict:
+    applied = applied or {}
+    arms = {
+        arm: {
+            "f1": f1_by_arm.get(arm, 0.5),
+            "precision": 0.0,
+            "recall": 0.0,
+            "pairs": 0,
+            "digest": "d",
+            "matchkeys": {},
+            "applied": applied.get(arm, True),
+            "voided": False,
+        }
+        for arm in S.ARMS
+    }
+    return {
+        "corpus": corpus,
+        "rows": 10,
+        "gt_pairs": 3,
+        "arms": arms,
+        "cut_diagnostics": {},
+        "models_saved": ["fs.json"],
+        "model_reload_delta": 0.0,
+        "below_default": ["midpoint"],
+    }
+
+
+def _card(sha: str, **datasets) -> dict:
+    return {
+        "meta": {
+            "git_sha": sha,
+            "native_version": "0.2.2",
+            "datasets_run": sorted(datasets),
+            "datasets_skipped": {},
+            "cut_env_overrides": {},
+            "tolerance": 0.01,
+        },
+        "datasets": datasets,
+    }
+
+
+def test_best_rule_takes_the_highest_applied_rule_with_ties_in_rule_order():
+    rec = _record(
+        "design",
+        {"default_loaded": 0.8, "prior": 0.9, "evidence_9": 0.9, "otsu": 0.99},
+        applied={"otsu": False},
+    )
+    assert S.best_rule(rec) == ("prior", 0.9)
+
+
+def test_best_rule_falls_back_to_the_baseline_when_nothing_applied():
+    rec = _record("design", {"default_loaded": 0.7}, applied={r: False for r in CUT_RULES})
+    assert S.best_rule(rec) == ("default_loaded", 0.7)
+
+
+def test_merge_cards_combines_datasets_from_one_commit():
+    merged = S.merge_cards(
+        [
+            _card("abc", febrl3=_record("design", {})),
+            _card("abc", abt_buy=_record("holdout", {})),
+        ]
+    )
+    assert sorted(merged["datasets"]) == ["abt_buy", "febrl3"]
+    assert merged["meta"]["git_sha"] == "abc"
+    assert merged["meta"]["tolerance"] == 0.01
+
+
+def test_merge_cards_refuses_mixed_commits_and_duplicates():
+    import pytest
+
+    with pytest.raises(ValueError, match="different commits"):
+        S.merge_cards(
+            [_card("abc", a=_record("design", {})), _card("def", b=_record("design", {}))]
+        )
+    with pytest.raises(ValueError, match="two sweep results"):
+        S.merge_cards(
+            [_card("abc", a=_record("design", {})), _card("abc", a=_record("design", {}))]
+        )
+
+
+def test_render_markdown_has_one_row_per_dataset_design_first():
+    card = S.merge_cards(
+        [
+            _card("abc", abt_buy=_record("holdout", {"default_loaded": 0.8, "evidence_12": 0.85})),
+            _card("abc", febrl3=_record("design", {"default_loaded": 0.9, "prior_mid": 0.95})),
+        ]
+    )
+    lines = S.render_markdown(card).strip().splitlines()
+    assert lines[0].startswith("| dataset | corpus | default F1 | best rule |")
+    assert lines[2] == "| febrl3 | design | 0.9000 | prior_mid | 0.9500 | +0.0500 | midpoint |"
+    assert lines[3].startswith("| abt_buy | holdout | 0.8000 | evidence_12 | 0.8500 |")
+
+
+def test_merge_cli_writes_json_and_markdown(tmp_path):
+    import json
+
+    a, b = tmp_path / "a.json", tmp_path / "b.json"
+    a.write_text(json.dumps(_card("abc", febrl3=_record("design", {}))))
+    b.write_text(json.dumps(_card("abc", abt_buy=_record("holdout", {}))))
+    out, md = tmp_path / "m.json", tmp_path / "m.md"
+    assert S.main(["merge", str(a), str(b), "--out", str(out), "--summary-md", str(md)]) == 0
+    assert sorted(json.loads(out.read_text())["datasets"]) == ["abt_buy", "febrl3"]
+    assert "| febrl3 |" in md.read_text()
