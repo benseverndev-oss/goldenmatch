@@ -12,6 +12,8 @@ tests/benchmarks/datasets/.
 """
 from __future__ import annotations
 
+import csv
+import io
 import logging
 import os
 import tempfile
@@ -20,6 +22,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.compute as pc
+import pyarrow.csv as pacsv
 import pyarrow.parquet as pq
 
 logger = logging.getLogger(__name__)
@@ -36,6 +39,36 @@ def _cast_column_to_string(table: pa.Table, name: str) -> pa.Table:
     """Return a copy of ``table`` with column ``name`` cast to pa.string()."""
     idx = table.schema.get_field_index(name)
     return table.set_column(idx, name, pc.cast(table.column(name), pa.string()))
+
+
+def _read_csv_lossy(path: Path) -> pa.Table:
+    """Read a CSV with every column a string and empty fields kept as ``""``.
+
+    The Leipzig CSVs carry invalid UTF-8 bytes, which are replaced rather than
+    refused (a leading BOM is dropped). Quoted fields may span lines.
+    """
+    text = path.read_bytes().decode("utf-8-sig", errors="replace")
+    header = next(csv.reader(io.StringIO(text)), [])
+    return pacsv.read_csv(
+        io.BytesIO(text.encode("utf-8")),
+        parse_options=pacsv.ParseOptions(newlines_in_values=True),
+        convert_options=pacsv.ConvertOptions(
+            column_types={name: pa.string() for name in header},
+            null_values=[],
+            strings_can_be_null=False,
+            quoted_strings_can_be_null=False,
+        ),
+    )
+
+
+def _with_source_ids(
+    table: pa.Table, src: str, rename: dict[str, str] | None = None
+) -> pa.Table:
+    """Rename columns, then replace ``id`` with a trailing ``record_id`` of ``<src>:<id>``."""
+    if rename:
+        table = _rename_columns(table, rename)
+    ids = pa.array([f"{src}:{v}" for v in table.column("id").to_pylist()], pa.string())
+    return table.append_column("record_id", ids).drop_columns(["id"])
 
 REPO = Path(__file__).resolve().parents[2]
 DATASETS_DIR = REPO / "packages" / "python" / "goldenmatch" / "tests" / "benchmarks" / "datasets"
@@ -136,35 +169,18 @@ def _dblp_acm() -> tuple[pa.Table, pa.Table]:
             f"{base}); missing: {[p.name for p in missing]}"
         )
 
-    # utf8-lossy: the Leipzig CSVs carry invalid UTF-8 bytes; replace them (mirrors
-    # polars' utf8-lossy). dtype=str + keep_default_na=False keeps every field a
-    # string (matching the prior infer_schema_length=0 all-Utf8 read).
-    import pandas as pd
-
-    def _read_csv(path: Path):
-        return pd.read_csv(
-            path,
-            dtype=str,
-            keep_default_na=False,
-            encoding="utf-8",
-            encoding_errors="replace",
-        )
-
-    def _prefix(pdf, src: str):
-        pdf = pdf.copy()
-        pdf["record_id"] = f"{src}:" + pdf["id"].astype(str)
-        return pdf.drop(columns=["id"])
-
-    records_pdf = pd.concat(
-        [_prefix(_read_csv(dblp_path), "dblp"), _prefix(_read_csv(acm_path), "acm")],
-        ignore_index=True,
-        sort=False,
+    records = pa.concat_tables(
+        [
+            _with_source_ids(_read_csv_lossy(dblp_path), "dblp"),
+            _with_source_ids(_read_csv_lossy(acm_path), "acm"),
+        ],
+        promote_options="default",
     )
-    records = pa.Table.from_pandas(records_pdf, preserve_index=False)
 
-    gt = _read_csv(gt_path)
+    gt = _read_csv_lossy(gt_path)
     pairs: list[tuple[Hashable, Hashable]] = [
-        (f"dblp:{d}", f"acm:{a}") for d, a in zip(gt["idDBLP"], gt["idACM"])
+        (f"dblp:{d}", f"acm:{a}")
+        for d, a in zip(gt.column("idDBLP").to_pylist(), gt.column("idACM").to_pylist())
     ]
 
     all_ids = records.column("record_id").to_pylist()
@@ -344,31 +360,19 @@ def _two_source_leipzig(
             f"missing: {[p.name for p in missing]}"
         )
 
-    import pandas as pd
-
-    def _read_csv(path: Path):
-        return pd.read_csv(
-            path, dtype=str, keep_default_na=False,
-            encoding="utf-8", encoding_errors="replace",
-        )
-
-    def _prefix(pdf, src: str):
-        pdf = pdf.copy()
-        if rename:
-            pdf = pdf.rename(columns=rename)
-        pdf["record_id"] = f"{src}:" + pdf["id"].astype(str)
-        return pdf.drop(columns=["id"])
-
-    records_pdf = pd.concat(
-        [_prefix(_read_csv(a_path), src_a), _prefix(_read_csv(b_path), src_b)],
-        ignore_index=True, sort=False,
+    records = pa.concat_tables(
+        [
+            _with_source_ids(_read_csv_lossy(a_path), src_a, rename),
+            _with_source_ids(_read_csv_lossy(b_path), src_b, rename),
+        ],
+        promote_options="default",
     )
-    records = pa.Table.from_pandas(records_pdf, preserve_index=False)
 
-    gt = _read_csv(gt_path)
+    gt = _read_csv_lossy(gt_path)
     ca, cb = gt_cols
     pairs: list[tuple[Hashable, Hashable]] = [
-        (f"{src_a}:{x}", f"{src_b}:{y}") for x, y in zip(gt[ca], gt[cb])
+        (f"{src_a}:{x}", f"{src_b}:{y}")
+        for x, y in zip(gt.column(ca).to_pylist(), gt.column(cb).to_pylist())
     ]
     all_ids = records.column("record_id").to_pylist()
     cmap = _cluster_ids_from_pairs(all_ids, pairs)
@@ -417,15 +421,13 @@ def _febrl4() -> tuple[pa.Table, pa.Table]:
 
     dfa, dfb, links = load_febrl4(return_links=True)
     # Indices are globally unique across the two frames ('rec-N-org' vs
-    # 'rec-N-dup-0'), so a plain concat keeps record ids distinct.
-    import pandas as pd
+    # 'rec-N-dup-0'), so a plain concat keeps record ids distinct. recordlinkage
+    # hands back its own frames: convert each once here and stay in arrow after.
+    def _prep(df) -> pa.Table:
+        table = pa.Table.from_pandas(df.reset_index(), preserve_index=False)
+        return _rename_columns(table, {table.column_names[0]: "record_id"})
 
-    def _prep(df):
-        pdf = df.reset_index()
-        return pdf.rename(columns={str(pdf.columns[0]): "record_id"})
-
-    records_pdf = pd.concat([_prep(dfa), _prep(dfb)], ignore_index=True, sort=False)
-    records = pa.Table.from_pandas(records_pdf, preserve_index=False)
+    records = pa.concat_tables([_prep(dfa), _prep(dfb)], promote_options="default")
     records = _cast_column_to_string(records, "record_id")
 
     all_ids = records.column("record_id").to_pylist()
