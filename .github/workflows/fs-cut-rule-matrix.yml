@@ -1,0 +1,190 @@
+# FS link-cut routing P3 -- the per-rule measurement matrix
+# (docs/superpowers/specs/2026-09-11-fs-cut-rule-routing-design.md).
+#
+# For every dataset in the frozen design + held-out corpus
+# (scripts/autoconfig_quality/corpus.py), runs the full pipeline once per
+# link_cut_rule on one shared EM model and records F1 / precision / recall plus
+# the cut diagnostics. One job per dataset; a final job merges the per-dataset
+# scorecards into the cut-rule-matrix artifact and a step-summary table.
+#
+# Measurement only: it chooses no rule and gates nothing. NOT in ci-required.
+# Held-out data is fetched here and never committed: Leipzig Abt-Buy (CC-BY),
+# Magellan/DeepMatcher (cite-only, evaluation only), FEBRL dataset1/2 (ANU
+# open-source licence). ncvr_real is local-only PII and never provisioned.
+name: fs-cut-rule-matrix
+
+on:
+  pull_request:
+    paths:
+      - "scripts/autoconfig_quality/rule_sweep.py"
+      - "scripts/autoconfig_quality/corpus.py"
+      - ".github/workflows/fs-cut-rule-matrix.yml"
+  schedule:
+    - cron: "0 9 * * 0" # weekly, Sunday 09:00 UTC
+  workflow_dispatch:
+    inputs:
+      corpus:
+        description: "Which corpus to measure"
+        type: choice
+        options: [all, design, holdout]
+        default: all
+
+permissions:
+  contents: read
+
+env:
+  # pyarrow's bundled mimalloc SIGSEGVs on goldenmatch's pipeline worker threads.
+  ARROW_DEFAULT_MEMORY_POOL: system
+  # jemalloc page-decay: return freed polars pages to the OS between arms.
+  _RJEM_MALLOC_CONF: "dirty_decay_ms:1000,muzzy_decay_ms:0"
+  GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+
+concurrency:
+  group: fs-cut-rule-matrix-${{ github.ref }}-${{ inputs.corpus }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      datasets: ${{ steps.list.outputs.datasets }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Sync workspace
+        run: uv sync --all-packages
+      - name: Unit tests for the corpus, loaders, generator knob and sweep
+        run: >-
+          uv run python -m pytest -q
+          scripts/autoconfig_quality/tests/test_corpus.py
+          scripts/autoconfig_quality/tests/test_rule_sweep.py
+          scripts/bench_er_headtohead/test_heldout_loaders.py
+          scripts/bench_er_headtohead/test_generate_fixture_corruption.py
+      - name: List the corpus
+        id: list
+        env:
+          CORPUS: ${{ inputs.corpus || 'all' }}
+        run: |
+          echo "datasets=$(uv run python -m scripts.autoconfig_quality.corpus --list "$CORPUS" --ci)" >> "$GITHUB_OUTPUT"
+
+  sweep:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        dataset: ${{ fromJSON(needs.plan.outputs.datasets) }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Sync workspace (installs goldenmatch @ HEAD)
+        run: uv sync --all-packages
+      - name: Build the native kernel (mirror the real default FS path)
+        run: uv run python scripts/build_native.py
+      - name: Install recordlinkage (febrl3 / febrl4)
+        run: uv pip install recordlinkage
+      - name: Fetch benchmark data
+        run: |
+          BASE=packages/python/goldenmatch/tests/benchmarks/datasets
+          fetch_zip() {
+            local name="$1" url="$2"; shift 2
+            local dest="$BASE/$name"
+            mkdir -p "$dest"
+            if curl -fsSL --retry 3 -o "/tmp/$name.zip" "$url"; then
+              mkdir -p "/tmp/$name" && unzip -o -q "/tmp/$name.zip" -d "/tmp/$name"
+              for f in "$@"; do
+                found=$(find "/tmp/$name" -name "$f" | head -1)
+                if [ -n "$found" ]; then cp "$found" "$dest/$f"
+                else echo "::warning::$name: $f not in archive"; fi
+              done
+            else
+              echo "::warning::$name download failed; --require-datasets will fail the run"
+            fi
+          }
+          L=https://dbs.uni-leipzig.de/file
+          fetch_zip DBLP-ACM "$L/DBLP-ACM.zip" DBLP2.csv ACM.csv DBLP-ACM_perfectMapping.csv
+          fetch_zip DBLP-Scholar "$L/DBLP-Scholar.zip" DBLP1.csv Scholar.csv DBLP-Scholar_perfectMapping.csv
+          fetch_zip Amazon-Google "$L/Amazon-GoogleProducts.zip" Amazon.csv GoogleProducts.csv Amzon_GoogleProducts_perfectMapping.csv
+          fetch_zip Abt-Buy "$L/Abt-Buy.zip" Abt.csv Buy.csv abt_buy_perfectMapping.csv
+          # Magellan/DeepMatcher: cite-only -- fetched for evaluation, never committed.
+          M=https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Structured
+          for name in Walmart-Amazon iTunes-Amazon Fodors-Zagats; do
+            mkdir -p "$BASE/Magellan/$name"
+            for f in tableA tableB train valid test; do
+              curl -fsSL --retry 3 -o "$BASE/Magellan/$name/$f.csv" "$M/$name/exp_data/$f.csv" \
+                || echo "::warning::Magellan $name $f.csv download failed"
+            done
+          done
+          # FEBRL dataset1/2 raw CSVs (ANU open-source licence) from recordlinkage.
+          mkdir -p "$BASE/FEBRL"
+          for f in dataset1 dataset2; do
+            curl -fsSL --retry 3 -o "$BASE/FEBRL/$f.csv" \
+              "https://raw.githubusercontent.com/J535D165/recordlinkage/master/recordlinkage/datasets/febrl/$f.csv" \
+              || echo "::warning::FEBRL $f download failed"
+          done
+      - name: Sweep every link-cut rule
+        env:
+          DATASET: ${{ matrix.dataset }}
+        run: |
+          uv run python -m scripts.autoconfig_quality.rule_sweep \
+            --datasets "$DATASET" --require-datasets "$DATASET" \
+            --out "cut-rules/$DATASET.json"
+      - name: Upload this dataset's scorecard
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        with:
+          name: cut-rules-${{ matrix.dataset }}
+          path: cut-rules/
+          if-no-files-found: warn
+
+  merge:
+    needs: [plan, sweep]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Sync workspace
+        run: uv sync --all-packages
+      - name: Download the per-dataset scorecards
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: cut-rules-*
+          merge-multiple: true
+          path: cut-rules
+      - name: Merge and summarize
+        run: |
+          uv run python -m scripts.autoconfig_quality.rule_sweep merge cut-rules/*.json \
+            --out cut-rule-matrix.json --summary-md cut-rule-matrix.md
+          {
+            echo "## FS link-cut rule matrix"
+            echo ""
+            echo "Default = link_cut_rule unset on the loaded model; below default = F1 more than 0.01 under it."
+            echo ""
+            cat cut-rule-matrix.md
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the merged matrix
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        with:
+          name: cut-rule-matrix
+          path: |
+            cut-rule-matrix.json
+            cut-rule-matrix.md
