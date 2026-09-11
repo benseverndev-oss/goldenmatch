@@ -562,6 +562,152 @@ def _febrl2() -> tuple[pa.Table, pa.Table]:
     return _febrl_raw("dataset2")
 
 
+# ── DESIGN corpus widening (spec 2026-09-11-fs-cut-rule-routing-design, P3) ───
+# Leipzig clustering trio (many-source, not two-source like _two_source_leipzig)
+# plus synthetic design variants. Approved so the candidate rule
+# "lambda < 0.004 with the prior binding -> posterior_099" does not rest on
+# dblp_acm alone. DESIGN, never HOLDOUT: see corpus.py.
+
+
+def _musicbrainz_20k() -> tuple[pa.Table, pa.Table]:
+    """Leipzig MusicBrainz 20K clustering benchmark (CC-BY: credit the Database
+    Group Leipzig and Saeedi, Peukert & Rahm, ADBIS 2017). 5 sources of the same
+    ~10K tracks; ``CID`` is the ground-truth cluster id, never empty."""
+    path = DATASETS_DIR / "Leipzig-Clustering" / "MusicBrainz" / "musicbrainz-20-A01.csv"
+    if not path.exists():
+        raise DatasetUnavailable(f"MusicBrainz 20K not found at {path}")
+    raw = _read_csv_lossy(path)
+    record_ids = pa.array([f"mb:{v}" for v in raw.column("TID").to_pylist()], pa.string())
+    cluster_ids = pa.array([int(v) for v in raw.column("CID").to_pylist()], pa.int64())
+    keep = ["number", "title", "length", "artist", "album", "year", "language"]
+    records = raw.select(keep).append_column("record_id", record_ids)
+    truth = pa.table({"record_id": record_ids, "cluster_id": cluster_ids})
+    return records, truth
+
+
+def _geo_settlements() -> tuple[pa.Table, pa.Table]:
+    """Leipzig geographic settlements clustering benchmark (CC-BY: credit the
+    Database Group Leipzig and Saeedi, Peukert & Rahm, ADBIS 2017). Settlement
+    labels from 5 sources; ``combinedSettlements(PerfectMatch).json``'s
+    ``clusteredVertices`` give the ground-truth clusters (one record can appear
+    in two clusters, which then merge under union)."""
+    import json
+
+    base = DATASETS_DIR / "Leipzig-Clustering" / "GeoSettlements"
+    records_path = base / "settlements.json"
+    clusters_path = base / "combinedSettlements(PerfectMatch).json"
+    missing = [p for p in (records_path, clusters_path) if not p.exists()]
+    if missing:
+        raise DatasetUnavailable(
+            f"GeoSettlements source JSON not found (vendor under {base}); "
+            f"missing: {[p.name for p in missing]}"
+        )
+
+    record_ids: list[str] = []
+    labels: list[str | None] = []
+    lats: list[str | None] = []
+    lons: list[str | None] = []
+    types: list[str | None] = []
+    for line in records_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        obj = json.loads(line)
+        data = obj.get("data", {})
+        record_ids.append(f"geo:{obj['id']}")
+        labels.append(data.get("label"))
+        lat = data.get("lat")
+        lon = data.get("lon")
+        lats.append(str(lat) if lat is not None else None)
+        lons.append(str(lon) if lon is not None else None)
+        t = data.get("type")
+        if isinstance(t, list):
+            t = "|".join(t)
+        types.append(t)
+    records = pa.table(
+        {
+            "record_id": pa.array(record_ids, pa.string()),
+            "label": pa.array(labels, pa.string()),
+            "lat": pa.array(lats, pa.string()),
+            "lon": pa.array(lons, pa.string()),
+            "type": pa.array(types, pa.string()),
+        }
+    )
+
+    pairs: list[tuple[Hashable, Hashable]] = []
+    for line in clusters_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        obj = json.loads(line)
+        vertices = obj.get("data", {}).get("clusteredVertices") or []
+        ids = [f"geo:{v}" for v in vertices]
+        pairs.extend(zip(ids, ids[1:]))
+
+    all_ids = records.column("record_id").to_pylist()
+    cmap = _cluster_ids_from_pairs(all_ids, pairs)
+    truth = pa.table({"record_id": all_ids, "cluster_id": [cmap[r] for r in all_ids]})
+    return records, truth
+
+
+def _affiliations() -> tuple[pa.Table, pa.Table]:
+    """Leipzig affiliation-strings clustering benchmark (CC-BY: credit the
+    Database Group Leipzig and Saeedi, Peukert & Rahm, ADBIS 2017). Free-text
+    affiliation strings; the headerless mapping CSV's id pairs give the
+    ground-truth clusters."""
+    import csv as _csv
+
+    base = DATASETS_DIR / "Leipzig-Clustering" / "Affiliations"
+    ids_path = base / "affiliationstrings_ids.csv"
+    mapping_path = base / "affiliationstrings_mapping.csv"
+    missing = [p for p in (ids_path, mapping_path) if not p.exists()]
+    if missing:
+        raise DatasetUnavailable(
+            f"Affiliations source CSVs not found (vendor under {base}); "
+            f"missing: {[p.name for p in missing]}"
+        )
+
+    ids_table = _read_csv_lossy(ids_path)
+    record_ids = pa.array([f"aff:{v}" for v in ids_table.column("id1").to_pylist()], pa.string())
+    records = pa.table({"record_id": record_ids, "affiliation": ids_table.column("affil1")})
+
+    text = mapping_path.read_bytes().decode("utf-8-sig", errors="replace")
+    pairs: list[tuple[Hashable, Hashable]] = [
+        (f"aff:{row[0]}", f"aff:{row[1]}") for row in _csv.reader(io.StringIO(text)) if row
+    ]
+
+    all_ids = records.column("record_id").to_pylist()
+    cmap = _cluster_ids_from_pairs(all_ids, pairs)
+    truth = pa.table({"record_id": all_ids, "cluster_id": [cmap[r] for r in all_ids]})
+    return records, truth
+
+
+#: Seed for the design-set synthetic variants: distinct from the held-out 1009 and
+#: the design panel's 42.
+_DESIGN_SYNTH_SEED = 7
+
+#: name -> (shape, corruption, dupe_rate). d02 = dupe_rate 0.02 (tiny lambda), d20 = 0.20.
+_SYNTH_DESIGN: dict[str, tuple[str, float, float]] = {
+    "synth_biblio_d02": ("biblio", 1.0, 0.02),
+    "synth_person_d02": ("person", 1.0, 0.02),
+    "synth_product_d02": ("product", 1.0, 0.02),
+    "synth_product_d20": ("product", 1.0, 0.20),
+}
+
+
+def _synthetic_design(shape: str, corruption: float, dupe_rate: float) -> tuple[pa.Table, pa.Table]:
+    """A design synthetic variant: the design panel's dedicated seed (distinct
+    from both the held-out seed and the head-to-head panel's default 42), at
+    ``dupe_rate`` and ``corruption``."""
+    return _synthetic(
+        shape,
+        _synthetic_rows(),
+        dupe_rate=dupe_rate,
+        seed=_DESIGN_SYNTH_SEED,
+        corruption=corruption,
+    )
+
+
 #: Seed for the held-out synthetic variants; the design panel's synthetic sets use 42.
 _HELDOUT_SYNTH_SEED = 1009
 
@@ -615,6 +761,11 @@ _LOADERS = {
     **{
         name: (lambda spec=spec: _synthetic_heldout(*spec)) for name, spec in _SYNTH_HELDOUT.items()
     },
+    # DESIGN corpus widening (P3): Leipzig clustering trio + synthetic variants.
+    "musicbrainz_20k": _musicbrainz_20k,
+    "geo_settlements": _geo_settlements,
+    "affiliations": _affiliations,
+    **{name: (lambda spec=spec: _synthetic_design(*spec)) for name, spec in _SYNTH_DESIGN.items()},
 }
 
 
