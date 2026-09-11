@@ -716,6 +716,13 @@ class EMResult:
     # double-count). None/empty = off = byte-identical.
     joint_corrections: list[tuple[str, str, float]] | None = None
     training_config: dict | None = None
+    # Linear-score histogram of EM's training sample: {"lo", "hi", "counts"}, 100 equal bins
+    # over [0, 1], normalized against the regular-field envelope exactly as the Otsu
+    # calibrator normalizes it. Read by the `otsu` link-cut rule and the cut diagnostics
+    # (core/fs_cut_rules.py). None when a model was not trained through train_em's sample
+    # path (counted EM, per-pass sessions, supervised estimation) or was saved before this
+    # field existed.
+    training_score_histogram: dict | None = None
     # Non-serialized marker distinguishing a loaded schema-v1 model from an
     # in-memory result constructed before manifests existed.
     _source_schema_version: int | None = None
@@ -754,6 +761,8 @@ class EMResult:
             data["joint_corrections"] = [list(t) for t in self.joint_corrections]
         if self.training_config is not None:
             data["training_config"] = self.training_config
+        if self.training_score_histogram is not None:
+            data["training_score_histogram"] = self.training_score_histogram
         return data
 
     @classmethod
@@ -787,6 +796,7 @@ class EMResult:
                     if data.get("joint_corrections") else None
                 ),
                 training_config=data.get("training_config"),
+                training_score_histogram=data.get("training_score_histogram"),
                 _source_schema_version=version,
             )
         except KeyError as exc:
@@ -2870,6 +2880,8 @@ def train_em(
                 ", ".join(f"{a}x{b}(-{bits:.2f}b)" for a, b, bits in joint_corrections),
             )
 
+    training_score_histogram = _training_score_histogram(comp_matrix, mk, match_weights)
+
     return EMResult(
         m_probs=m_probs,
         u_probs=u_probs,
@@ -2882,6 +2894,7 @@ def train_em(
         calibrated_link_threshold=calibrated_link_threshold,
         joint_corrections=joint_corrections,
         training_config=_training_config_manifest(mk),
+        training_score_histogram=training_score_histogram,
     )
 
 
@@ -3865,14 +3878,14 @@ _CALIBRATE_MIN, _CALIBRATE_MAX = 0.40, 0.90
 _CALIBRATE_POSTERIOR_MIN, _CALIBRATE_POSTERIOR_MAX = 0.05, 0.995
 
 
-def _otsu_threshold(scores) -> float | None:
-    """Otsu split: the cutoff maximizing between-class variance of a [0,1] score
-    histogram. For a bimodal non-match/match distribution this is the class
-    boundary; for well-separated (unimodal-ish) data the exact split barely
-    matters (flat F1 curve), so it stays safe."""
-    nbins = 100
-    hist, _ = np.histogram(scores, bins=nbins, range=(0.0, 1.0))
-    hist = hist.astype(np.float64)
+def _otsu_split_from_counts(counts) -> float | None:
+    """Otsu split of a [0, 1] histogram given as bin counts.
+
+    The split is the cutoff maximizing between-class variance, returned as the upper edge of
+    the split bin.
+    """
+    hist = np.asarray(counts, dtype=np.float64)
+    nbins = hist.shape[0]
     total = hist.sum()
     if total <= 0:
         return None
@@ -3886,6 +3899,17 @@ def _otsu_threshold(scores) -> float | None:
         sigma_b = np.where(denom > 1e-12, (mu_t * omega - mu) ** 2 / denom, 0.0)
     k = int(np.argmax(sigma_b))
     return float((k + 1) / nbins)              # upper edge of the split bin
+
+
+def _otsu_threshold(scores) -> float | None:
+    """Otsu split: the cutoff maximizing between-class variance of a [0,1] score histogram.
+
+    For a bimodal non-match/match distribution this is the class boundary. For
+    well-separated (unimodal-ish) data the exact split barely matters (flat F1 curve), so it
+    stays safe.
+    """
+    hist, _ = np.histogram(scores, bins=100, range=(0.0, 1.0))
+    return _otsu_split_from_counts(hist)
 
 
 # ── FS threshold-refit loop (Phase 3a) ───────────────────────────────────────
@@ -4506,6 +4530,33 @@ def fs_refit_link_threshold(id_a, id_b, score, default_link: float,
             max_default=max_default, max_candidate=max_candidate,
             expelled=expelled)
     return candidate
+
+
+_TRAINING_HISTOGRAM_BINS = 100
+
+
+def _training_score_histogram(comp_matrix, mk, match_weights) -> dict | None:
+    """Linear-score histogram of EM's training sample.
+
+    Normalized exactly as :func:`_calibrate_link_threshold` normalizes it (regular fields,
+    observed levels), so an Otsu split of these counts is that calibrator's split.
+    """
+    fields = [f for f in mk.fields if f.field in match_weights]
+    if not fields or comp_matrix is None or comp_matrix.shape[0] == 0:
+        return None
+    weights = {f.field: np.asarray(match_weights[f.field], dtype=np.float64) for f in fields}
+    lo = float(sum(w.min() for w in weights.values()))
+    hi = float(sum(w.max() for w in weights.values()))
+    if hi <= lo:
+        return None
+    total = np.zeros(comp_matrix.shape[0], dtype=np.float64)
+    for j, f in enumerate(fields):
+        lv = comp_matrix[:, j]
+        obs = lv >= 0
+        total[obs] += weights[f.field][lv[obs]]
+    norm = np.clip((total - lo) / (hi - lo), 0.0, 1.0)
+    counts, _ = np.histogram(norm, bins=_TRAINING_HISTOGRAM_BINS, range=(0.0, 1.0))
+    return {"lo": lo, "hi": hi, "counts": [int(c) for c in counts]}
 
 
 def _calibrate_link_threshold(comp_matrix, mk, match_weights, p_match) -> float | None:
