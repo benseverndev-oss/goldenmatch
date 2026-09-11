@@ -119,7 +119,7 @@ The router runs where the link cut is resolved. The valley-gated threshold refit
 ## Writing table rows: evidence first
 
 1. **Measure.** For every dataset in the design and held-out sets, the harness records F1, precision and recall for each candidate rule (labelled), next to the diagnostics above (label-free).
-2. **Propose a row.** Pick a condition on diagnostics and the rule it selects, from the design-set matrix only.
+2. **Propose a row.** Pick a condition on diagnostics and the rule it selects, from the design-set matrix only. Row authors read only the design-set results. Held-out results are produced and stored separately, as a gate-only artifact, and are read only when a proposed row is gated.
 3. **Gate the row.** On every design dataset the routed rule must score at least `default − 0.01`; then the same on every held-out dataset. A row that fails either set is dropped, not tuned against the held-out set.
 4. **Order the rows.** The first match wins, and the last row is the shipped default.
 
@@ -141,7 +141,7 @@ A dataset whose winning rule no label-free signal separates gets the default, by
   - synthetic person and biblio variants from `scripts/bench_er_headtohead/generate_fixture.py`, sweeping corruption rate and duplicates per entity.
 
   Changing the held-out set after rows exist means re-running the full gate.
-- **Per-rule block:** for each dataset, train EM once (cached via `mk.model_path`), then run the pipeline once per candidate rule with the rule pinned through `link_cut_rule`. Record F1, precision, recall and the diagnostics in a new scorecard block beside `f1` and `f1_probabilistic`.
+- **Per-rule block:** for each dataset, train EM once (cached via `mk.model_path`), then run the pipeline once per candidate rule with the rule pinned through `link_cut_rule`. Record F1, precision, recall and the diagnostics in a separate per-rule scorecard, in the same format as the harness scorecard. They do not go into the committed baseline: that baseline is diffed by the required `quality_gate` job, and its time budget cannot hold eleven runs per dataset.
 - **Where it runs:** large datasets run in CI or on the homelab, never on a laptop.
 
 ## Gate
