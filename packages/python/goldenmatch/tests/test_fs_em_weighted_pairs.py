@@ -323,7 +323,7 @@ def test_u_from_counts_equals_the_u_train_em_estimates():
     # the blocking-field prior, which has its own test.
     trained = train_em(df, mk, n_sample_pairs=n, max_iterations=25, seed=seed)
 
-    pairs = _sample_pairs(df, min(n, 5000), seed)
+    pairs = _sample_pairs(df, min(n, 5000), seed)  # unblocked train_em's sample
     lookup = _row_lookup_for_pairs(df, [f.field for f in mk.fields], [pairs])
     matrix = _build_comparison_matrix(pairs, lookup, mk)
     counts = sorted(Counter(tuple(int(v) for v in r) for r in matrix).items())
