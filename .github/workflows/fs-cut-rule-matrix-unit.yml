@@ -61,6 +61,7 @@ jobs:
           uv run python -m pytest -q
           scripts/autoconfig_quality/tests/test_corpus.py
           scripts/autoconfig_quality/tests/test_rule_sweep.py
+          scripts/autoconfig_quality/tests/test_cut_gate.py
           scripts/bench_er_headtohead/test_heldout_loaders.py
           scripts/bench_er_headtohead/test_design_loaders.py
           scripts/bench_er_headtohead/test_generate_fixture_corruption.py
