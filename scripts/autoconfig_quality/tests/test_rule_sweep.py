@@ -745,8 +745,14 @@ def test_a_crashed_rule_arm_counts_below_default_and_is_reported(tmp_path, monke
 
     holdout_card = S.merge_cards([_card("abc", abt_buy={**rec, "corpus": "holdout"})])
     gate = S.render_markdown({"meta": holdout_card["meta"], "datasets": {}}, holdout_card)
-    assert "| abt_buy | 0.9000 | 1 | 0 | 1 |" in gate.splitlines()
-    assert "prior" not in gate.split("### Held-out")[1]
+    assert (
+        "Measured 1 of 1 held-out datasets. Datasets with at least one rule below "
+        "default: 1. Datasets with a crashed rule: 1." in gate
+    )
+    held_out_section = gate.split("### Held-out")[1]
+    assert "prior" not in held_out_section
+    assert "abt_buy" not in held_out_section
+    assert "0.9000" not in held_out_section
 
 
 def test_a_crashed_baseline_arm_fails_the_dataset(tmp_path, monkeypatch):
@@ -972,9 +978,15 @@ def test_render_markdown_design_table_then_holdout_gate_view():
         "| febrl3 | 0.9000 | prior_mid | 0.9500 | +0.0500 | midpoint | none | none | same |"
         in lines
     )
-    assert "| abt_buy | 0.8000 | 1 | 0 | 0 |" in lines
-    # gate view is counts only: no rule names, no per-rule F1.
-    assert "evidence_12" not in md.split("### Held-out")[1]
+    held_out_section = md.split("### Held-out")[1]
+    assert (
+        "Measured 1 of 1 held-out datasets. Datasets with at least one rule below "
+        "default: 1. Datasets with a crashed rule: 0." in md
+    )
+    # gate view is counts only: no dataset names, no rule names, no per-dataset F1.
+    assert "abt_buy" not in held_out_section
+    assert "evidence_12" not in held_out_section
+    assert "0.8000" not in held_out_section
 
 
 def test_render_markdown_shows_no_rule_applied_when_nothing_applied():
@@ -1014,7 +1026,43 @@ def test_render_markdown_missing_rows_land_in_the_matching_corpus_table():
     design_card, holdout_card = S._split_by_corpus(full)
     md = S.render_markdown(design_card, holdout_card)
     assert "| dblp_acm |" + " MISSING |" * 8 in md
-    assert "| walmart_amazon | MISSING | MISSING | MISSING | MISSING |" in md
+    # A missing held-out dataset is counted in M, never named or rendered as a row.
+    assert "walmart_amazon" not in md
+    held_out_section = md.split("### Held-out")[1]
+    assert (
+        "Measured 0 of 1 held-out datasets. Datasets with at least one rule below "
+        "default: 0. Datasets with a crashed rule: 0." in held_out_section
+    )
+
+
+def test_render_markdown_holdout_counts_below_default_and_crashed_without_naming():
+    """A held-out dataset with a below-default rule AND a crash is counted in both
+    K and C, but neither it nor its rule is ever named in the held-out section."""
+    clean = _record("holdout", {})
+    clean["below_default"] = []
+    troubled = _record("holdout", {})
+    troubled["below_default"] = ["prior"]
+    troubled["crashed"] = {"prior": "memory_cap"}
+    full = S.merge_cards(
+        [
+            _card(
+                "abc",
+                febrl3=_record("design", {}),
+                abt_buy=clean,
+                walmart_amazon=troubled,
+            )
+        ]
+    )
+    design_card, holdout_card = S._split_by_corpus(full)
+    md = S.render_markdown(design_card, holdout_card)
+    held_out_section = md.split("### Held-out")[1]
+    assert (
+        "Measured 2 of 2 held-out datasets. Datasets with at least one rule below "
+        "default: 1. Datasets with a crashed rule: 1." in held_out_section
+    )
+    assert "abt_buy" not in held_out_section
+    assert "walmart_amazon" not in held_out_section
+    assert "prior" not in held_out_section
 
 
 def test_render_markdown_renders_a_failures_section():
@@ -1108,4 +1156,11 @@ def test_merge_cli_holdout_gate_view_hides_rule_names(tmp_path):
     assert rc == 0
     text = md.read_text()
     assert "prior_mid" in text
-    assert "evidence_12" not in text.split("### Held-out")[1]
+    held_out_section = text.split("### Held-out")[1]
+    assert "evidence_12" not in held_out_section
+    assert "abt_buy" not in held_out_section
+    assert "0.8000" not in held_out_section
+    assert (
+        "Measured 1 of 1 held-out datasets. Datasets with at least one rule below "
+        "default: 1. Datasets with a crashed rule: 0." in held_out_section
+    )
