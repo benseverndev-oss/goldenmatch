@@ -32,7 +32,7 @@ from goldenmatch.core import fs_cut_rules
 from goldenmatch.core.fs_cut_rules import CutDiagnostics, CutRow, choose_cut_rule
 
 from scripts.autoconfig_quality.corpus import ci_datasets
-from scripts.autoconfig_quality.rule_sweep import BASELINE_ARM, TOLERANCE, metric_value
+from scripts.autoconfig_quality.rule_sweep import BASELINE_ARM, ROUTED_ARM, TOLERANCE, metric_value
 
 
 @dataclass(frozen=True)
@@ -107,6 +107,11 @@ def routed_disagreement(record: dict, rows: Sequence[CutRow]) -> str | None:
     that rule. None when both hold."""
     if "routed_rules" not in record:
         return "record has no routed arm: re-run the matrix"
+    routed_arm = (record.get("arms") or {}).get(ROUTED_ARM)
+    if routed_arm is None:
+        return "record has no routed arm: re-run the matrix"
+    if routed_arm.get("crashed") or routed_arm.get("voided"):
+        return f"the routed arm {routed_arm.get('crashed') or 'voided'}"
     if record["routed_rules"] != _routes(record, rows):
         return "the routed arm picked differently from the recorded diagnostics"
     if record.get("routed_matches") is False:

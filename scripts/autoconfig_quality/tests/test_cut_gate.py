@@ -154,6 +154,14 @@ def test_the_shipped_table_also_needs_the_routed_arm_to_agree():
     assert G.gate_set(_card(d=old), ["d"], (_SPARSE,), check_routed=True).passed is False
 
 
+def test_a_crashed_routed_arm_is_named_instead_of_a_disagreement():
+    """A crashed or voided routed arm records ``routed_rules = {}``, which used to read
+    as a disagreement with the recorded diagnostics -- naming the wrong cause."""
+    crashed_routed = _rec(routed_rules={}, crashed={"routed": "timeout"})
+    v = G.gate_set(_card(d=crashed_routed), ["d"], (_SPARSE,), check_routed=True).verdicts["d"]
+    assert v.passed is False and v.problem == "the routed arm timeout"
+
+
 # ─── rendering and CLI ────────────────────────────────────────────────────────
 
 
