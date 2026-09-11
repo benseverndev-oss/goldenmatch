@@ -495,6 +495,24 @@
               "description": "The link cutoff a run actually resolved, recorded for reporting and for threshold perturbation. Never read when resolving thresholds, so it does not pin the cutoff or skip the full-data refit the way link_threshold does."
             },
             {
+              "name": "link_cut_rule",
+              "type": "Literal | None",
+              "required": false,
+              "default": "None",
+              "choices": [
+                "midpoint",
+                "prior",
+                "prior_mid",
+                "posterior_099",
+                "evidence_3",
+                "evidence_5",
+                "evidence_9",
+                "evidence_12",
+                "otsu"
+              ],
+              "description": "Rule that places the probabilistic link cutoff by evidence bits, for example prior_mid or evidence_9. Unset uses the default rule; link_threshold, when set, still wins."
+            },
+            {
               "name": "review_threshold",
               "type": "float | None",
               "required": false,

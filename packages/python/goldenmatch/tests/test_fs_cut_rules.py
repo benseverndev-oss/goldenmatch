@@ -99,3 +99,27 @@ def test_bits_to_normalized_is_affine_and_clamped():
     assert bits_to_normalized(2.0, env) == 0.5
     assert bits_to_normalized(-100.0, env) == 0.0
     assert bits_to_normalized(100.0, env) == 1.0
+
+
+def test_schema_literal_matches_cut_rules():
+    import typing
+
+    ann = MatchkeyConfig.model_fields["link_cut_rule"].annotation
+    literal = next(a for a in typing.get_args(ann) if typing.get_origin(a) is typing.Literal)
+    assert typing.get_args(literal) == CUT_RULES
+
+
+def test_link_cut_rule_accepts_rule_names_and_defaults_to_none():
+    assert _mk().link_cut_rule is None
+    pinned = _mk().model_copy(update={"link_cut_rule": "evidence_9"})
+    assert pinned.link_cut_rule == "evidence_9"
+
+
+def test_link_cut_rule_rejects_unknown_names():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        MatchkeyConfig(
+            name="fs", type="probabilistic", link_cut_rule="median",
+            fields=[MatchkeyField(field="zip", scorer="exact", levels=2)],
+        )
