@@ -3341,6 +3341,7 @@
             "bits_to_normalized",
             "cut_diagnostics",
             "otsu_bits",
+            "otsu_split",
             "prior_bits",
             "rule_bits",
             "weight_envelope"
@@ -4348,6 +4349,7 @@
             "_training_pair_conditioning",
             "_training_score_histogram",
             "_transform_field_value",
+            "_validated_training_score_histogram",
             "_warn_ne_blocking_overlap",
             "comparison_vector",
             "compute_thresholds",
