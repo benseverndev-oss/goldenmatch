@@ -11,8 +11,9 @@ Arms, in run order:
   default_loaded  link_cut_rule unset; loads the saved model -- the baseline
                   every rule arm is compared against, on the same model
   <rule>          one arm per fs_cut_rules.CUT_RULES name, model loaded
+  routed          link_cut_rule unset, GOLDENMATCH_FS_CUT_ROUTER=on, model loaded
 
-Measurement only: nothing here chooses a rule.
+Measurement only: nothing here chooses a rule (cut_gate.py gates rows on this output).
 
 Usage:
   python -m scripts.autoconfig_quality.rule_sweep --corpus all --ci --out cut-rules.json
@@ -35,10 +36,15 @@ from pathlib import Path  # noqa: E402
 from goldenmatch.core.fs_cut_rules import CUT_RULES  # noqa: E402
 
 BASELINE_ARM = "default_loaded"
-ARMS: tuple[str, ...] = ("default", BASELINE_ARM, *CUT_RULES)
+#: link_cut_rule unset, GOLDENMATCH_FS_CUT_ROUTER on, model loaded: the shipped routing table
+#: end to end. Its partition must equal the arm pinning the rule it routed to.
+ROUTED_ARM = "routed"
+ARMS: tuple[str, ...] = ("default", BASELINE_ARM, *CUT_RULES, ROUTED_ARM)
 
 #: The spec's gate tolerance: a rule is below the default when F1 < default - 0.01.
 TOLERANCE = 0.01
+
+ROUTER_ENV = "GOLDENMATCH_FS_CUT_ROUTER"
 
 #: Env vars that move the cut or void a pin process-wide. A sweep run with any of
 #: them set measures something other than the shipped default, so it refuses.
@@ -50,7 +56,14 @@ CUT_ENV_VARS = (
     # Passes a pair_filter to load_or_train_em, which stops model_path from
     # saving, so arms would retrain their own model instead of sharing one.
     "GOLDENMATCH_FS_SIGNATURE_PRUNE",
+    # The sweep sets it per child (arm_env): on for ROUTED_ARM, off for every other arm.
+    ROUTER_ENV,
 )
+
+
+def pinned_rule(arm: str) -> str | None:
+    """The ``link_cut_rule`` an arm pins: its own name for a rule arm, None otherwise."""
+    return arm if arm in CUT_RULES else None
 
 
 def cut_env_overrides(environ: dict[str, str] | None = None) -> dict[str, str]:
@@ -122,7 +135,7 @@ def arm_record(
         }
         for name, entry in sorted(report.items())
     }
-    rule = None if arm in ("default", BASELINE_ARM) else arm
+    rule = pinned_rule(arm)
     missing_expected = [name for name in expected_matchkeys if name not in per_mk]
     voided = (
         not per_mk
@@ -429,7 +442,7 @@ def execute_arm(df, gt: set, cfg, arm: str, model_dir: Path, labels: dict | None
     from scripts.bench_er_headtohead.ab_lever import _partition_fingerprint
 
     start = time.perf_counter()
-    rule = None if arm in ("default", BASELINE_ARM) else arm
+    rule = pinned_rule(arm)
     result = goldenmatch.dedupe_df(df, config=pin_rule(cfg, rule, model_dir))
     summary = evaluate_clusters(result.clusters, gt).summary()
     pairs, digest = _partition_fingerprint(result.clusters)
@@ -442,10 +455,15 @@ def execute_arm(df, gt: set, cfg, arm: str, model_dir: Path, labels: dict | None
     }
 
 
-def arm_env() -> dict[str, str]:
-    """A child's env: the parent's, plus one hash seed shared by every arm and no
-    autoconfig memory."""
-    return {**os.environ, "PYTHONHASHSEED": "0", "GOLDENMATCH_AUTOCONFIG_MEMORY": "0"}
+def arm_env(arm: str | None = None) -> dict[str, str]:
+    """A child's env: the parent's, plus one hash seed shared by every arm, no autoconfig
+    memory, and the link-cut router on for ``ROUTED_ARM`` only."""
+    return {
+        **os.environ,
+        "PYTHONHASHSEED": "0",
+        "GOLDENMATCH_AUTOCONFIG_MEMORY": "0",
+        ROUTER_ENV: "on" if arm == ROUTED_ARM else "off",
+    }
 
 
 def arm_argv(name: str, config_path: Path, arm: str, model_dir: Path, out_path: Path) -> list[str]:
@@ -497,6 +515,31 @@ def arm_main(argv: list[str]) -> int:
     return 0
 
 
+def routed_check(arms: dict[str, dict]) -> tuple[dict[str, str | None], bool | None]:
+    """What the router picked per matchkey on the routed arm, and whether that arm's partition
+    equals the arm pinning the same rule (the baseline when no row fired).
+
+    ``{matchkey: rule}`` holds the rule only where ``cut_reason`` says a row routed it, else
+    None. The match is None when there is nothing to compare:
+    - no routed arm;
+    - a crashed or voided arm on either side;
+    - matchkeys routed to different rules, which no single pinned arm measures."""
+    routed = arms.get(ROUTED_ARM)
+    if routed is None or routed.get("crashed") or routed.get("voided"):
+        return {}, None
+    rules = {
+        mk: entry["cut_rule"] if (entry.get("cut_reason") or "").startswith("routed by ") else None
+        for mk, entry in routed["matchkeys"].items()
+    }
+    picked = set(rules.values())
+    if len(picked) != 1:
+        return rules, None
+    target = arms.get(picked.pop() or BASELINE_ARM)
+    if target is None or target.get("crashed") or target.get("voided"):
+        return rules, None
+    return rules, routed["digest"] == target["digest"]
+
+
 def sweep_dataset(
     name: str,
     work_dir: Path,
@@ -538,7 +581,6 @@ def sweep_dataset(
     rows, gt_pairs = df.height, len(gt)
     del loaded, df, gt  # every child reloads the dataset; the parent holds none of it
 
-    env = arm_env()
     budget = _limit(budget_s, DATASET_BUDGET_ENV, DATASET_BUDGET_S)
     arm_timeout = _limit(None, ARM_TIMEOUT_ENV, ARM_TIMEOUT_S)
     # Held-out per-rule F1 stays out of CI logs, like it stays out of the gate view.
@@ -561,7 +603,7 @@ def sweep_dataset(
             out_path = dataset_dir / f"arm_{arm}.json"
             argv = arm_argv(name, config_path, arm, model_dir, out_path)
             records[arm], payload = run_arm(
-                argv, out_path, arm, probabilistic_matchkeys, env=env, timeout_s=timeout_s
+                argv, out_path, arm, probabilistic_matchkeys, env=arm_env(arm), timeout_s=timeout_s
             )
         rec = records[arm]
         f1_part = "" if holdout else f" f1={rec['f1']}"
@@ -579,6 +621,7 @@ def sweep_dataset(
                 mk: entry.get("cut_diagnostics") for mk, entry in sorted(payload["report"].items())
             }
     hashes_after_last = _model_hashes(model_dir)
+    routed_rules, routed_matches = routed_check(records)
     baseline_f1 = records[BASELINE_ARM]["f1"]
     baseline_gate = metric_value(records[BASELINE_ARM], metric)
     rules = [arm for arm in arms if arm in CUT_RULES]
@@ -600,6 +643,8 @@ def sweep_dataset(
         "arms": records,
         "cut_diagnostics": diagnostics,
         "gate_metric": metric,
+        "routed_rules": routed_rules,
+        "routed_matches": routed_matches,
         "models_saved": models_saved,
         "model_complete": model_complete,
         "model_stable": model_stable,
@@ -703,6 +748,8 @@ def run(argv: list[str]) -> int:
             baseline_arm = record["arms"].get(BASELINE_ARM, {})
             if not baseline_arm.get("crashed") and baseline_arm.get("labelled") is None:
                 failures.append(f"{name}: labelled metric missing on the baseline arm")
+        if record.get("routed_matches") is False:
+            failures.append(f"{name}: routed arm partition differs from the arm pinning its rule")
         if not record.get("model_complete"):
             failures.append(f"{name}: shared EM model not saved for every probabilistic matchkey")
         if not record.get("model_stable"):

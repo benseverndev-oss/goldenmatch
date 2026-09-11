@@ -46,10 +46,8 @@ def _entry(cut_rule=None, cut_reason=None) -> dict:
 _SUMMARY = {"f1": 0.9, "precision": 0.95, "recall": 0.85}
 
 
-def test_arms_run_both_baselines_then_every_rule_once():
-    assert S.ARMS == ("default", "default_loaded", *CUT_RULES)
-    assert len(set(S.ARMS)) == len(S.ARMS)
-    assert S.BASELINE_ARM == "default_loaded"
+def test_arms_run_both_baselines_every_rule_then_the_router():
+    assert S.ARMS == ("default", "default_loaded", *CUT_RULES, "routed")
 
 
 def test_pin_rule_pins_every_probabilistic_matchkey_without_mutating_the_input(tmp_path):
@@ -394,7 +392,7 @@ def test_sweep_dataset_runs_each_arm_in_its_own_child_on_one_saved_model(tmp_pat
     # The floor reads the whole machine; this test is about isolation, not pressure.
     monkeypatch.setenv("GOLDENMATCH_CUT_RULES_MIN_AVAILABLE_MB", "0")
     monkeypatch.delenv("GOLDENMATCH_CUT_RULES_DATASET_BUDGET_S", raising=False)
-    arms = ("default", "default_loaded", "evidence_9")
+    arms = ("default", "default_loaded", "evidence_9", "routed")
     out = S.sweep_dataset("person", tmp_path, arms=arms)
 
     assert (tmp_path / "person" / "config.json").is_file()
@@ -422,6 +420,110 @@ def test_sweep_dataset_runs_each_arm_in_its_own_child_on_one_saved_model(tmp_pat
     assert out["corpus"] == "design"
     assert out["gate_metric"] == "f1"
     assert all(rec["labelled"] is None for rec in out["arms"].values())
+    # The routed arm loads the same model with the router on. Where no shipped row fired, it
+    # must reproduce the baseline partition exactly.
+    if all(rule is None for rule in out["routed_rules"].values()):
+        assert out["routed_matches"] is True
+    else:
+        assert out["routed_matches"] in (True, None)
+
+
+# ─── the routed arm (P4) ──────────────────────────────────────────────────────
+
+
+def test_cut_env_vars_include_the_router():
+    assert "GOLDENMATCH_FS_CUT_ROUTER" in S.CUT_ENV_VARS
+
+
+def test_arm_env_turns_the_router_on_for_the_routed_arm_only():
+    assert S.arm_env("routed")["GOLDENMATCH_FS_CUT_ROUTER"] == "on"
+    for arm in ("default", "default_loaded", *CUT_RULES):
+        assert S.arm_env(arm)["GOLDENMATCH_FS_CUT_ROUTER"] == "off"
+
+
+def test_the_routed_arm_pins_nothing_and_applies_whatever_the_router_chose():
+    assert S.pinned_rule("routed") is None
+    assert S.pinned_rule("default_loaded") is None
+    assert S.pinned_rule("evidence_5") == "evidence_5"
+    rec = S.arm_record(
+        "routed", _SUMMARY, _stats(fs=_entry("evidence_5", "routed by wide: x")), (1, "d"), ["fs"]
+    )
+    assert (rec["applied"], rec["voided"]) == (True, False)
+
+
+def _routing_arms(routed_matchkeys: dict, digests: dict | None = None, **overrides) -> dict:
+    digests = digests or {}
+    arms = {
+        arm: {"digest": digests.get(arm, "base"), "voided": False, "crashed": None, "matchkeys": {}}
+        for arm in S.ARMS
+    }
+    arms["routed"]["matchkeys"] = routed_matchkeys
+    for arm, fields in overrides.items():
+        arms[arm].update(fields)
+    return arms
+
+
+def test_routed_check_compares_an_unrouted_arm_with_the_baseline():
+    arms = _routing_arms({"fs": _entry("prior_mid", "default rule")})
+    assert S.routed_check(arms) == ({"fs": None}, True)
+
+
+def test_routed_check_compares_a_routed_arm_with_the_arm_pinning_its_rule():
+    entry = {"fs": _entry("evidence_5", "routed by wide: many fields")}
+    same = _routing_arms(entry, {"routed": "e5", "evidence_5": "e5"})
+    assert S.routed_check(same) == ({"fs": "evidence_5"}, True)
+    differs = _routing_arms(entry, {"routed": "e5", "evidence_5": "other"})
+    assert S.routed_check(differs) == ({"fs": "evidence_5"}, False)
+
+
+def test_routed_check_has_nothing_to_compare_for_mixed_routes_or_a_crash():
+    mixed = _routing_arms(
+        {
+            "fs_a": _entry("evidence_5", "routed by wide: x"),
+            "fs_b": _entry("prior_mid", "default rule"),
+        }
+    )
+    assert S.routed_check(mixed) == ({"fs_a": "evidence_5", "fs_b": None}, None)
+    crashed = _routing_arms({}, routed={"crashed": "timeout"})
+    assert S.routed_check(crashed) == ({}, None)
+    target_crashed = _routing_arms(
+        {"fs": _entry("evidence_5", "routed by wide: x")}, evidence_5={"crashed": "memory_cap"}
+    )
+    assert S.routed_check(target_crashed) == ({"fs": "evidence_5"}, None)
+
+
+def test_sweep_dataset_turns_the_router_on_in_the_routed_arm_child_only(tmp_path, monkeypatch):
+    _small_person(monkeypatch)
+    seen: dict[str, str] = {}
+    instant = _fake_run_arm({})
+
+    def spy(argv, out_path, arm, expected_matchkeys, **kwargs):
+        seen[arm] = kwargs["env"]["GOLDENMATCH_FS_CUT_ROUTER"]
+        return instant(argv, out_path, arm, expected_matchkeys, **kwargs)
+
+    monkeypatch.setattr(S, "run_arm", spy)
+    rec = S.sweep_dataset("person", tmp_path)
+    assert seen == {arm: ("on" if arm == "routed" else "off") for arm in S.ARMS}
+    assert rec["routed_rules"] and all(v is None for v in rec["routed_rules"].values())
+    assert rec["routed_matches"] is True
+
+
+def test_run_reports_failure_when_the_routed_arm_disagrees(tmp_path, monkeypatch):
+    _clear_cut_env(monkeypatch)
+
+    def fake(name, work_dir):
+        rec = _record("design", {})
+        rec["routed_matches"] = False
+        return rec
+
+    monkeypatch.setattr(S, "sweep_dataset", fake)
+    out = tmp_path / "card.json"
+    assert S.run(["--datasets", "person", "--out", str(out)]) == 1
+    card = json.loads(out.read_text())
+    assert (
+        "person: routed arm partition differs from the arm pinning its rule"
+        in card["meta"]["failures"]
+    )
 
 
 # ─── run() metadata and failure paths (I1 + I2 + I5) ──────────────────────────
@@ -469,6 +571,8 @@ def _record(
         "arms": arms,
         "cut_diagnostics": {},
         "gate_metric": "f1",
+        "routed_rules": {},
+        "routed_matches": None,
         "models_saved": ["fs.json"],
         "model_complete": model_complete,
         "model_stable": model_stable,
@@ -595,8 +699,9 @@ def _fake_run_arm(crash: dict[str, str], labelled: dict[str, float] | None = Non
     def fake(argv, out_path, arm, expected_matchkeys, **kwargs):
         if arm in crash:
             return S.killed_record(crash[arm], 1, 20.0, 0.1), None
-        rule = None if arm in ("default", S.BASELINE_ARM) else arm
-        report = {mk: _entry(rule, "pinned by link_cut_rule") for mk in expected_matchkeys}
+        rule = S.pinned_rule(arm)
+        reason = "pinned by link_cut_rule" if rule else "default rule"
+        report = {mk: _entry(rule, reason) for mk in expected_matchkeys}
         lab = None
         if labelled and arm in labelled:
             value = labelled[arm]
