@@ -115,3 +115,100 @@ def test_both_resolvers_and_the_source_agree_on_a_pinned_rule(monkeypatch):
     assert math.isclose(link, _norm(9.0), rel_tol=1e-12)
     assert review <= link
     assert link_threshold_source(mk, em) == LINK_THRESHOLD_EVIDENCE_RULE
+
+
+def _clear_cut_env(monkeypatch):
+    for var in (
+        "GOLDENMATCH_FS_LINEAR_CUT", "GOLDENMATCH_FS_CALIBRATED",
+        "GOLDENMATCH_FS_EVIDENCE_CUT", "GOLDENMATCH_FS_CALIBRATE_THRESHOLD",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_link_cut_report_names_the_rule_and_reason(monkeypatch):
+    from goldenmatch.core.probabilistic import link_cut_report
+
+    _clear_cut_env(monkeypatch)
+    report = link_cut_report(_mk(link_cut_rule="evidence_3"), _em())
+    assert report["cut_rule"] == "evidence_3"
+    assert report["cut_reason"] == "pinned by link_cut_rule"
+
+
+def test_link_cut_report_is_empty_when_a_threshold_decided_first(monkeypatch):
+    from goldenmatch.core.probabilistic import link_cut_report
+
+    _clear_cut_env(monkeypatch)
+    configured = link_cut_report(_mk(link_cut_rule="evidence_3", link_threshold=0.4), _em())
+    assert configured["cut_rule"] is None and configured["cut_reason"] is None
+    calibrated = link_cut_report(_mk(), _em(calibrated=0.6))
+    assert calibrated["cut_rule"] is None and calibrated["cut_reason"] is None
+
+
+def test_link_cut_report_is_silent_when_no_rule_was_asked_for(monkeypatch):
+    from goldenmatch.core.probabilistic import link_cut_report
+
+    _clear_cut_env(monkeypatch)
+    monkeypatch.setenv("GOLDENMATCH_FS_LINEAR_CUT", "off")
+    assert link_cut_report(_mk(), _em()) == {"cut_rule": None, "cut_reason": None}
+
+
+def test_link_cut_report_says_why_a_requested_rule_did_not_apply(monkeypatch):
+    """KNOWN-POSITIVE: a degenerate model, and an uncomputable pin with the default off."""
+    from goldenmatch.core.probabilistic import link_cut_report
+
+    _clear_cut_env(monkeypatch)
+    flat = SimpleNamespace(
+        match_weights={"name": [1.0, 1.0, 1.0], "zip": [0.0, 0.0]},
+        proportion_matched=0.01, calibrated_link_threshold=None,
+    )
+    degenerate = link_cut_report(_mk(), flat)
+    assert degenerate["cut_rule"] is None
+    assert degenerate["cut_reason"].startswith("degenerate model")
+
+    monkeypatch.setenv("GOLDENMATCH_FS_LINEAR_CUT", "off")
+    otsu = link_cut_report(_mk(link_cut_rule="otsu"), _em())
+    assert otsu["cut_rule"] is None
+    assert otsu["cut_reason"] == (
+        "otsu unavailable: no training histogram on this model; fixed 0.50 cut applies"
+    )
+
+
+def test_dedupe_result_reports_the_cut_rule(monkeypatch):
+    """A pinned rule reaches the run's cutoff report. Frame and config shape are the ones
+    tests/test_link_threshold_stamp_2637.py already drives through FS scoring."""
+    import warnings
+
+    import goldenmatch as gm
+    import polars as pl
+    from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig, GoldenMatchConfig
+
+    _clear_cut_env(monkeypatch)
+    first = ["ada", "grace", "alan", "edsger", "barbara", "donald"]
+    last = ["lovelace", "hopper", "turing", "dijkstra", "liskov", "knuth"]
+    df = pl.DataFrame([
+        {
+            "rid": f"r{i}",
+            "name": (f"{first[i % 6]} {last[(i // 2) % 6]}" if i % 3
+                     else f"{first[i % 6][0]}. {last[(i // 2) % 6]}"),
+            "city": ["leeds", "york", "hull"][i % 3],
+        }
+        for i in range(240)
+    ])
+    cfg = GoldenMatchConfig(
+        matchkeys=[MatchkeyConfig(
+            name="p", type="probabilistic", link_cut_rule="evidence_3",
+            fields=[MatchkeyField(field="name", scorer="jaro_winkler")],
+        )],
+        blocking=BlockingConfig(
+            keys=[BlockingKeyConfig(fields=["name"], transforms=["lowercase"])]
+        ),
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = gm.dedupe_df(df, config=cfg)
+    thresholds = (res.stats or {}).get("fs_link_thresholds") or {}
+    assert "p" in thresholds, f"run never reported an FS cutoff: {thresholds!r}"
+    entry = thresholds["p"]
+    assert entry["cut_rule"] == "evidence_3"
+    assert entry["cut_reason"] == "pinned by link_cut_rule"
+    assert entry["source"] == LINK_THRESHOLD_EVIDENCE_RULE
