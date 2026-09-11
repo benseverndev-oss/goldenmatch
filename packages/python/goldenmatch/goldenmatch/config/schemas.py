@@ -643,6 +643,21 @@ class MatchkeyConfig(BaseModel):
             "link_threshold does."
         ),
     )
+    # Probabilistic-only: pin the rule that places the LINEAR link cutoff, as an evidence
+    # cutoff in bits. These names must match goldenmatch.core.fs_cut_rules.CUT_RULES.
+    # None uses the default rule; an explicit link_threshold or an EM-calibrated cutoff
+    # still wins over a pinned rule.
+    link_cut_rule: Literal[
+        "midpoint", "prior", "prior_mid", "posterior_099",
+        "evidence_3", "evidence_5", "evidence_9", "evidence_12", "otsu",
+    ] | None = Field(
+        default=None,
+        description=(
+            "Rule that places the probabilistic link cutoff by evidence bits, for example "
+            "prior_mid or evidence_9. Unset uses the default rule; link_threshold, when set, "
+            "still wins."
+        ),
+    )
     review_threshold: float | None = Field(
         default=None,
         ge=0.0,

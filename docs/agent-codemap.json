@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 483,
+      "module_count": 484,
       "modules": [
         {
           "module": "goldenmatch",
@@ -3329,6 +3329,21 @@
             "goldenmatch.core.matchkey",
             "goldenmatch.core.standardize",
             "goldenmatch.utils.transforms"
+          ]
+        },
+        {
+          "module": "goldenmatch.core.fs_cut_rules",
+          "file": "packages/python/goldenmatch/goldenmatch/core/fs_cut_rules.py",
+          "purpose": "Link-cut rules for the Fellegi-Sunter linear score, as evidence cutoffs in bits.",
+          "defines": [
+            "Envelope",
+            "bits_to_normalized",
+            "prior_bits",
+            "rule_bits",
+            "weight_envelope"
+          ],
+          "imports": [
+            "goldenmatch.core.probabilistic"
           ]
         },
         {
