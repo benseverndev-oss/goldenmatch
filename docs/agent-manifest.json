@@ -6159,6 +6159,7 @@
           "GOLDENMATCH_FS_CALIBRATED",
           "GOLDENMATCH_FS_CALIBRATE_THRESHOLD",
           "GOLDENMATCH_FS_COLUMNAR_CLUSTER",
+          "GOLDENMATCH_FS_CUT_ROUTER",
           "GOLDENMATCH_FS_DEFAULT_BUCKET",
           "GOLDENMATCH_FS_DOMAIN_COMPARATORS",
           "GOLDENMATCH_FS_EM_AGG_BLOCKS",
@@ -6378,12 +6379,7 @@
       "doc_path": "docs-site/goldencheck/config-matrix.mdx",
       "source": {
         "import_name": "goldencheck",
-        "root": "packages/python/goldencheck/goldencheck",
-        "modules": {
-          "config_schema": "packages/python/goldencheck/goldencheck/config/schema.py",
-          "cli": "packages/python/goldencheck/goldencheck/cli/main.py",
-          "mcp_server": "packages/python/goldencheck/goldencheck/mcp/server.py"
-        }
+        "root": "packages/python/goldencheck/goldencheck"
       },
       "config_models": [
         {
@@ -7616,12 +7612,7 @@
       "doc_path": "docs-site/goldenflow/config-matrix.mdx",
       "source": {
         "import_name": "goldenflow",
-        "root": "packages/python/goldenflow/goldenflow",
-        "modules": {
-          "config_schema": "packages/python/goldenflow/goldenflow/config/schema.py",
-          "cli": "packages/python/goldenflow/goldenflow/cli/main.py",
-          "mcp_server": "packages/python/goldenflow/goldenflow/mcp/server.py"
-        }
+        "root": "packages/python/goldenflow/goldenflow"
       },
       "config_models": [
         {
@@ -8794,11 +8785,6 @@
       "source": {
         "import_name": "goldenpipe",
         "root": "packages/python/goldenpipe/goldenpipe",
-        "modules": {
-          "config_schema": "packages/python/goldenpipe/goldenpipe/models/config.py",
-          "cli": "packages/python/goldenpipe/goldenpipe/cli/main.py",
-          "mcp_server": "packages/python/goldenpipe/goldenpipe/mcp/server.py"
-        },
         "entry_points": {
           "goldenpipe.stages": {
             "goldenanalysis.report": "goldenpipe.adapters.analysis:AnalysisReportStage",
@@ -9297,12 +9283,7 @@
       "doc_path": "docs-site/infermap/config-matrix.mdx",
       "source": {
         "import_name": "infermap",
-        "root": "packages/python/infermap/infermap",
-        "modules": {
-          "constructor": "packages/python/infermap/infermap/engine.py",
-          "cli": "packages/python/infermap/infermap/cli.py",
-          "mcp_server": "packages/python/infermap/infermap/mcp/server.py"
-        }
+        "root": "packages/python/infermap/infermap"
       },
       "constructors": [
         {
@@ -9690,11 +9671,6 @@
       "source": {
         "import_name": "goldenanalysis",
         "root": "packages/python/goldenanalysis/goldenanalysis",
-        "modules": {
-          "config_schema": "packages/python/goldenanalysis/goldenanalysis/models/policy.py",
-          "constructor": "packages/python/goldenanalysis/goldenanalysis/_api.py",
-          "cli": "packages/python/goldenanalysis/goldenanalysis/cli/main.py"
-        },
         "entry_points": {
           "goldenanalysis.analyzers": {
             "cluster.distribution": "goldenanalysis.analyzers.cluster_dist:ClusterDistributionAnalyzer",

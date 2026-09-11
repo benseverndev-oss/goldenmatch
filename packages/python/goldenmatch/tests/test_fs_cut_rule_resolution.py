@@ -156,6 +156,7 @@ def _clear_cut_env(monkeypatch):
     for var in (
         "GOLDENMATCH_FS_LINEAR_CUT", "GOLDENMATCH_FS_CALIBRATED",
         "GOLDENMATCH_FS_EVIDENCE_CUT", "GOLDENMATCH_FS_CALIBRATE_THRESHOLD",
+        "GOLDENMATCH_FS_CUT_ROUTER",
     ):
         monkeypatch.delenv(var, raising=False)
 

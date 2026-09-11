@@ -4716,6 +4716,29 @@ def _fs_linear_cut_rule() -> str | None:
     return _FS_LINEAR_CUT_DEFAULT
 
 
+_FS_CUT_ROUTER_ON = ("on", "1", "true")
+_FS_CUT_ROUTER_OFF = ("", "off", "0", "false")
+
+
+def _fs_cut_router_enabled() -> bool:
+    """``GOLDENMATCH_FS_CUT_ROUTER``: pick each matchkey's link-cut rule from its trained model
+    with ``fs_cut_rules.choose_cut_rule``. **Default OFF** (spec P4: rows ship dark until P5).
+
+    ``on``/``1``/``true`` turns it on. A pinned ``link_cut_rule`` still wins, posterior scoring
+    bypasses it, and no matching row means the default rule. An unrecognised value warns and
+    leaves the router off.
+    """
+    value = os.environ.get("GOLDENMATCH_FS_CUT_ROUTER", "").strip().lower()
+    if value in _FS_CUT_ROUTER_ON:
+        return True
+    if value not in _FS_CUT_ROUTER_OFF:
+        logger.warning(
+            "GOLDENMATCH_FS_CUT_ROUTER=%r is not one of on/off; the link-cut router stays off",
+            value,
+        )
+    return False
+
+
 @dataclass(frozen=True)
 class ResolvedCut:
     """The linear link cut a rule placed: which rule, why, and where."""
@@ -4731,18 +4754,26 @@ def _fs_resolved_cut(
 ) -> ResolvedCut | None:
     """The linear link cut placed by rule, or None when no rule applies.
 
-    Callers check an explicit ``mk.link_threshold`` and an EM-calibrated cutoff first. Within
-    the rule step, a pinned ``mk.link_cut_rule`` beats the ``GOLDENMATCH_FS_LINEAR_CUT``
-    default. A pinned rule this model cannot supply (``otsu`` without a training histogram)
-    falls back to the default rule, and the reason says so.
+    Callers check an explicit ``mk.link_threshold`` and an EM-calibrated cutoff first
+    (:func:`resolve_link_cut`). Within the rule step, candidates are tried in order:
 
-    Returns None in posterior mode (the score is a probability, not the linear scale), when
-    the model has no usable weights, or when the default is off and nothing pinned is
+    1. a pinned ``mk.link_cut_rule``;
+    2. otherwise, when ``GOLDENMATCH_FS_CUT_ROUTER`` is on, the rule
+       ``fs_cut_rules.choose_cut_rule`` routes this model to;
+    3. the ``GOLDENMATCH_FS_LINEAR_CUT`` default.
+
+    A candidate this model cannot supply (``otsu`` without a training histogram) falls through
+    to the next, and the reason says so.
+
+    Returns None in posterior mode (the score is a probability, not the linear scale), when the
+    model has no usable weights, or when the default is off and no pinned or routed rule is
     computable.
     Spec: docs/superpowers/specs/2026-09-11-fs-cut-rule-routing-design.md.
     """
     from goldenmatch.core.fs_cut_rules import (
         bits_to_normalized,
+        choose_cut_rule,
+        cut_diagnostics,
         otsu_split,
         rule_bits,
         weight_envelope,
@@ -4757,8 +4788,12 @@ def _fs_resolved_cut(
     pinned = getattr(mk, "link_cut_rule", None)
     if pinned:
         candidates.append((pinned, "pinned by link_cut_rule"))
+    elif _fs_cut_router_enabled():
+        routed = choose_cut_rule(cut_diagnostics(mk, em_result))
+        if routed is not None:
+            candidates.append(routed)
     default = _fs_linear_cut_rule()
-    if default is not None and default != pinned:
+    if default is not None and all(default != rule for rule, _ in candidates):
         candidates.append((default, "default rule"))
     note = ""
     for rule, reason in candidates:

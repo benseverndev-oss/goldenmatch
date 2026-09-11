@@ -3337,8 +3337,10 @@
           "purpose": "Link-cut rules for the Fellegi-Sunter linear score, as evidence cutoffs in bits.",
           "defines": [
             "CutDiagnostics",
+            "CutRow",
             "Envelope",
             "bits_to_normalized",
+            "choose_cut_rule",
             "cut_diagnostics",
             "otsu_bits",
             "otsu_split",
@@ -4284,6 +4286,7 @@
             "_fs_batch_rows",
             "_fs_calibrate_threshold_enabled",
             "_fs_calibration_mode",
+            "_fs_cut_router_enabled",
             "_fs_em_counted_budget",
             "_fs_embedding_vectors",
             "_fs_evidence_cut",
