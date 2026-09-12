@@ -91,8 +91,10 @@ def _run(monkeypatch, *, flag, cfg=None, df=None):
         monkeypatch.setenv("GOLDENMATCH_FS_COLUMNAR_CLUSTER", "1" if flag else "0")
     monkeypatch.setenv("GOLDENMATCH_FS_WORKERS", "1")
     # The anchor clusters were set at the fixed 0.50 midpoint cut; these tests pin the
-    # clustering ROUTE, not where the linear cutoff lands, so keep the cut fixed.
+    # clustering ROUTE, not where the linear cutoff lands, so keep the cut fixed (and the
+    # router off).
     monkeypatch.setenv("GOLDENMATCH_FS_LINEAR_CUT", "off")
+    monkeypatch.setenv("GOLDENMATCH_FS_CUT_ROUTER", "off")  # the unrouted cut, not just the default rule off
     return gm.dedupe_df(df if df is not None else _df(),
                         config=cfg if cfg is not None else _cfg(),
                         confidence_required=False)
