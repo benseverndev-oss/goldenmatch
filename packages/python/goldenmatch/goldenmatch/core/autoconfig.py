@@ -5812,6 +5812,10 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
                 "#1316).",
                 total_rows,
             )
+        elif not blocking.keys:
+            # SPIKE (throwaway): learned blocking's sample pass is static blocking on
+            # blocking.keys; a key-less config (token / lsh / simhash) yields 0 blocks.
+            logger.info("SPIKE: keeping key-less %s blocking at %d rows", blocking.strategy, total_rows)
         else:
             blocking.strategy = "learned"
             blocking.learned_sample_size = _learned_sample_size(total_rows)
