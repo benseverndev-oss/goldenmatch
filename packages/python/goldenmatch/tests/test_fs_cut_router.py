@@ -265,3 +265,18 @@ def test_the_router_routes_on_diagnostics_without_admitted_fraction(monkeypatch)
     )
     monkeypatch.setattr(R, "ROWS", (blind,))
     assert _fs_resolved_cut(_mk(), em, calibrated=False).rule == "evidence_12"
+
+
+def test_route_false_keeps_the_router_out_even_when_it_is_on(monkeypatch):
+    """P5: the Spark tier resolves with route=False; a firing row must not move its cut."""
+    from goldenmatch.core.probabilistic import resolve_thresholds
+
+    monkeypatch.setattr(R, "ROWS", (_SPARSE,))
+    routed = _fs_resolved_cut(_mk(), _em(), calibrated=False)
+    unrouted = _fs_resolved_cut(_mk(), _em(), calibrated=False, route=False)
+    assert routed.rule == "evidence_12"
+    assert (unrouted.rule, unrouted.reason) == ("prior_mid", "default rule")
+    monkeypatch.setenv("GOLDENMATCH_FS_CUT_ROUTER", "off")
+    off_link, _ = resolve_thresholds(_mk(), _em())
+    monkeypatch.delenv("GOLDENMATCH_FS_CUT_ROUTER")
+    assert resolve_thresholds(_mk(), _em(), route=False)[0] == off_link

@@ -3762,17 +3762,21 @@ def compute_thresholds(
 
 
 def resolve_thresholds(
-    mk: MatchkeyConfig, em_result: EMResult
+    mk: MatchkeyConfig, em_result: EMResult, *, route: bool = True
 ) -> tuple[float, float]:
     """Resolve configured or calibrated ``(link, review)`` score cutoffs.
 
     The link cutoff is :func:`resolve_link_cut`'s. The review cutoff is clamped to the link
     cutoff so an explicit low link threshold cannot accidentally turn linked pairs into
     review candidates.
+    ``route=False`` keeps the link-cut router out of this resolution (the Spark tier: see
+    spark/config_pipeline.py).
     """
     _computed_link, computed_review = compute_thresholds(em_result)
     link = float(
-        resolve_link_cut(mk, em_result, _fs_calibration_mode() == "posterior").link
+        resolve_link_cut(
+            mk, em_result, _fs_calibration_mode() == "posterior", route=route
+        ).link
     )
     review = (
         float(mk.review_threshold)
@@ -4756,7 +4760,7 @@ _FS_ROUTER_DECLINED_REASON = "default rule (router: no row matched)"
 
 
 def _fs_resolved_cut(
-    mk: MatchkeyConfig, em_result: EMResult, calibrated: bool
+    mk: MatchkeyConfig, em_result: EMResult, calibrated: bool, *, route: bool = True
 ) -> ResolvedCut | None:
     """The linear link cut placed by rule, or None when no rule applies.
 
@@ -4765,7 +4769,7 @@ def _fs_resolved_cut(
 
     1. a pinned ``mk.link_cut_rule``;
     2. otherwise, when ``GOLDENMATCH_FS_CUT_ROUTER`` is on, the rule
-       ``fs_cut_rules.choose_cut_rule`` routes this model to;
+       ``fs_cut_rules.choose_cut_rule`` routes this model to (skipped when ``route`` is False);
     3. the ``GOLDENMATCH_FS_LINEAR_CUT`` default.
 
     A candidate this model cannot supply (``otsu`` without a training histogram) falls through
@@ -4795,7 +4799,7 @@ def _fs_resolved_cut(
     pinned = getattr(mk, "link_cut_rule", None)
     if pinned:
         candidates.append((pinned, "pinned by link_cut_rule"))
-    elif _fs_cut_router_enabled():
+    elif route and _fs_cut_router_enabled():
         routed = choose_cut_rule(cut_diagnostics(mk, em_result, admitted=False))
         if routed is not None:
             candidates.append(routed)
@@ -4859,7 +4863,7 @@ class LinkCut:
 
 
 def resolve_link_cut(
-    mk: MatchkeyConfig, em_result: EMResult, calibrated: bool
+    mk: MatchkeyConfig, em_result: EMResult, calibrated: bool, *, route: bool = True
 ) -> LinkCut:
     """The FS link cutoff: the single copy of the precedence (spec 2026-09-11 "Resolution and
     precedence").
@@ -4874,6 +4878,8 @@ def resolve_link_cut(
     ``reason``, so a leaked env var forcing posterior mode does not silently disable a pin.
     ``_fs_link_threshold``, ``resolve_thresholds``, ``link_threshold_source`` and
     ``link_cut_report`` all read this; none keeps a precedence of its own.
+    ``route=False`` keeps the link-cut router out of this resolution (the Spark tier: see
+    spark/config_pipeline.py).
     """
     pinned = getattr(mk, "link_cut_rule", None)
     if mk.link_threshold is not None:
@@ -4887,7 +4893,7 @@ def resolve_link_cut(
             else None
         )
         return LinkCut(calibrated_cut, LINK_THRESHOLD_CALIBRATED, None, reason)
-    resolved = _fs_resolved_cut(mk, em_result, calibrated)
+    resolved = _fs_resolved_cut(mk, em_result, calibrated, route=route)
     if resolved is not None:
         return LinkCut(
             resolved.normalized, LINK_THRESHOLD_EVIDENCE_RULE, resolved.rule, resolved.reason

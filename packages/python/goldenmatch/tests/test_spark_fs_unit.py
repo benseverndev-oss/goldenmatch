@@ -178,6 +178,25 @@ def test_threshold_is_the_link_not_the_review():
         assert _matchkey_threshold(mk, em) != pytest.approx(review)
 
 
+def test_matchkey_threshold_resolves_unrouted(monkeypatch):
+    """P5 (F1): the Spark tier's link cut must stay unrouted -- ``_matchkey_threshold``
+    passes ``route=False`` into ``resolve_thresholds`` (config_pipeline.py, ruling R5)."""
+    import goldenmatch.core.probabilistic as probabilistic
+    from goldenmatch.spark.config_pipeline import _matchkey_threshold
+
+    calls: dict = {}
+
+    def spy(mk, em, **kwargs):
+        calls.update(kwargs)
+        return (0.5, 0.35)
+
+    monkeypatch.setattr(probabilistic, "resolve_thresholds", spy)
+    mk = _mk([MatchkeyField(field="first", scorer="jaro_winkler")])
+    em = _em({"first": [-2.0, 4.0]})
+    assert _matchkey_threshold(mk, em) == pytest.approx(0.5)
+    assert calls.get("route") is False
+
+
 def test_prior_weight_is_negative_for_a_rare_match_rate():
     """Sanity on the direction: a 0.2% within-block match rate is evidence a
     pair must overcome, so the prior is strongly negative."""
