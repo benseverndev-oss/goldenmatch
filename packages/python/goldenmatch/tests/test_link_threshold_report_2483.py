@@ -71,6 +71,7 @@ def test_evidence_rule_when_nothing_configured_or_calibrated() -> None:
 
 def test_fallback_when_the_rule_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GOLDENMATCH_FS_LINEAR_CUT", "off")
+    monkeypatch.setenv("GOLDENMATCH_FS_CUT_ROUTER", "off")  # the unrouted cut, not just the default rule off
     assert link_threshold_source(_mk(), _EM(None)) == LINK_THRESHOLD_FALLBACK
 
 

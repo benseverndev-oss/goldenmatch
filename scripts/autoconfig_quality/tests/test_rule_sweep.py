@@ -1164,3 +1164,22 @@ def test_merge_cli_holdout_gate_view_hides_rule_names(tmp_path):
         "Measured 1 of 1 held-out datasets. Datasets with at least one rule below "
         "default: 1. Datasets with a crashed rule: 0." in held_out_section
     )
+
+
+def test_sweep_scorecards_keep_cut_diagnostics_exact(tmp_path, monkeypatch):
+    """P5: the gate replays recorded diagnostics against row boundaries; rounding to 6 dp could
+    route a boundary dataset differently from the live router."""
+    _clear_cut_env(monkeypatch)
+
+    def fake(name, work_dir):
+        rec = _record("design", {})
+        rec["cut_diagnostics"] = {"fs": {"midpoint_bits": 2.1234567891234}}
+        return rec
+
+    monkeypatch.setattr(S, "sweep_dataset", fake)
+    out = tmp_path / "card.json"
+    assert S.run(["--datasets", "person", "--out", str(out)]) == 0
+    card = json.loads(out.read_text())
+    assert card["datasets"]["person"]["cut_diagnostics"]["fs"]["midpoint_bits"] == 2.1234567891234
+    merged = S.merge_cards([card])
+    assert merged["datasets"]["person"]["cut_diagnostics"]["fs"]["midpoint_bits"] == 2.1234567891234

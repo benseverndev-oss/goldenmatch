@@ -510,7 +510,7 @@
                 "evidence_12",
                 "otsu"
               ],
-              "description": "Rule that places the probabilistic link cutoff by evidence bits, for example prior_mid or evidence_9. Unset uses the default rule; link_threshold, when set, still wins."
+              "description": "Rule that places the probabilistic link cutoff by evidence bits, for example prior_mid or evidence_9. Unset lets the link-cut router pick the rule (GOLDENMATCH_FS_CUT_ROUTER), else the default rule; link_threshold, when set, still wins."
             },
             {
               "name": "review_threshold",

@@ -1,4 +1,4 @@
-"""FS link-cut router (spec 2026-09-11-fs-cut-rule-routing-design, P4)."""
+"""FS link-cut router (spec 2026-09-11-fs-cut-rule-routing-design, P4-P5)."""
 
 from __future__ import annotations
 
@@ -111,10 +111,18 @@ def test_every_shipped_row_is_a_uniquely_named_cut_row():
     assert len({row.name for row in R.ROWS}) == len(R.ROWS)
 
 
-def test_the_router_is_off_by_default(monkeypatch):
+def test_the_router_is_on_by_default(monkeypatch):
     monkeypatch.setattr(R, "ROWS", (_SPARSE,))
     resolved = _fs_resolved_cut(_mk(), _em(), calibrated=False)
-    assert (resolved.rule, resolved.reason) == ("prior_mid", "default rule")
+    assert (resolved.rule, resolved.reason) == ("evidence_12", "routed by sparse: lambda under 0.05")
+
+
+def test_the_kill_switch_turns_the_router_off(monkeypatch):
+    monkeypatch.setattr(R, "ROWS", (_SPARSE,))
+    for value in ("off", "0", "false", " OFF "):
+        monkeypatch.setenv("GOLDENMATCH_FS_CUT_ROUTER", value)
+        resolved = _fs_resolved_cut(_mk(), _em(), calibrated=False)
+        assert (resolved.rule, resolved.reason) == ("prior_mid", "default rule"), value
 
 
 def test_the_router_on_places_the_routed_rule_and_reports_it(monkeypatch):
@@ -141,7 +149,23 @@ def test_no_matching_row_falls_through_to_the_default_rule(monkeypatch):
     monkeypatch.setenv("GOLDENMATCH_FS_CUT_ROUTER", "on")
     monkeypatch.setattr(R, "ROWS", (_SPARSE,))
     resolved = _fs_resolved_cut(_mk(), _em(0.2), calibrated=False)
+    assert (resolved.rule, resolved.reason) == ("prior_mid", "default rule (router: no row matched)")
+
+
+def test_router_off_keeps_the_plain_default_reason(monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_FS_CUT_ROUTER", "off")
+    monkeypatch.setattr(R, "ROWS", (_SPARSE,))
+    resolved = _fs_resolved_cut(_mk(), _em(0.2), calibrated=False)
     assert (resolved.rule, resolved.reason) == ("prior_mid", "default rule")
+
+
+def test_a_declined_route_is_reported(monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_FS_CUT_ROUTER", "on")
+    monkeypatch.setattr(R, "ROWS", (_SPARSE,))
+    report = link_cut_report(_mk(), _em(0.2))
+    assert (report["cut_rule"], report["cut_reason"]) == (
+        "prior_mid", "default rule (router: no row matched)",
+    )
 
 
 def test_the_router_with_the_default_rule_off_places_only_routed_cuts(monkeypatch):
@@ -171,12 +195,12 @@ def test_a_routed_rule_the_model_cannot_supply_falls_back_to_the_default(monkeyp
     )
 
 
-def test_an_unknown_router_value_warns_and_stays_off(monkeypatch, caplog):
+def test_an_unknown_router_value_warns_and_keeps_the_router_on(monkeypatch, caplog):
     monkeypatch.setenv("GOLDENMATCH_FS_CUT_ROUTER", "maybe")
     monkeypatch.setattr(R, "ROWS", (_SPARSE,))
     with caplog.at_level(logging.WARNING):
         resolved = _fs_resolved_cut(_mk(), _em(), calibrated=False)
-    assert resolved.rule == "prior_mid"
+    assert resolved.rule == "evidence_12"
     assert "GOLDENMATCH_FS_CUT_ROUTER" in caplog.text
 
 
@@ -209,3 +233,50 @@ def test_the_shipped_rows_fire_where_the_design_matrix_says():
         )
         routed[name] = None if choice is None else choice[0]
     assert routed == _EXPECTED_ROUTES
+
+
+# ─── P5: the routing path is cheap and never reads admitted_fraction ──────────
+
+
+def test_routing_diagnostics_skip_the_admitted_fraction_pass(monkeypatch):
+    em = _em()
+    em.training_score_histogram = {"counts": [5] * 100, "lo": -10.0, "hi": 14.0}
+    calls: list[str] = []
+    real = R.rule_bits
+    monkeypatch.setattr(R, "rule_bits", lambda rule, *a, **k: calls.append(rule) or real(rule, *a, **k))
+
+    lean = R.cut_diagnostics(_mk(), em, admitted=False)
+    assert lean is not None and lean.admitted_fraction is None
+    assert calls == [], "routing must not compute any rule cutoff for admitted_fraction"
+
+    full = R.cut_diagnostics(_mk(), em)
+    assert full.admitted_fraction is not None and calls
+    same = {k: v for k, v in vars(lean).items() if k != "admitted_fraction"}
+    assert same == {k: v for k, v in vars(full).items() if k != "admitted_fraction"}
+
+
+def test_the_router_routes_on_diagnostics_without_admitted_fraction(monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_FS_CUT_ROUTER", "on")
+    em = _em()
+    em.training_score_histogram = {"counts": [5] * 100, "lo": -10.0, "hi": 14.0}
+    blind = R.CutRow(
+        name="blind", rule="evidence_12", reason="admitted_fraction is absent",
+        when=lambda d: d.admitted_fraction is None,
+    )
+    monkeypatch.setattr(R, "ROWS", (blind,))
+    assert _fs_resolved_cut(_mk(), em, calibrated=False).rule == "evidence_12"
+
+
+def test_route_false_keeps_the_router_out_even_when_it_is_on(monkeypatch):
+    """P5: the Spark tier resolves with route=False; a firing row must not move its cut."""
+    from goldenmatch.core.probabilistic import resolve_thresholds
+
+    monkeypatch.setattr(R, "ROWS", (_SPARSE,))
+    routed = _fs_resolved_cut(_mk(), _em(), calibrated=False)
+    unrouted = _fs_resolved_cut(_mk(), _em(), calibrated=False, route=False)
+    assert routed.rule == "evidence_12"
+    assert (unrouted.rule, unrouted.reason) == ("prior_mid", "default rule")
+    monkeypatch.setenv("GOLDENMATCH_FS_CUT_ROUTER", "off")
+    off_link, _ = resolve_thresholds(_mk(), _em())
+    monkeypatch.delenv("GOLDENMATCH_FS_CUT_ROUTER")
+    assert resolve_thresholds(_mk(), _em(), route=False)[0] == off_link

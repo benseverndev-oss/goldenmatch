@@ -80,7 +80,7 @@ def test_env_default_accepts_any_rule_name(monkeypatch):
     monkeypatch.setenv("GOLDENMATCH_FS_LINEAR_CUT", "evidence_5")
     got = _fs_resolved_cut(_mk(), _em(), calibrated=False)
     assert got.rule == "evidence_5"
-    assert got.reason == "default rule"
+    assert got.reason == "default rule (router: no row matched)"
     assert math.isclose(got.normalized, _norm(5.0), rel_tol=1e-12)
 
 
@@ -304,7 +304,7 @@ def test_the_four_callers_have_no_precedence_of_their_own(monkeypatch):
     stub = P.LinkCut(
         link=0.123, source=P.LINK_THRESHOLD_CONFIGURED, rule="evidence_5", reason="stub"
     )
-    monkeypatch.setattr(P, "resolve_link_cut", lambda mk, em_result, calibrated: stub)
+    monkeypatch.setattr(P, "resolve_link_cut", lambda mk, em_result, calibrated, **_kw: stub)
     mk, em = _mk(), _em()
     assert P._fs_link_threshold(mk, em, calibrated=False) == 0.123
     assert P.resolve_thresholds(mk, em)[0] == 0.123
@@ -331,7 +331,19 @@ _EXPECTED_CUT = {
         _norm(math.log2(99.0)), LINK_THRESHOLD_EVIDENCE_RULE, "prior_mid",
         "otsu unavailable: needs a training histogram of more than 50 pairs; default rule",
     ),
-    "default": (_norm(math.log2(99.0)), LINK_THRESHOLD_EVIDENCE_RULE, "prior_mid", "default rule"),
+    "default": (
+        _norm(math.log2(99.0)), LINK_THRESHOLD_EVIDENCE_RULE, "prior_mid",
+        "default rule (router: no row matched)",
+    ),
+    "router_off": (_norm(math.log2(99.0)), LINK_THRESHOLD_EVIDENCE_RULE, "prior_mid", "default rule"),
+    "routed_row_fires": (
+        1.0, LINK_THRESHOLD_EVIDENCE_RULE, "posterior_099",
+        "routed by sparse_prior_binds: match rate under 0.004, the prior cutoff above the "
+        "midpoint, at most 3 fields",
+    ),
+    "router_off_row_would_fire": (
+        _norm(math.log2(0.998 / 0.002)), LINK_THRESHOLD_EVIDENCE_RULE, "prior_mid", "default rule",
+    ),
     "fallback": (0.50, LINK_THRESHOLD_FALLBACK, None, None),
     "posterior": (None, LINK_THRESHOLD_FALLBACK, None, None),
     "posterior_pinned": (
@@ -360,6 +372,14 @@ def _resolver_case(monkeypatch, case: str):
     if case == "fallback":
         monkeypatch.setenv("GOLDENMATCH_FS_LINEAR_CUT", "off")
         return _mk(), _em()
+    if case == "router_off":
+        monkeypatch.setenv("GOLDENMATCH_FS_CUT_ROUTER", "off")
+        return _mk(), _em()
+    if case == "routed_row_fires":
+        return _mk(), _em(0.002)
+    if case == "router_off_row_would_fire":
+        monkeypatch.setenv("GOLDENMATCH_FS_CUT_ROUTER", "off")
+        return _mk(), _em(0.002)
     monkeypatch.setenv("GOLDENMATCH_FS_CALIBRATED", "posterior")
     return (_mk(link_cut_rule="evidence_9") if case == "posterior_pinned" else _mk()), _em()
 
