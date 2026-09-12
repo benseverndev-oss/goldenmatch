@@ -5,6 +5,7 @@ Provenance is git_sha + native_version (NO wall-clock timestamp / RNG), so
 re-runs on the same code are byte-stable and cleanly diffable. Floats are
 rounded to a fixed precision so trivial ULP noise never churns the diff.
 """
+
 from __future__ import annotations
 
 import json
@@ -14,14 +15,14 @@ from typing import Any
 _FLOAT_PRECISION = 6
 
 
-def _round_floats(obj: Any) -> Any:
+def _round_floats(obj: Any, precision: int = _FLOAT_PRECISION) -> Any:
     """Recursively round every float for byte-stable serialization."""
     if isinstance(obj, float):
-        return round(obj, _FLOAT_PRECISION)
+        return round(obj, precision)
     if isinstance(obj, dict):
-        return {k: _round_floats(v) for k, v in obj.items()}
+        return {k: _round_floats(v, precision) for k, v in obj.items()}
     if isinstance(obj, list):
-        return [_round_floats(v) for v in obj]
+        return [_round_floats(v, precision) for v in obj]
     return obj
 
 
@@ -31,8 +32,13 @@ def build_scorecard(
     native_version: str,
     git_sha: str,
     skipped: dict[str, str] | None = None,
+    float_precision: int | None = _FLOAT_PRECISION,
 ) -> dict[str, Any]:
-    """Assemble per-dataset records + a stable metadata header."""
+    """Assemble per-dataset records + a stable metadata header.
+
+    ``float_precision=None`` keeps every float exact. The link-cut sweep uses that: its gate
+    replays the recorded cut diagnostics against row boundaries, and a rounded value near a
+    boundary could route differently from the live router."""
     return {
         "meta": {
             "native_version": native_version,
@@ -40,7 +46,7 @@ def build_scorecard(
             "datasets_run": sorted(results.keys()),
             "datasets_skipped": skipped or {},
         },
-        "datasets": _round_floats(results),
+        "datasets": results if float_precision is None else _round_floats(results, float_precision),
     }
 
 
@@ -48,13 +54,12 @@ def gather_meta() -> tuple[str, str]:
     """(native_version, git_sha) from the environment. Best-effort; never raises."""
     try:
         import goldenmatch_native  # noqa: PLC0415
+
         native_version = getattr(goldenmatch_native, "__version__", "unknown")
     except Exception:
         native_version = "absent"
     try:
-        git_sha = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], text=True
-        ).strip()
+        git_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     except Exception:
         git_sha = "unknown"
     return native_version, git_sha

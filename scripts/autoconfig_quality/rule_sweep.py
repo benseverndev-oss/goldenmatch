@@ -721,7 +721,13 @@ def run(argv: list[str]) -> int:
                 results[name] = record
 
     native_version, git_sha = gather_meta()
-    card = build_scorecard(results, native_version=native_version, git_sha=git_sha, skipped=skipped)
+    card = build_scorecard(
+        results,
+        native_version=native_version,
+        git_sha=git_sha,
+        skipped=skipped,
+        float_precision=None,
+    )
     card["meta"]["cut_env_overrides"] = overrides
     card["meta"]["tolerance"] = TOLERANCE
     card["meta"]["goldenmatch_env"] = {
@@ -804,6 +810,7 @@ def merge_cards(cards: list[dict], expected: list[str] | None = None) -> dict:
         native_version=",".join(sorted(natives)),
         git_sha=next(iter(shas), "unknown"),
         skipped={name: why for name, why in skipped.items() if name not in datasets},
+        float_precision=None,
     )
     merged["meta"]["cut_env_overrides"] = overrides
     merged["meta"]["tolerance"] = TOLERANCE
