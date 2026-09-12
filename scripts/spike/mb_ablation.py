@@ -39,6 +39,20 @@ def _arm_config(arm: str, zc, fs):
     if arm == "zc_nobucket":
         # The zero-config config whole, minus its backend="bucket" (forced FS runs the default backend).
         return zc.model_copy(update={"backend": None})
+    if arm == "zc_nb_noobs":
+        # zc_nobucket, and the matchkeys' link_threshold_observed cleared.
+        mks = [
+            mk.model_copy(update={"link_threshold_observed": None})
+            if mk.type == "probabilistic"
+            else mk
+            for mk in zc.get_matchkeys()
+        ]
+        return zc.model_copy(update={"backend": None, "matchkeys": mks, "match_settings": None})
+    if arm == "zc_nb_nopre":
+        # zc_nobucket, and the private _preflight_report cleared.
+        cfg = zc.model_copy(update={"backend": None})
+        cfg._preflight_report = None
+        return cfg
     if arm == "zc_ev5":
         mks = [
             mk.model_copy(update={"link_cut_rule": "evidence_5"})
