@@ -74,6 +74,23 @@ def _types(cfg) -> list[str]:
 
 
 def _blocking_recall(df, cfg, gt: set) -> dict:
+    """``_blocking_recall_of``, but a failure never loses the phase's F1: a config that blocks on a
+    column the pipeline derives (``__title_key__``) cannot be rebuilt from the raw frame."""
+    try:
+        return _blocking_recall_of(df, cfg, gt)
+    except Exception as exc:
+        return {"blocking_recall": None, "blocking_error": f"{type(exc).__name__}: {exc}"[:300]}
+
+
+def _block_ids(b) -> list[int]:
+    native = b.materialize().native if hasattr(b, "materialize") else b.df
+    if hasattr(native, "collect"):
+        native = native.collect()
+    col = native.column("__row_id__") if hasattr(native, "column") else native["__row_id__"]
+    return col.to_pylist() if hasattr(col, "to_pylist") else col.to_list()
+
+
+def _blocking_recall_of(df, cfg, gt: set) -> dict:
     """Share of true pairs that share at least one block under ``cfg.blocking``."""
     from goldenmatch.core.blocker import build_blocks
 
@@ -86,8 +103,7 @@ def _blocking_recall(df, cfg, gt: set) -> dict:
     n_blocks = 0
     max_block = 0
     for bi, b in enumerate(build_blocks(frame, blocking)):
-        col = b.df.column("__row_id__") if hasattr(b.df, "column") else b.df["__row_id__"]
-        ids = col.to_pylist() if hasattr(col, "to_pylist") else col.to_list()
+        ids = _block_ids(b)
         projected += len(ids) * (len(ids) - 1) // 2
         n_blocks += 1
         max_block = max(max_block, len(ids))
