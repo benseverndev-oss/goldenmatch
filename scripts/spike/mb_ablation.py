@@ -3,9 +3,11 @@
 musicbrainz_20k: zero-config dedupe_df F1 0.034 vs forced auto_configure_probabilistic_df 0.600. Which half of the
 zero-config config causes it? Four arms, each in its own child process, crossing the two configs' BLOCKING with their
 MATCHKEYS: (zc blocking, zc matchkeys) / (fs, fs) / (zc blocking, fs matchkeys) / (fs blocking, zc matchkeys).
+A fifth arm, zc_ev5, keeps the zero-config config whole and pins its FS link cut to evidence_5 (the rule the router
+gives forced FS, whose lambda .076 clears the midpoint_binds_wide row's lambda < 0.1 gate; zero-config's .12 does not).
 
 Usage, from the repo root:
-  python -m scripts.spike.mb_ablation --out DIR [--dataset musicbrainz_20k]
+  python -m scripts.spike.mb_ablation --out DIR [--dataset musicbrainz_20k] [--arm ARM]
 """
 
 from __future__ import annotations
@@ -24,13 +26,31 @@ import time  # noqa: E402
 import traceback  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-ARMS = ("zc_zc", "fs_fs", "zcblock_fsmk", "fsblock_zcmk")
+ARMS = ("zc_zc", "fs_fs", "zcblock_fsmk", "fsblock_zcmk", "zc_ev5")
 
 
 def _configs(df):
     from goldenmatch.core.autoconfig import auto_configure_df, auto_configure_probabilistic_df
 
     return auto_configure_df(df, confidence_required=False), auto_configure_probabilistic_df(df)
+
+
+def _arm_config(arm: str, zc, fs):
+    if arm == "zc_ev5":
+        mks = [
+            mk.model_copy(update={"link_cut_rule": "evidence_5"})
+            if mk.type == "probabilistic"
+            else mk
+            for mk in zc.get_matchkeys()
+        ]
+        return zc.model_copy(update={"matchkeys": mks, "match_settings": None})
+    block_src, mk_src = {
+        "zc_zc": (zc, zc),
+        "fs_fs": (fs, fs),
+        "zcblock_fsmk": (zc, fs),
+        "fsblock_zcmk": (fs, zc),
+    }[arm]
+    return mk_src.model_copy(update={"blocking": block_src.blocking})
 
 
 def child(dataset: str, arm: str, out: Path) -> None:
@@ -42,13 +62,7 @@ def child(dataset: str, arm: str, out: Path) -> None:
     df, gt = resolve_loader(dataset)()
     gt = {(min(a, b), max(a, b)) for a, b in gt}
     zc, fs = _configs(df)
-    block_src, mk_src = {
-        "zc_zc": (zc, zc),
-        "fs_fs": (fs, fs),
-        "zcblock_fsmk": (zc, fs),
-        "fsblock_zcmk": (fs, zc),
-    }[arm]
-    cfg = mk_src.model_copy(update={"blocking": block_src.blocking})
+    cfg = _arm_config(arm, zc, fs)
     record: dict = {"dataset": dataset, "arm": arm}
     if arm in ("zc_zc", "fs_fs"):
         record["config"] = cfg.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
@@ -91,13 +105,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--dataset", default="musicbrainz_20k")
     ap.add_argument("--arm", default=None)
+    ap.add_argument("--arms", default="", help="comma list for the driver; default all")
     args = ap.parse_args(argv)
     args.out.mkdir(parents=True, exist_ok=True)
     if args.arm:
         child(args.dataset, args.arm, args.out)
         return 0
     env = {**os.environ, "PYTHONHASHSEED": "0"}
-    for arm in ARMS:
+    arms = [a.strip() for a in args.arms.split(",") if a.strip()] or list(ARMS)
+    for arm in arms:
         if (args.out / f"{args.dataset}-{arm}.json").exists():
             continue
         t0 = time.perf_counter()
