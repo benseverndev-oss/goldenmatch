@@ -6,6 +6,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+
+- **A planner-chosen `backend="bucket"` no longer sends a Fellegi-Sunter matchkey
+  onto a blocking plan the bucket scorer cannot express.** The execution planner
+  writes `backend="bucket"` onto zero-config configs, and `_fs_use_bucket_route`
+  honored it before checking the blocking strategy. The bucket scorer builds field
+  block keys from `blocking.keys` / `passes`, so on a token or LSH plan it scored
+  whatever keys the config carried instead of the plan's candidates. #2488 fixed
+  the same ordering for weighted matchkeys; the FS route kept it. The strategy
+  check now runs first, and such plans score on the memory-bounded external-blocks
+  scorer. On MusicBrainz-20K zero-config `dedupe_df` went from F1 0.034 to 0.176.
+
 ## [3.17.1] - 2026-08-31
 
 <!-- README-callout

@@ -541,9 +541,22 @@ def _fs_use_bucket_route(config: GoldenMatchConfig, mk: Any) -> bool:
         lsh / ann / learned / canopy / sorted_neighborhood candidates are not
         field-hash reproducible).
     """
+    # Correctness gate FIRST -- the FS twin of #2488. The execution planner writes
+    # backend="bucket" onto the committed config, so a blocking strategy bucket
+    # cannot express must be refused before the explicit-bucket short-circuit, not
+    # after it. Bucket derives field block keys from `blocking.keys` / `passes`; on
+    # a token / lsh / ... plan it scores whatever keys the config happens to carry
+    # instead of the plan's candidates. Measured on MusicBrainz-20K zero-config
+    # (token plan on `title` with a stray `language` key): F1 0.034 on bucket,
+    # 0.176 off it.
+    _blk = getattr(config, "blocking", None)
+    if _blk is not None and getattr(_blk, "strategy", None) not in (
+        None, "static", "multi_pass",
+    ):
+        return False
     backend = getattr(config, "backend", None)
     if backend == "bucket":
-        return True  # explicit choice -- honored at any size
+        return True  # explicit choice on an expressible plan -- honored at any size
     # `duckdb` is a single-node pair-STORAGE backend with NO distinct FS scoring
     # route -- an FS matchkey under it simply falls to the legacy batched scorer
     # (this function's own "#1798 OOM path"), which is measurably quality-DIVERGENT
@@ -590,11 +603,9 @@ def _fs_use_bucket_route(config: GoldenMatchConfig, mk: Any) -> bool:
     # requires a single weighted matchkey), so a probabilistic matchkey never
     # enters it -- excluding FS here only demoted FS to the batched path for
     # users who happened to have the columnar opt-in set.
-    _blk = getattr(config, "blocking", None)
-    if _blk is not None and getattr(_blk, "strategy", None) not in (
-        None, "static", "multi_pass",
-    ):
-        return False
+    # (The blocking-strategy exclusion that used to sit here now runs at the top of
+    # this function -- below the explicit-bucket short-circuit it was unreachable
+    # for exactly the planner-written configs it existed to protect.)
     from goldenmatch.core.profile_emitter import has_active_emitter
 
     return not has_active_emitter()
@@ -617,7 +628,11 @@ def _fs_external_blocks_route(config: GoldenMatchConfig) -> bool:
     active-emitter probe runs are calibrated against the legacy path (the
     #1829 lesson), and explicit scale backends keep their own routing.
     """
-    if getattr(config, "backend", None) not in (None, "polars-direct"):
+    # "bucket" is accepted because the execution planner writes it onto zero-config
+    # configs whatever the blocking strategy; `_fs_use_bucket_route` refuses such a
+    # plan, and its candidates belong on this memory-bounded scorer, not the batched
+    # one. The distributed backends (ray / datafusion / chunked-to-ray) stay out.
+    if getattr(config, "backend", None) not in (None, "polars-direct", "bucket"):
         return False
     if (
         os.environ.get("GOLDENMATCH_FS_DEFAULT_BUCKET", "1").strip().lower()
