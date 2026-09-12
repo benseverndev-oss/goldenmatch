@@ -36,6 +36,9 @@ def _configs(df):
 
 
 def _arm_config(arm: str, zc, fs):
+    if arm == "zc_nobucket":
+        # The zero-config config whole, minus its backend="bucket" (forced FS runs the default backend).
+        return zc.model_copy(update={"backend": None})
     if arm == "zc_ev5":
         mks = [
             mk.model_copy(update={"link_cut_rule": "evidence_5"})
