@@ -37,7 +37,7 @@ def test_known_models_are_present():
         "BlockingConfig": 25,
         "GoldenMatchConfig": 29,
         "IdentityConfig": 16,
-        "MatchkeyConfig": 18,
+        "MatchkeyConfig": 19,  # +link_cut_rule (FS link-cut routing)
     }
     for model, expected_field_count in required_models.items():
         assert model in fields, f"model {model!r} not found; available: {sorted(fields)[:20]}"

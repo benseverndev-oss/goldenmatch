@@ -687,6 +687,27 @@ def _training_config_manifest(mk: MatchkeyConfig) -> dict:
     }
 
 
+def _validated_training_score_histogram(value: Any) -> dict | None:
+    """Drop a malformed ``training_score_histogram`` on load (M4) rather than let a hand-edited
+    or corrupted model file raise deep inside the ``otsu`` rule or the cut-diagnostics reader.
+
+    Valid: a dict with numeric ``lo`` < ``hi`` and a list ``counts`` of non-negative ints.
+    Anything else, including a missing ``counts`` key, loads as None.
+    """
+    if not isinstance(value, dict):
+        return None
+    lo, hi, counts = value.get("lo"), value.get("hi"), value.get("counts")
+    if not isinstance(lo, (int, float)) or not isinstance(hi, (int, float)):
+        return None
+    if not lo < hi:
+        return None
+    if not isinstance(counts, list) or not all(
+        isinstance(c, int) and c >= 0 for c in counts
+    ):
+        return None
+    return value
+
+
 @dataclass
 class EMResult:
     """Result of EM training for Fellegi-Sunter model."""
@@ -716,6 +737,13 @@ class EMResult:
     # double-count). None/empty = off = byte-identical.
     joint_corrections: list[tuple[str, str, float]] | None = None
     training_config: dict | None = None
+    # Linear-score histogram of EM's training sample: {"lo", "hi", "counts"}, 100 equal bins
+    # over [0, 1], normalized against the regular-field envelope exactly as the Otsu
+    # calibrator normalizes it. Read by the `otsu` link-cut rule and the cut diagnostics
+    # (core/fs_cut_rules.py). None when a model was not trained through train_em's sample
+    # path (counted EM, per-pass sessions, supervised estimation) or was saved before this
+    # field existed.
+    training_score_histogram: dict | None = None
     # Non-serialized marker distinguishing a loaded schema-v1 model from an
     # in-memory result constructed before manifests existed.
     _source_schema_version: int | None = None
@@ -754,6 +782,8 @@ class EMResult:
             data["joint_corrections"] = [list(t) for t in self.joint_corrections]
         if self.training_config is not None:
             data["training_config"] = self.training_config
+        if self.training_score_histogram is not None:
+            data["training_score_histogram"] = self.training_score_histogram
         return data
 
     @classmethod
@@ -787,6 +817,9 @@ class EMResult:
                     if data.get("joint_corrections") else None
                 ),
                 training_config=data.get("training_config"),
+                training_score_histogram=_validated_training_score_histogram(
+                    data.get("training_score_histogram")
+                ),
                 _source_schema_version=version,
             )
         except KeyError as exc:
@@ -2870,6 +2903,8 @@ def train_em(
                 ", ".join(f"{a}x{b}(-{bits:.2f}b)" for a, b, bits in joint_corrections),
             )
 
+    training_score_histogram = _training_score_histogram(comp_matrix, mk, match_weights)
+
     return EMResult(
         m_probs=m_probs,
         u_probs=u_probs,
@@ -2882,6 +2917,7 @@ def train_em(
         calibrated_link_threshold=calibrated_link_threshold,
         joint_corrections=joint_corrections,
         training_config=_training_config_manifest(mk),
+        training_score_histogram=training_score_histogram,
     )
 
 
@@ -3791,6 +3827,73 @@ def link_threshold_source(mk: MatchkeyConfig, em_result: EMResult) -> str:
     return LINK_THRESHOLD_FALLBACK
 
 
+def _fs_unresolved_cut_reason(mk: MatchkeyConfig, em_result: EMResult) -> str | None:
+    """Why the rule step placed no cut, for the report; None when no rule was asked for."""
+    from goldenmatch.core.fs_cut_rules import weight_envelope
+
+    rule = getattr(mk, "link_cut_rule", None) or _fs_linear_cut_rule()
+    if rule is None:
+        return None
+    if (
+        weight_envelope(mk, em_result) is None
+        or getattr(em_result, "proportion_matched", None) is None
+    ):
+        return "degenerate model: no usable weight envelope or match rate"
+    return f"{rule} unavailable: needs a training histogram of more than 50 pairs; fixed 0.50 cut applies"
+
+
+def link_cut_report(mk: MatchkeyConfig, em_result: EMResult) -> dict:
+    """``cut_rule`` / ``cut_reason`` / ``cut_diagnostics`` for the per-matchkey cutoff report.
+
+    - ``cut_rule`` and ``cut_reason`` are None when no rule was asked for (no pin, and the
+      rule step never applied -- see below).
+    - When a rule WAS asked for (``mk.link_cut_rule`` pinned) but an earlier precedence step
+      decided first -- a configured ``link_threshold``, an EM-calibrated cutoff, or posterior
+      scoring -- ``cut_rule`` stays None but ``cut_reason`` says which step overrode the pin,
+      so a leaked env var (``GOLDENMATCH_FS_EVIDENCE_CUT`` / ``GOLDENMATCH_FS_CALIBRATED``)
+      forcing posterior mode does not silently disable a pin with no trace (spec's Error
+      handling section).
+    - ``cut_reason`` alone is also set when a rule was asked for but could not place the cut
+      (:func:`_fs_unresolved_cut_reason`).
+    - ``cut_diagnostics`` is reported whenever the model has usable weights, so the
+      measurement harness can read it even when no rule applied.
+
+    Mirrors the precedence in :func:`_fs_link_threshold` / :func:`resolve_thresholds`.
+    """
+    from dataclasses import asdict
+
+    from goldenmatch.core.fs_cut_rules import cut_diagnostics
+
+    diagnostics = cut_diagnostics(mk, em_result)
+    report = {
+        "cut_rule": None,
+        "cut_reason": None,
+        "cut_diagnostics": asdict(diagnostics) if diagnostics is not None else None,
+    }
+    pinned = getattr(mk, "link_cut_rule", None)
+    if mk.link_threshold is not None:
+        if pinned:
+            report["cut_reason"] = f"link_cut_rule={pinned} not applied: link_threshold is set"
+        return report
+    if getattr(em_result, "calibrated_link_threshold", None) is not None:
+        if pinned:
+            report["cut_reason"] = (
+                f"link_cut_rule={pinned} not applied: calibrated cutoff decided first"
+            )
+        return report
+    if _fs_calibration_mode() == "posterior":
+        if pinned:
+            report["cut_reason"] = f"link_cut_rule={pinned} not applied: posterior scoring"
+        return report
+    resolved = _fs_resolved_cut(mk, em_result, calibrated=False)
+    if resolved is not None:
+        report["cut_rule"] = resolved.rule
+        report["cut_reason"] = resolved.reason
+    else:
+        report["cut_reason"] = _fs_unresolved_cut_reason(mk, em_result)
+    return report
+
+
 def _fs_calibrate_threshold_enabled() -> bool:
     """Unsupervised per-dataset link-threshold calibration. **Default OFF.**
 
@@ -3825,14 +3928,14 @@ _CALIBRATE_MIN, _CALIBRATE_MAX = 0.40, 0.90
 _CALIBRATE_POSTERIOR_MIN, _CALIBRATE_POSTERIOR_MAX = 0.05, 0.995
 
 
-def _otsu_threshold(scores) -> float | None:
-    """Otsu split: the cutoff maximizing between-class variance of a [0,1] score
-    histogram. For a bimodal non-match/match distribution this is the class
-    boundary; for well-separated (unimodal-ish) data the exact split barely
-    matters (flat F1 curve), so it stays safe."""
-    nbins = 100
-    hist, _ = np.histogram(scores, bins=nbins, range=(0.0, 1.0))
-    hist = hist.astype(np.float64)
+def _otsu_split_from_counts(counts) -> float | None:
+    """Otsu split of a [0, 1] histogram given as bin counts.
+
+    The split is the cutoff maximizing between-class variance, returned as the upper edge of
+    the split bin.
+    """
+    hist = np.asarray(counts, dtype=np.float64)
+    nbins = hist.shape[0]
     total = hist.sum()
     if total <= 0:
         return None
@@ -3846,6 +3949,17 @@ def _otsu_threshold(scores) -> float | None:
         sigma_b = np.where(denom > 1e-12, (mu_t * omega - mu) ** 2 / denom, 0.0)
     k = int(np.argmax(sigma_b))
     return float((k + 1) / nbins)              # upper edge of the split bin
+
+
+def _otsu_threshold(scores) -> float | None:
+    """Otsu split: the cutoff maximizing between-class variance of a [0,1] score histogram.
+
+    For a bimodal non-match/match distribution this is the class boundary. For
+    well-separated (unimodal-ish) data the exact split barely matters (flat F1 curve), so it
+    stays safe.
+    """
+    hist, _ = np.histogram(scores, bins=_TRAINING_HISTOGRAM_BINS, range=(0.0, 1.0))
+    return _otsu_split_from_counts(hist)
 
 
 # ── FS threshold-refit loop (Phase 3a) ───────────────────────────────────────
@@ -4468,6 +4582,33 @@ def fs_refit_link_threshold(id_a, id_b, score, default_link: float,
     return candidate
 
 
+_TRAINING_HISTOGRAM_BINS = 100
+
+
+def _training_score_histogram(comp_matrix, mk, match_weights) -> dict | None:
+    """Linear-score histogram of EM's training sample.
+
+    Normalized exactly as :func:`_calibrate_link_threshold` normalizes it (regular fields,
+    observed levels), so an Otsu split of these counts is that calibrator's split.
+    """
+    fields = [f for f in mk.fields if f.field in match_weights]
+    if not fields or comp_matrix is None or comp_matrix.shape[0] == 0:
+        return None
+    weights = {f.field: np.asarray(match_weights[f.field], dtype=np.float64) for f in fields}
+    lo = float(sum(w.min() for w in weights.values()))
+    hi = float(sum(w.max() for w in weights.values()))
+    if hi <= lo:
+        return None
+    total = np.zeros(comp_matrix.shape[0], dtype=np.float64)
+    for j, f in enumerate(fields):
+        lv = comp_matrix[:, j]
+        obs = lv >= 0
+        total[obs] += weights[f.field][lv[obs]]
+    norm = np.clip((total - lo) / (hi - lo), 0.0, 1.0)
+    counts, _ = np.histogram(norm, bins=_TRAINING_HISTOGRAM_BINS, range=(0.0, 1.0))
+    return {"lo": lo, "hi": hi, "counts": [int(c) for c in counts]}
+
+
 def _calibrate_link_threshold(comp_matrix, mk, match_weights, p_match) -> float | None:
     """Pick a link cutoff from the training-pair normalized-score distribution via
     Otsu's method, instead of the fixed 0.50.
@@ -4596,76 +4737,117 @@ def _posterior_split(scores) -> float | None:
     return float(valley + 0.5 / _REFIT_BINS)
 
 
-_FS_LINEAR_CUT_RULES = ("prior", "prior_mid")
-
-
 _FS_LINEAR_CUT_DEFAULT = "prior_mid"
 _FS_LINEAR_CUT_OFF = ("off", "0", "false", "none", "midpoint")
 
 
 def _fs_linear_cut_rule() -> str | None:
-    """``GOLDENMATCH_FS_LINEAR_CUT``: ``prior_mid`` (default) or ``prior``.
+    """``GOLDENMATCH_FS_LINEAR_CUT``: the default link-cut rule for matchkeys that pin none.
 
-    ``off`` (or ``0``/``false``/``none``/``midpoint``) restores the fixed 0.50 midpoint cut.
-    An unrecognised value warns and keeps the default rather than silently reverting.
+    Any ``fs_cut_rules.CUT_RULES`` name; unset means ``prior_mid``. ``off`` (or
+    ``0``/``false``/``none``/``midpoint``) turns the rule step off, so the fixed 0.50 midpoint
+    cut applies and reports as a fallback. A matchkey that pins ``link_cut_rule="midpoint"``
+    is a chosen rule instead, and reports as one. An unrecognised value warns and keeps the
+    default rather than silently reverting.
     """
+    from goldenmatch.core.fs_cut_rules import CUT_RULES
+
     value = os.environ.get("GOLDENMATCH_FS_LINEAR_CUT", "").strip().lower()
     if not value:
         return _FS_LINEAR_CUT_DEFAULT
     if value in _FS_LINEAR_CUT_OFF:
         return None
-    if value in _FS_LINEAR_CUT_RULES:
+    if value in CUT_RULES:
         return value
     logger.warning(
         "GOLDENMATCH_FS_LINEAR_CUT=%r is not one of %s or off; using %s",
-        value, "/".join(_FS_LINEAR_CUT_RULES), _FS_LINEAR_CUT_DEFAULT,
+        value, "/".join(r for r in CUT_RULES if r != "midpoint"), _FS_LINEAR_CUT_DEFAULT,
     )
     return _FS_LINEAR_CUT_DEFAULT
+
+
+@dataclass(frozen=True)
+class ResolvedCut:
+    """The linear link cut a rule placed: which rule, why, and where."""
+
+    rule: str
+    reason: str
+    bits: float
+    normalized: float
+
+
+def _fs_resolved_cut(
+    mk: MatchkeyConfig, em_result: EMResult, calibrated: bool
+) -> ResolvedCut | None:
+    """The linear link cut placed by rule, or None when no rule applies.
+
+    Callers check an explicit ``mk.link_threshold`` and an EM-calibrated cutoff first. Within
+    the rule step, a pinned ``mk.link_cut_rule`` beats the ``GOLDENMATCH_FS_LINEAR_CUT``
+    default. A pinned rule this model cannot supply (``otsu`` without a training histogram)
+    falls back to the default rule, and the reason says so.
+
+    Returns None in posterior mode (the score is a probability, not the linear scale), when
+    the model has no usable weights, or when the default is off and nothing pinned is
+    computable.
+    Spec: docs/superpowers/specs/2026-09-11-fs-cut-rule-routing-design.md.
+    """
+    from goldenmatch.core.fs_cut_rules import (
+        bits_to_normalized,
+        otsu_split,
+        rule_bits,
+        weight_envelope,
+    )
+
+    if calibrated:
+        return None
+    envelope = weight_envelope(mk, em_result)
+    if envelope is None or getattr(em_result, "proportion_matched", None) is None:
+        return None
+    candidates: list[tuple[str, str]] = []
+    pinned = getattr(mk, "link_cut_rule", None)
+    if pinned:
+        candidates.append((pinned, "pinned by link_cut_rule"))
+    default = _fs_linear_cut_rule()
+    if default is not None and default != pinned:
+        candidates.append((default, "default rule"))
+    note = ""
+    for rule, reason in candidates:
+        bits = rule_bits(rule, envelope, em_result)
+        if bits is None:
+            note = f"{rule} unavailable: needs a training histogram of more than 50 pairs; "
+            continue
+        # `otsu`'s normalized cut is the calibrator's `t` VERBATIM, not a bits round trip
+        # through bits_to_normalized -- that round trip can land a ulp off (I1).
+        normalized = otsu_split(em_result) if rule == "otsu" else bits_to_normalized(bits, envelope)
+        return ResolvedCut(
+            rule=rule,
+            reason=note + reason,
+            bits=float(bits),
+            normalized=normalized,
+        )
+    return None
 
 
 def _fs_linear_rule_link_threshold(
     mk: MatchkeyConfig, em_result: EMResult, calibrated: bool
 ) -> float | None:
-    """Linear link cutoff placed by evidence bits (``GOLDENMATCH_FS_LINEAR_CUT``, default ``prior_mid``).
+    """Normalized linear link cutoff from :func:`_fs_resolved_cut`, or None.
 
-    The linear score is ``(W - lo) / (hi - lo)``, where ``lo``/``hi`` sum every field's
-    min/max match weight plus the negative-evidence range. The fixed 0.50 cutoff therefore
-    links at ``W >= (lo + hi) / 2``: a point set by the per-field extremes, not by the
-    evidence. A u estimate that stops inflating one field's top weight moves it -- ncvr at
-    50,000 random pairs: +7.4 -> -1.9 bits, floored at 0 by the positive-evidence guard,
-    F1 0.9976 -> 0.9743.
+    The linear score is ``(W - lo) / (hi - lo)``, so the fixed 0.50 cut links at the midpoint
+    of the per-field weight extremes; a rule places the cut by evidence bits instead.
 
-    ``prior``: link at ``W >= max(log2((1 - lambda) / lambda), 0)``, the evidence at which
-    the posterior crosses 0.5. ``prior_mid``: the larger of that and the old midpoint.
-    Returned as the equivalent normalized cutoff so every scorer, native kernel included,
-    applies it unchanged. None when off, in posterior mode, or with a degenerate range.
+    MEASURED (fs-lever-gate full panel, 50,000-pair u sample, run 34551694684), midpoint vs
+    ``prior_mid``:
+    - ncvr_synthetic 0.9743 -> 0.9990;
+    - dblp_acm 0.8058 -> 0.8159;
+    - amazon_google 0.0217 -> 0.0475;
+    - the other seven datasets' clusters identical.
 
-    MEASURED (fs-lever-gate full panel, both arms with the 50,000-pair u sample, run
-    34551694684), midpoint vs ``prior_mid``: ncvr_synthetic 0.9743 -> 0.9990, dblp_acm 0.8058
-    -> 0.8159, amazon_google 0.0217 -> 0.0475; the other seven datasets' clusters identical.
     historical_50k (midpoint +10.8 bits, lambda 0.661) and dblp_scholar (+22.2, 0.065) keep
-    their midpoint, which is why pure ``prior`` is not the default: it would drop historical's
-    cut to 0 bits.
+    their midpoint, which is why pure ``prior`` is not the default.
     """
-    rule = _fs_linear_cut_rule()
-    if rule is None or calibrated:
-        return None
-    match_weights = getattr(em_result, "match_weights", None)
-    lam = getattr(em_result, "proportion_matched", None)
-    if not match_weights or lam is None:
-        return None  # nothing to place a cut from: fall through to the fixed default
-    lo, hi = _fs_ne_weight_range(em_result, mk)
-    for f in mk.fields:
-        weights = match_weights.get(f.field)
-        if weights:
-            lo += min(weights)
-            hi += max(weights)
-    if hi <= lo:
-        return None
-    cut_bits = max(-prior_weight(em_result.proportion_matched), 0.0)
-    if rule == "prior_mid":
-        cut_bits = max(cut_bits, (lo + hi) / 2.0)
-    return min(max((cut_bits - lo) / (hi - lo), 0.0), 1.0)
+    resolved = _fs_resolved_cut(mk, em_result, calibrated)
+    return None if resolved is None else resolved.normalized
 
 
 def _fs_link_threshold(

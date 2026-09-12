@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 483,
+      "module_count": 484,
       "modules": [
         {
           "module": "goldenmatch",
@@ -3332,6 +3332,25 @@
           ]
         },
         {
+          "module": "goldenmatch.core.fs_cut_rules",
+          "file": "packages/python/goldenmatch/goldenmatch/core/fs_cut_rules.py",
+          "purpose": "Link-cut rules for the Fellegi-Sunter linear score, as evidence cutoffs in bits.",
+          "defines": [
+            "CutDiagnostics",
+            "Envelope",
+            "bits_to_normalized",
+            "cut_diagnostics",
+            "otsu_bits",
+            "otsu_split",
+            "prior_bits",
+            "rule_bits",
+            "weight_envelope"
+          ],
+          "imports": [
+            "goldenmatch.core.probabilistic"
+          ]
+        },
+        {
           "module": "goldenmatch.core.fused_match",
           "file": "packages/python/goldenmatch/goldenmatch/core/fused_match.py",
           "purpose": "Fused Arrow-native match stage -- opt-in scale/composability entry.",
@@ -4232,6 +4251,7 @@
             "FSFieldContribution",
             "FSModelMismatchError",
             "FSWaterfall",
+            "ResolvedCut",
             "_add_ne_matrix_contribution",
             "_apply_joint_correction_vectorized",
             "_apply_tf_adjustment",
@@ -4284,9 +4304,11 @@
             "_fs_projection_cols",
             "_fs_refit_threshold_enabled",
             "_fs_require_positive_evidence",
+            "_fs_resolved_cut",
             "_fs_scoring_workers",
             "_fs_tf_clamp_override",
             "_fs_u_random_pairs",
+            "_fs_unresolved_cut_reason",
             "_fs_vec_guard",
             "_fs_vec_max_elems",
             "_fs_vectorized_enabled",
@@ -4304,6 +4326,7 @@
             "_ne_scorer_vectorizable",
             "_ne_u_probs_from_matrix",
             "_neutral_u_for",
+            "_otsu_split_from_counts",
             "_otsu_threshold",
             "_posterior_split",
             "_record",
@@ -4324,7 +4347,9 @@
             "_train_em_from_counts_native",
             "_training_config_manifest",
             "_training_pair_conditioning",
+            "_training_score_histogram",
             "_transform_field_value",
+            "_validated_training_score_histogram",
             "_warn_ne_blocking_overlap",
             "comparison_vector",
             "compute_thresholds",
@@ -4342,6 +4367,7 @@
             "labels_from_corrections",
             "labels_from_memory_store",
             "labels_from_review_items",
+            "link_cut_report",
             "link_threshold_source",
             "load_or_train_em",
             "posterior_from_weight",
@@ -4372,6 +4398,7 @@
             "goldenmatch.core.cluster",
             "goldenmatch.core.embedder",
             "goldenmatch.core.frame",
+            "goldenmatch.core.fs_cut_rules",
             "goldenmatch.core.matchkey",
             "goldenmatch.core.scorer",
             "goldenmatch.core.tf_tables",

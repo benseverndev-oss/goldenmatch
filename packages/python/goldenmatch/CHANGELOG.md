@@ -6,6 +6,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+
+- **Probabilistic (FS) matchkeys can pin how the linear link cutoff is placed, as an
+  evidence-bits rule instead of the fixed 0.50 midpoint.** `MatchkeyConfig.link_cut_rule`
+  accepts any of `midpoint`, `prior`, `prior_mid`, `posterior_099`, `evidence_3`,
+  `evidence_5`, `evidence_9`, `evidence_12`, `otsu` (`core/fs_cut_rules.py`). Unset uses the
+  process-wide default rule; an explicit `link_threshold` or an EM-calibrated cutoff still
+  wins over a pinned rule.
+
+  `GOLDENMATCH_FS_LINEAR_CUT` -- previously `prior`/`prior_mid`/`off` only -- now accepts the
+  same rule names and sets that process-wide default; a per-matchkey `link_cut_rule`
+  overrides it.
+
+  Every matchkey's `stats["fs_link_thresholds"]` entry gains `cut_rule` (which rule decided
+  the linear cutoff, if any), `cut_reason` (why, or why not -- including why a pinned rule
+  was overridden by an earlier-deciding threshold, an uncomputable rule, or posterior mode),
+  and `cut_diagnostics` (the weight envelope, prior bits, per-field weight spans and, with a
+  training histogram, each rule's admitted training-sample fraction) -- reported whenever the
+  model has usable weights, regardless of whether a rule applied.
+
+  `EMResult` gains `training_score_histogram`: the EM training sample's linear-score
+  histogram, read by the `otsu` rule and by `cut_diagnostics`. Saved FS model JSON files
+  written before this change carry no such key and still load -- the field is `None`.
+
 ### Fixed
 
 - **A planner-chosen `backend="bucket"` no longer sends a Fellegi-Sunter matchkey
