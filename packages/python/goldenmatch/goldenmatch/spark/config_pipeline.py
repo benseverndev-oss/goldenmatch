@@ -758,7 +758,10 @@ def _matchkey_threshold(mk: Any, em: Any) -> float:
         # construction -- and silently auto-link every pair the one-box would
         # have sent to a human. Pinned by
         # tests/test_spark_fs_unit.py::test_threshold_is_the_link_not_the_review.
-        link, _review = resolve_thresholds(mk, em)
+        # route=False: the Spark tier scores the posterior P(match) but resolves the cutoff on
+        # the linear scale (a pre-existing mismatch, a P5 follow-up), and no Spark lane has
+        # measured routed cuts -- so the link-cut router stays out of Spark for now.
+        link, _review = resolve_thresholds(mk, em, route=False)
         return float(link)
     return float(mk.threshold)
 
