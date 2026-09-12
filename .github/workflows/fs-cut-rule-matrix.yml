@@ -12,6 +12,8 @@
 # Held-out data is fetched here and never committed: Leipzig Abt-Buy (CC-BY),
 # Magellan/DeepMatcher (cite-only, evaluation only), FEBRL dataset1/2 (ANU
 # open-source licence). ncvr_real is local-only PII and never provisioned.
+# P5: the router is on by default, so any probabilistic.py change can move a routed cut;
+# the matrix re-measures and re-gates the shipped table on those PRs.
 name: fs-cut-rule-matrix
 
 on:
@@ -24,6 +26,7 @@ on:
       - "scripts/autoconfig_quality/datasets.py"
       - "scripts/bench_er_headtohead/datasets.py"
       - "packages/python/goldenmatch/goldenmatch/core/fs_cut_rules.py"
+      - "packages/python/goldenmatch/goldenmatch/core/probabilistic.py"
       - ".github/workflows/fs-cut-rule-matrix.yml"
   schedule:
     - cron: "0 9 * * 0" # weekly, Sunday 09:00 UTC
