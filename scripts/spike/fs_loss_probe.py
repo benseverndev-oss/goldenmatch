@@ -98,6 +98,10 @@ def _blocking_recall_of(df, cfg, gt: set) -> dict:
     if blocking is None:
         return {"blocking_recall": 1.0, "blocking_note": "no blocking config"}
     frame = df.with_row_index("__row_id__")
+    from goldenmatch.core.domain import detect_domain, extract_features
+
+    # Auto-config can block on a column the pipeline derives from the domain (``__title_key__``).
+    frame, _ = extract_features(frame, detect_domain(list(frame.columns)))
     blocks_of: dict[int, set[int]] = {}
     projected = 0
     n_blocks = 0
