@@ -459,8 +459,10 @@ class TestBucketOversizedAutoSplit:
         # This pins the auto-split, not where the linear cutoff lands. The evidence-bit
         # rule (GOLDENMATCH_FS_LINEAR_CUT, default prior_mid) depends on EM's match rate,
         # and on this 8-row fixture the two routes' EM samples estimate it at 0.99 (bucket)
-        # vs 0.05 (legacy) -- cut W >= 0 vs W >= 4.25 bits -- so fix the midpoint cut.
+        # vs 0.05 (legacy) -- cut W >= 0 vs W >= 4.25 bits -- so fix the midpoint cut (and the
+        # router off).
         monkeypatch.setenv("GOLDENMATCH_FS_LINEAR_CUT", "off")
+        monkeypatch.setenv("GOLDENMATCH_FS_CUT_ROUTER", "off")  # the unrouted cut, not just the default rule off
         monkeypatch.delenv("GOLDENMATCH_FS_DEFAULT_BUCKET", raising=False)
         bucket = gm.dedupe_df(df, config=cfg)
         monkeypatch.setenv("GOLDENMATCH_FS_DEFAULT_BUCKET", "0")
