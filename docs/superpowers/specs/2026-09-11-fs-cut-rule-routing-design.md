@@ -109,6 +109,11 @@ Every input is available right after EM, with no extra scoring pass:
 - **Training-sample weight histogram:** a compact histogram of `W` over EM's blocked training pairs, computed in `train_em` (the same population the Otsu calibrator already reads) and stored on `EMResult`. It gives each candidate rule's estimated admitted fraction without scoring.
 - **Profile:** column type mix and `DomainProfile.detected_domain`.
 
+When routing, the router reads the diagnostics without the training-histogram pass, so `admitted_fraction` is None:
+- The pass computes every rule's cutoff plus an Otsu split. A link cut is resolved once per scored block, so the pass would dominate the router's cost.
+- A row therefore may not read `admitted_fraction`.
+- The gate replays exactly these inputs, at full float precision.
+
 Not used in v1:
 
 - `ZeroLabelConfidenceProfile` needs a full score-and-cluster pass, so it is not available when the cut is resolved.
@@ -155,6 +160,10 @@ A table row, and later the router default flip, is accepted only when **all** ho
 - **Existing gates:** `quality_gate`, `bench-suggest-quality` (gate) and `bench-quality-scale` (QIS) pass.
   - P4 rows ship behind the default-off router, so these three gates measure the unchanged default by construction.
   - Running them with the router on is a P5 criterion, checked before the default flips.
+- **How P5 checks the existing gates:** the flip changes the router's default in code, so each gate runs on the flip branch with the router on.
+  - `quality_gate` runs on the PR. A FAIL there is a regression; never re-bless around it.
+  - `bench-suggest-quality` is dispatched on the branch, running the fast gate and the gym gate.
+  - `bench-quality-scale` has no committed baseline. The CI tier is dispatched on both the flip branch (router on) and its base (router off), and every rung's F1 with the router on must be at least router-off − 0.01. The heavy tier must pass its own scale-invariance and floor checks on the flip branch.
 - **Routed arm:** the matrix runs every dataset once more with the router on. Its partition must equal the partition of the arm that pins the rule the router chose. This checks that the router, running live, reads the same diagnostics the gate replayed.
 
 ## Error handling
@@ -185,7 +194,7 @@ All failures degrade to the shipped default and say why:
 | P2 | training-sample histogram on `EMResult`, diagnostics assembly | router off |
 | P3 | held-out corpus and the per-rule harness block | measurement only |
 | P4 | one link-cut resolver; table rows written from evidence, each gated on both sets plus a routed arm | router behind `GOLDENMATCH_FS_CUT_ROUTER`, default off |
-| P5 | router default on once the gate holds on both sets | env kept as a kill switch |
+| P5 | router default on once the gate holds on both sets and the existing gates hold with the router on | `GOLDENMATCH_FS_CUT_ROUTER=off` kept as a kill switch |
 
 - P1 to P3 are independently useful even if no row passes: pinnable rules and a per-rule measurement matrix.
 - P1 lands after #2939 so that `prior_mid` is the default rule it preserves.
