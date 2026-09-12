@@ -111,10 +111,18 @@ def test_every_shipped_row_is_a_uniquely_named_cut_row():
     assert len({row.name for row in R.ROWS}) == len(R.ROWS)
 
 
-def test_the_router_is_off_by_default(monkeypatch):
+def test_the_router_is_on_by_default(monkeypatch):
     monkeypatch.setattr(R, "ROWS", (_SPARSE,))
     resolved = _fs_resolved_cut(_mk(), _em(), calibrated=False)
-    assert (resolved.rule, resolved.reason) == ("prior_mid", "default rule")
+    assert (resolved.rule, resolved.reason) == ("evidence_12", "routed by sparse: lambda under 0.05")
+
+
+def test_the_kill_switch_turns_the_router_off(monkeypatch):
+    monkeypatch.setattr(R, "ROWS", (_SPARSE,))
+    for value in ("off", "0", "false", " OFF "):
+        monkeypatch.setenv("GOLDENMATCH_FS_CUT_ROUTER", value)
+        resolved = _fs_resolved_cut(_mk(), _em(), calibrated=False)
+        assert (resolved.rule, resolved.reason) == ("prior_mid", "default rule"), value
 
 
 def test_the_router_on_places_the_routed_rule_and_reports_it(monkeypatch):
@@ -187,12 +195,12 @@ def test_a_routed_rule_the_model_cannot_supply_falls_back_to_the_default(monkeyp
     )
 
 
-def test_an_unknown_router_value_warns_and_stays_off(monkeypatch, caplog):
+def test_an_unknown_router_value_warns_and_keeps_the_router_on(monkeypatch, caplog):
     monkeypatch.setenv("GOLDENMATCH_FS_CUT_ROUTER", "maybe")
     monkeypatch.setattr(R, "ROWS", (_SPARSE,))
     with caplog.at_level(logging.WARNING):
         resolved = _fs_resolved_cut(_mk(), _em(), calibrated=False)
-    assert resolved.rule == "prior_mid"
+    assert resolved.rule == "evidence_12"
     assert "GOLDENMATCH_FS_CUT_ROUTER" in caplog.text
 
 

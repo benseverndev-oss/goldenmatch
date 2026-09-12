@@ -4716,27 +4716,29 @@ def _fs_linear_cut_rule() -> str | None:
     return _FS_LINEAR_CUT_DEFAULT
 
 
-_FS_CUT_ROUTER_ON = ("on", "1", "true")
-_FS_CUT_ROUTER_OFF = ("", "off", "0", "false")
+_FS_CUT_ROUTER_ON = ("", "on", "1", "true")
+_FS_CUT_ROUTER_OFF = ("off", "0", "false")
 
 
 def _fs_cut_router_enabled() -> bool:
     """``GOLDENMATCH_FS_CUT_ROUTER``: pick each matchkey's link-cut rule from its trained model
-    with ``fs_cut_rules.choose_cut_rule``. **Default OFF** (spec P4: rows ship dark until P5).
+    with ``fs_cut_rules.choose_cut_rule``. **Default ON** (spec P5: switched on once the gate held
+    on the design and held-out sets and the existing quality gates held with it on).
 
-    ``on``/``1``/``true`` turns it on. A pinned ``link_cut_rule`` still wins, posterior scoring
-    bypasses it, and no matching row means the default rule. An unrecognised value warns and
-    leaves the router off.
+    ``off``/``0``/``false`` is the kill switch: the router never runs and every cutoff is the
+    unrouted default. A pinned ``link_cut_rule`` still wins, posterior scoring bypasses the
+    router, and no matching row means the default rule. An unrecognised value warns and keeps
+    the default (on).
     """
     value = os.environ.get("GOLDENMATCH_FS_CUT_ROUTER", "").strip().lower()
-    if value in _FS_CUT_ROUTER_ON:
-        return True
-    if value not in _FS_CUT_ROUTER_OFF:
+    if value in _FS_CUT_ROUTER_OFF:
+        return False
+    if value not in _FS_CUT_ROUTER_ON:
         logger.warning(
-            "GOLDENMATCH_FS_CUT_ROUTER=%r is not one of on/off; the link-cut router stays off",
+            "GOLDENMATCH_FS_CUT_ROUTER=%r is not one of on/off; the link-cut router stays on",
             value,
         )
-    return False
+    return True
 
 
 @dataclass(frozen=True)
