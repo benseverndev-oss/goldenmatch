@@ -11,6 +11,7 @@ in ``W``, so no scorer changes.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -188,3 +189,70 @@ def cut_diagnostics(mk: Any, em_result: Any) -> CutDiagnostics | None:
         field_weight_spans=spans,
         admitted_fraction=admitted,
     )
+
+
+@dataclass(frozen=True)
+class CutRow:
+    """One routing-table row: when ``when(diagnostics)`` holds, ``rule`` places the cut.
+
+    ``when`` reads only :class:`CutDiagnostics` -- no labels, no scoring pass. ``reason`` is the
+    human-readable mechanism, reported in ``cut_reason``.
+    """
+
+    name: str
+    rule: str
+    reason: str
+    when: Callable[[CutDiagnostics], bool]
+
+    def __post_init__(self) -> None:
+        if self.rule not in CUT_RULES:
+            raise ValueError(f"unknown link cut rule {self.rule!r}; expected one of {CUT_RULES}")
+
+
+#: The shipped routing table, read by ``choose_cut_rule`` when ``GOLDENMATCH_FS_CUT_ROUTER`` is
+#: on. The first match wins. No match means the default rule (``GOLDENMATCH_FS_LINEAR_CUT``,
+#: default ``prior_mid``), which stands in for the spec's "last row is the shipped default".
+#: A row lands here only after passing the design AND held-out gate
+#: (``scripts/autoconfig_quality/cut_gate.py``); unshipped candidates live in
+#: ``scripts/autoconfig_quality/cut_rows.py``.
+ROWS: tuple[CutRow, ...] = (
+    # Gated on matrix run 34649964888: design PASS (dblp_acm +0.0918, synth_biblio_d02 +0.0000), held-out PASS.
+    CutRow(
+        name="sparse_prior_binds",
+        rule="posterior_099",
+        reason="match rate under 0.004, the prior cutoff above the midpoint, at most 3 fields",
+        when=lambda d: (
+            d.proportion_matched < 0.004 and d.prior_bits > d.midpoint_bits and d.n_fields <= 3
+        ),
+    ),
+    # Gated on matrix run 34649964888: design PASS (febrl3 +0.0038, febrl4 +0.0002, musicbrainz_20k +0.2673), held-out PASS.
+    CutRow(
+        name="midpoint_binds_wide",
+        rule="evidence_5",
+        reason="match rate under 0.1, the midpoint cutoff above the prior, at least 5 fields",
+        when=lambda d: (
+            d.proportion_matched < 0.1 and d.midpoint_bits > d.prior_bits and d.n_fields >= 5
+        ),
+    ),
+)
+
+
+#: Prefix of every ``cut_reason`` the router writes; the link-cut sweep keys the routed arm on it.
+ROUTED_REASON_PREFIX = "routed by "
+
+
+def choose_cut_rule(
+    diagnostics: CutDiagnostics | None, rows: Sequence[CutRow] | None = None
+) -> tuple[str, str] | None:
+    """``(rule, reason)`` from the first row of ``rows`` (default: the shipped ``ROWS``) whose
+    condition holds, or None for the default rule.
+
+    Also None without diagnostics or with a degenerate match rate (λ outside (0, 1)): every
+    failure degrades to the default."""
+    table = ROWS if rows is None else rows
+    if diagnostics is None or not 0.0 < diagnostics.proportion_matched < 1.0:
+        return None
+    for row in table:
+        if row.when(diagnostics):
+            return row.rule, f"{ROUTED_REASON_PREFIX}{row.name}: {row.reason}"
+    return None

@@ -177,6 +177,10 @@ def _run_probabilistic() -> dict[str, Any]:
     # fixed 0.50 midpoint cut. Pin it off so the fixture stays the math both surfaces share.
     os.environ["GOLDENMATCH_FS_LINEAR_CUT"] = "off"
 
+    # The link-cut router (GOLDENMATCH_FS_CUT_ROUTER, default off) would move the same cutoff
+    # per matchkey; pin it off so a later default flip cannot shift the fixtures.
+    os.environ["GOLDENMATCH_FS_CUT_ROUTER"] = "off"
+
     # --- discrete EM, 2-level ---
     rows2 = _prob_rows_small()
     mk2 = _mk_prob_2level()

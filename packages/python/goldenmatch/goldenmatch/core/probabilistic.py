@@ -3766,23 +3766,14 @@ def resolve_thresholds(
 ) -> tuple[float, float]:
     """Resolve configured or calibrated ``(link, review)`` score cutoffs.
 
-    The review cutoff is clamped to the link cutoff so an explicit low link
-    threshold cannot accidentally turn linked pairs into review candidates.
+    The link cutoff is :func:`resolve_link_cut`'s. The review cutoff is clamped to the link
+    cutoff so an explicit low link threshold cannot accidentally turn linked pairs into
+    review candidates.
     """
-    computed_link, computed_review = compute_thresholds(em_result)
-    # Precedence: explicit user config > EM-calibrated cutoff > fixed default.
-    calibrated = getattr(em_result, "calibrated_link_threshold", None)
-    rule_cut = _fs_linear_rule_link_threshold(
-        mk, em_result, _fs_calibration_mode() == "posterior"
+    _computed_link, computed_review = compute_thresholds(em_result)
+    link = float(
+        resolve_link_cut(mk, em_result, _fs_calibration_mode() == "posterior").link
     )
-    if mk.link_threshold is not None:
-        link = float(mk.link_threshold)
-    elif calibrated is not None:
-        link = float(calibrated)
-    elif rule_cut is not None:
-        link = float(rule_cut)
-    else:
-        link = computed_link
     review = (
         float(mk.review_threshold)
         if mk.review_threshold is not None
@@ -3801,30 +3792,16 @@ LINK_THRESHOLD_EVIDENCE_RULE = "evidence_rule"
 
 
 def link_threshold_source(mk: MatchkeyConfig, em_result: EMResult) -> str:
-    """Which of the three precedence steps supplied the link cutoff (#2483).
-
-    Mirrors -- and must keep mirroring -- the precedence in `resolve_thresholds`
-    and `_fs_link_threshold`: explicit `mk.link_threshold`, then the
-    EM-calibrated per-dataset cutoff, then the ``GOLDENMATCH_FS_LINEAR_CUT`` evidence
-    rule (default ``prior_mid``), then the fixed default. Derived here
-    rather than re-inferred at the reporting site so the two cannot drift; a
-    reporting layer that disagrees with the resolver about where the number
-    came from is worse than no report at all.
+    """Which precedence step supplied the link cutoff (#2483): :func:`resolve_link_cut`'s
+    ``source``, so a reporting layer cannot disagree with the resolver about where the number
+    came from.
 
     ``"fallback"`` means nothing about THIS dataset chose the cut. That is the
     case worth surfacing: the reporter in #2483 had a 94.4% match rate from the
     fixed 0.50 default, with nothing in the config or the result saying a
     decision had never been made.
     """
-    if mk.link_threshold is not None:
-        return LINK_THRESHOLD_CONFIGURED
-    if getattr(em_result, "calibrated_link_threshold", None) is not None:
-        return LINK_THRESHOLD_CALIBRATED
-    if _fs_linear_rule_link_threshold(
-        mk, em_result, _fs_calibration_mode() == "posterior"
-    ) is not None:
-        return LINK_THRESHOLD_EVIDENCE_RULE
-    return LINK_THRESHOLD_FALLBACK
+    return resolve_link_cut(mk, em_result, _fs_calibration_mode() == "posterior").source
 
 
 def _fs_unresolved_cut_reason(mk: MatchkeyConfig, em_result: EMResult) -> str | None:
@@ -3845,53 +3822,26 @@ def _fs_unresolved_cut_reason(mk: MatchkeyConfig, em_result: EMResult) -> str | 
 def link_cut_report(mk: MatchkeyConfig, em_result: EMResult) -> dict:
     """``cut_rule`` / ``cut_reason`` / ``cut_diagnostics`` for the per-matchkey cutoff report.
 
-    - ``cut_rule`` and ``cut_reason`` are None when no rule was asked for (no pin, and the
-      rule step never applied -- see below).
-    - When a rule WAS asked for (``mk.link_cut_rule`` pinned) but an earlier precedence step
-      decided first -- a configured ``link_threshold``, an EM-calibrated cutoff, or posterior
-      scoring -- ``cut_rule`` stays None but ``cut_reason`` says which step overrode the pin,
-      so a leaked env var (``GOLDENMATCH_FS_EVIDENCE_CUT`` / ``GOLDENMATCH_FS_CALIBRATED``)
-      forcing posterior mode does not silently disable a pin with no trace (spec's Error
-      handling section).
-    - ``cut_reason`` alone is also set when a rule was asked for but could not place the cut
-      (:func:`_fs_unresolved_cut_reason`).
-    - ``cut_diagnostics`` is reported whenever the model has usable weights, so the
-      measurement harness can read it even when no rule applied.
+    ``cut_rule`` and ``cut_reason`` are :func:`resolve_link_cut`'s ``rule`` and ``reason``:
+    - both None when no rule was asked for;
+    - ``cut_reason`` alone when a pinned rule was overridden by an earlier step (a configured
+      ``link_threshold``, an EM-calibrated cutoff, or posterior scoring) or no rule could place
+      the cut (:func:`_fs_unresolved_cut_reason`).
 
-    Mirrors the precedence in :func:`_fs_link_threshold` / :func:`resolve_thresholds`.
+    ``cut_diagnostics`` is reported whenever the model has usable weights, so the measurement
+    harness can read it even when no rule applied.
     """
     from dataclasses import asdict
 
     from goldenmatch.core.fs_cut_rules import cut_diagnostics
 
     diagnostics = cut_diagnostics(mk, em_result)
-    report = {
-        "cut_rule": None,
-        "cut_reason": None,
+    cut = resolve_link_cut(mk, em_result, _fs_calibration_mode() == "posterior")
+    return {
+        "cut_rule": cut.rule,
+        "cut_reason": cut.reason,
         "cut_diagnostics": asdict(diagnostics) if diagnostics is not None else None,
     }
-    pinned = getattr(mk, "link_cut_rule", None)
-    if mk.link_threshold is not None:
-        if pinned:
-            report["cut_reason"] = f"link_cut_rule={pinned} not applied: link_threshold is set"
-        return report
-    if getattr(em_result, "calibrated_link_threshold", None) is not None:
-        if pinned:
-            report["cut_reason"] = (
-                f"link_cut_rule={pinned} not applied: calibrated cutoff decided first"
-            )
-        return report
-    if _fs_calibration_mode() == "posterior":
-        if pinned:
-            report["cut_reason"] = f"link_cut_rule={pinned} not applied: posterior scoring"
-        return report
-    resolved = _fs_resolved_cut(mk, em_result, calibrated=False)
-    if resolved is not None:
-        report["cut_rule"] = resolved.rule
-        report["cut_reason"] = resolved.reason
-    else:
-        report["cut_reason"] = _fs_unresolved_cut_reason(mk, em_result)
-    return report
 
 
 def _fs_calibrate_threshold_enabled() -> bool:
@@ -4766,6 +4716,29 @@ def _fs_linear_cut_rule() -> str | None:
     return _FS_LINEAR_CUT_DEFAULT
 
 
+_FS_CUT_ROUTER_ON = ("on", "1", "true")
+_FS_CUT_ROUTER_OFF = ("", "off", "0", "false")
+
+
+def _fs_cut_router_enabled() -> bool:
+    """``GOLDENMATCH_FS_CUT_ROUTER``: pick each matchkey's link-cut rule from its trained model
+    with ``fs_cut_rules.choose_cut_rule``. **Default OFF** (spec P4: rows ship dark until P5).
+
+    ``on``/``1``/``true`` turns it on. A pinned ``link_cut_rule`` still wins, posterior scoring
+    bypasses it, and no matching row means the default rule. An unrecognised value warns and
+    leaves the router off.
+    """
+    value = os.environ.get("GOLDENMATCH_FS_CUT_ROUTER", "").strip().lower()
+    if value in _FS_CUT_ROUTER_ON:
+        return True
+    if value not in _FS_CUT_ROUTER_OFF:
+        logger.warning(
+            "GOLDENMATCH_FS_CUT_ROUTER=%r is not one of on/off; the link-cut router stays off",
+            value,
+        )
+    return False
+
+
 @dataclass(frozen=True)
 class ResolvedCut:
     """The linear link cut a rule placed: which rule, why, and where."""
@@ -4781,18 +4754,26 @@ def _fs_resolved_cut(
 ) -> ResolvedCut | None:
     """The linear link cut placed by rule, or None when no rule applies.
 
-    Callers check an explicit ``mk.link_threshold`` and an EM-calibrated cutoff first. Within
-    the rule step, a pinned ``mk.link_cut_rule`` beats the ``GOLDENMATCH_FS_LINEAR_CUT``
-    default. A pinned rule this model cannot supply (``otsu`` without a training histogram)
-    falls back to the default rule, and the reason says so.
+    Callers check an explicit ``mk.link_threshold`` and an EM-calibrated cutoff first
+    (:func:`resolve_link_cut`). Within the rule step, candidates are tried in order:
 
-    Returns None in posterior mode (the score is a probability, not the linear scale), when
-    the model has no usable weights, or when the default is off and nothing pinned is
+    1. a pinned ``mk.link_cut_rule``;
+    2. otherwise, when ``GOLDENMATCH_FS_CUT_ROUTER`` is on, the rule
+       ``fs_cut_rules.choose_cut_rule`` routes this model to;
+    3. the ``GOLDENMATCH_FS_LINEAR_CUT`` default.
+
+    A candidate this model cannot supply (``otsu`` without a training histogram) falls through
+    to the next, and the reason says so.
+
+    Returns None in posterior mode (the score is a probability, not the linear scale), when the
+    model has no usable weights, or when the default is off and no pinned or routed rule is
     computable.
     Spec: docs/superpowers/specs/2026-09-11-fs-cut-rule-routing-design.md.
     """
     from goldenmatch.core.fs_cut_rules import (
         bits_to_normalized,
+        choose_cut_rule,
+        cut_diagnostics,
         otsu_split,
         rule_bits,
         weight_envelope,
@@ -4807,8 +4788,12 @@ def _fs_resolved_cut(
     pinned = getattr(mk, "link_cut_rule", None)
     if pinned:
         candidates.append((pinned, "pinned by link_cut_rule"))
+    elif _fs_cut_router_enabled():
+        routed = choose_cut_rule(cut_diagnostics(mk, em_result))
+        if routed is not None:
+            candidates.append(routed)
     default = _fs_linear_cut_rule()
-    if default is not None and default != pinned:
+    if default is not None and all(default != rule for rule, _ in candidates):
         candidates.append((default, "default rule"))
     note = ""
     for rule, reason in candidates:
@@ -4850,25 +4835,70 @@ def _fs_linear_rule_link_threshold(
     return None if resolved is None else resolved.normalized
 
 
+@dataclass(frozen=True)
+class LinkCut:
+    """The FS link cutoff and where it came from: the one resolution every caller reads."""
+
+    #: The cutoff applied. ``mk.link_threshold`` and the calibrated cutoff pass through as
+    #: given; callers that need a float convert, as they always have.
+    link: float
+    #: ``LINK_THRESHOLD_CONFIGURED`` / ``CALIBRATED`` / ``EVIDENCE_RULE`` / ``FALLBACK``.
+    source: str
+    #: The rule that placed the cut; None when an earlier step or the fallback decided.
+    rule: str | None
+    #: Why the rule step did or did not decide; None when no rule was asked for.
+    reason: str | None
+
+
+def resolve_link_cut(
+    mk: MatchkeyConfig, em_result: EMResult, calibrated: bool
+) -> LinkCut:
+    """The FS link cutoff: the single copy of the precedence (spec 2026-09-11 "Resolution and
+    precedence").
+
+    1. explicit ``mk.link_threshold`` -> ``configured``;
+    2. the EM-calibrated cutoff -> ``calibrated``;
+    3. the rule step, :func:`_fs_resolved_cut` -> ``evidence_rule``. Posterior scoring
+       (``calibrated``) places no rule;
+    4. ``compute_thresholds`` -> ``fallback``.
+
+    A pinned rule an earlier step overrode leaves ``rule`` None and says which step in
+    ``reason``, so a leaked env var forcing posterior mode does not silently disable a pin.
+    ``_fs_link_threshold``, ``resolve_thresholds``, ``link_threshold_source`` and
+    ``link_cut_report`` all read this; none keeps a precedence of its own.
+    """
+    pinned = getattr(mk, "link_cut_rule", None)
+    if mk.link_threshold is not None:
+        reason = f"link_cut_rule={pinned} not applied: link_threshold is set" if pinned else None
+        return LinkCut(mk.link_threshold, LINK_THRESHOLD_CONFIGURED, None, reason)
+    calibrated_cut = getattr(em_result, "calibrated_link_threshold", None)
+    if calibrated_cut is not None:
+        reason = (
+            f"link_cut_rule={pinned} not applied: calibrated cutoff decided first"
+            if pinned
+            else None
+        )
+        return LinkCut(calibrated_cut, LINK_THRESHOLD_CALIBRATED, None, reason)
+    resolved = _fs_resolved_cut(mk, em_result, calibrated)
+    if resolved is not None:
+        return LinkCut(
+            resolved.normalized, LINK_THRESHOLD_EVIDENCE_RULE, resolved.rule, resolved.reason
+        )
+    link, _review = compute_thresholds(em_result, calibrated=calibrated)
+    if calibrated:
+        reason = f"link_cut_rule={pinned} not applied: posterior scoring" if pinned else None
+    else:
+        reason = _fs_unresolved_cut_reason(mk, em_result)
+    return LinkCut(link, LINK_THRESHOLD_FALLBACK, None, reason)
+
+
 def _fs_link_threshold(
     mk: MatchkeyConfig, em_result: EMResult, calibrated: bool
 ) -> float:
-    """The FS link cutoff: configured ``mk.link_threshold`` when set, else the
-    calibrated per-dataset cutoff (when EM produced one), else the evidence-bit
-    rule (``GOLDENMATCH_FS_LINEAR_CUT``, default ``prior_mid``), else the calibration-aware
-    value from ``compute_thresholds``. Extracted verbatim from the scalar /
-    vectorized / batched scorers (#1804 item 4) so they cannot drift on how the
-    cutoff is resolved; ``resolve_thresholds`` mirrors the same precedence."""
-    if mk.link_threshold is not None:
-        return mk.link_threshold
-    cal = getattr(em_result, "calibrated_link_threshold", None)
-    if cal is not None:
-        return cal
-    rule_cut = _fs_linear_rule_link_threshold(mk, em_result, calibrated)
-    if rule_cut is not None:
-        return rule_cut
-    link_threshold, _ = compute_thresholds(em_result, calibrated=calibrated)
-    return link_threshold
+    """The FS link cutoff the scalar / vectorized / batched scorers apply:
+    :func:`resolve_link_cut`'s ``link``. #1804 item 4 extracted it so the scorers cannot drift;
+    P4 made the resolver the one copy of the precedence."""
+    return resolve_link_cut(mk, em_result, calibrated).link
 
 
 def _emit_triu_pairs(

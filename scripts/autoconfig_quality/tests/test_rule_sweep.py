@@ -46,10 +46,8 @@ def _entry(cut_rule=None, cut_reason=None) -> dict:
 _SUMMARY = {"f1": 0.9, "precision": 0.95, "recall": 0.85}
 
 
-def test_arms_run_both_baselines_then_every_rule_once():
-    assert S.ARMS == ("default", "default_loaded", *CUT_RULES)
-    assert len(set(S.ARMS)) == len(S.ARMS)
-    assert S.BASELINE_ARM == "default_loaded"
+def test_arms_run_both_baselines_every_rule_then_the_router():
+    assert S.ARMS == ("default", "default_loaded", *CUT_RULES, "routed")
 
 
 def test_pin_rule_pins_every_probabilistic_matchkey_without_mutating_the_input(tmp_path):
@@ -394,7 +392,7 @@ def test_sweep_dataset_runs_each_arm_in_its_own_child_on_one_saved_model(tmp_pat
     # The floor reads the whole machine; this test is about isolation, not pressure.
     monkeypatch.setenv("GOLDENMATCH_CUT_RULES_MIN_AVAILABLE_MB", "0")
     monkeypatch.delenv("GOLDENMATCH_CUT_RULES_DATASET_BUDGET_S", raising=False)
-    arms = ("default", "default_loaded", "evidence_9")
+    arms = ("default", "default_loaded", "evidence_9", "routed")
     out = S.sweep_dataset("person", tmp_path, arms=arms)
 
     assert (tmp_path / "person" / "config.json").is_file()
@@ -420,6 +418,112 @@ def test_sweep_dataset_runs_each_arm_in_its_own_child_on_one_saved_model(tmp_pat
     assert out["reload_partition_match"] in (True, False)
     assert isinstance(out["wall_seconds"], float)
     assert out["corpus"] == "design"
+    assert out["gate_metric"] == "f1"
+    assert all(rec["labelled"] is None for rec in out["arms"].values())
+    # The routed arm loads the same model with the router on. Where no shipped row fired, it
+    # must reproduce the baseline partition exactly.
+    if all(rule is None for rule in out["routed_rules"].values()):
+        assert out["routed_matches"] is True
+    else:
+        assert out["routed_matches"] in (True, None)
+
+
+# ─── the routed arm (P4) ──────────────────────────────────────────────────────
+
+
+def test_cut_env_vars_include_the_router():
+    assert "GOLDENMATCH_FS_CUT_ROUTER" in S.CUT_ENV_VARS
+
+
+def test_arm_env_turns_the_router_on_for_the_routed_arm_only():
+    assert S.arm_env("routed")["GOLDENMATCH_FS_CUT_ROUTER"] == "on"
+    for arm in ("default", "default_loaded", *CUT_RULES):
+        assert S.arm_env(arm)["GOLDENMATCH_FS_CUT_ROUTER"] == "off"
+
+
+def test_the_routed_arm_pins_nothing_and_applies_whatever_the_router_chose():
+    assert S.pinned_rule("routed") is None
+    assert S.pinned_rule("default_loaded") is None
+    assert S.pinned_rule("evidence_5") == "evidence_5"
+    rec = S.arm_record(
+        "routed", _SUMMARY, _stats(fs=_entry("evidence_5", "routed by wide: x")), (1, "d"), ["fs"]
+    )
+    assert (rec["applied"], rec["voided"]) == (True, False)
+
+
+def _routing_arms(routed_matchkeys: dict, digests: dict | None = None, **overrides) -> dict:
+    digests = digests or {}
+    arms = {
+        arm: {"digest": digests.get(arm, "base"), "voided": False, "crashed": None, "matchkeys": {}}
+        for arm in S.ARMS
+    }
+    arms["routed"]["matchkeys"] = routed_matchkeys
+    for arm, fields in overrides.items():
+        arms[arm].update(fields)
+    return arms
+
+
+def test_routed_check_compares_an_unrouted_arm_with_the_baseline():
+    arms = _routing_arms({"fs": _entry("prior_mid", "default rule")})
+    assert S.routed_check(arms) == ({"fs": None}, True)
+
+
+def test_routed_check_compares_a_routed_arm_with_the_arm_pinning_its_rule():
+    entry = {"fs": _entry("evidence_5", "routed by wide: many fields")}
+    same = _routing_arms(entry, {"routed": "e5", "evidence_5": "e5"})
+    assert S.routed_check(same) == ({"fs": "evidence_5"}, True)
+    differs = _routing_arms(entry, {"routed": "e5", "evidence_5": "other"})
+    assert S.routed_check(differs) == ({"fs": "evidence_5"}, False)
+
+
+def test_routed_check_has_nothing_to_compare_for_mixed_routes_or_a_crash():
+    mixed = _routing_arms(
+        {
+            "fs_a": _entry("evidence_5", "routed by wide: x"),
+            "fs_b": _entry("prior_mid", "default rule"),
+        }
+    )
+    assert S.routed_check(mixed) == ({"fs_a": "evidence_5", "fs_b": None}, None)
+    crashed = _routing_arms({}, routed={"crashed": "timeout"})
+    assert S.routed_check(crashed) == ({}, None)
+    target_crashed = _routing_arms(
+        {"fs": _entry("evidence_5", "routed by wide: x")}, evidence_5={"crashed": "memory_cap"}
+    )
+    assert S.routed_check(target_crashed) == ({"fs": "evidence_5"}, None)
+
+
+def test_sweep_dataset_turns_the_router_on_in_the_routed_arm_child_only(tmp_path, monkeypatch):
+    _small_person(monkeypatch)
+    seen: dict[str, str] = {}
+    instant = _fake_run_arm({})
+
+    def spy(argv, out_path, arm, expected_matchkeys, **kwargs):
+        seen[arm] = kwargs["env"]["GOLDENMATCH_FS_CUT_ROUTER"]
+        return instant(argv, out_path, arm, expected_matchkeys, **kwargs)
+
+    monkeypatch.setattr(S, "run_arm", spy)
+    rec = S.sweep_dataset("person", tmp_path)
+    assert seen == {arm: ("on" if arm == "routed" else "off") for arm in S.ARMS}
+    assert rec["routed_rules"] and all(v is None for v in rec["routed_rules"].values())
+    assert rec["routed_matches"] is True
+
+
+def test_run_reports_failure_when_the_routed_arm_disagrees(tmp_path, monkeypatch):
+    _clear_cut_env(monkeypatch)
+
+    def fake(name, work_dir):
+        rec = _record("design", {})
+        rec["routed_matches"] = False
+        return rec
+
+    monkeypatch.setattr(S, "sweep_dataset", fake)
+    out = tmp_path / "card.json"
+    assert S.run(["--datasets", "person", "--out", str(out)]) == 1
+    card = json.loads(out.read_text())
+    assert (
+        "person: routed arm partition differs from the arm pinning its rule"
+        in card["meta"]["failures"]
+    )
 
 
 # ─── run() metadata and failure paths (I1 + I2 + I5) ──────────────────────────
@@ -455,6 +559,7 @@ def _record(
             "crashed": None,
             "peak_rss_mb": 10.0,
             "wall_seconds": 0.1,
+            "labelled": None,
         }
         for arm in S.ARMS
     }
@@ -465,6 +570,9 @@ def _record(
         "probabilistic_matchkeys": ["fs"],
         "arms": arms,
         "cut_diagnostics": {},
+        "gate_metric": "f1",
+        "routed_rules": {},
+        "routed_matches": None,
         "models_saved": ["fs.json"],
         "model_complete": model_complete,
         "model_stable": model_stable,
@@ -583,22 +691,31 @@ def _small_person(monkeypatch):
     monkeypatch.setattr(S, "resolve_loader", lambda name: lambda: gen_labeled(60, seed=7))
 
 
-def _fake_run_arm(crash: dict[str, str]):
-    """An arm runner that runs nothing: every arm applies at ``_SUMMARY``'s F1,
-    except the arms in ``crash``, which come back killed with that status."""
+def _fake_run_arm(crash: dict[str, str], labelled: dict[str, float] | None = None):
+    """An arm runner that runs nothing: every arm applies at ``_SUMMARY``'s F1, except the
+    arms in ``crash``, which come back killed with that status. ``labelled`` gives an arm a
+    labelled-pairs F1."""
 
     def fake(argv, out_path, arm, expected_matchkeys, **kwargs):
         if arm in crash:
             return S.killed_record(crash[arm], 1, 20.0, 0.1), None
-        rule = None if arm in ("default", S.BASELINE_ARM) else arm
-        report = {mk: _entry(rule, "pinned by link_cut_rule") for mk in expected_matchkeys}
+        rule = S.pinned_rule(arm)
+        reason = "pinned by link_cut_rule" if rule else "default rule"
+        report = {mk: _entry(rule, reason) for mk in expected_matchkeys}
+        lab = None
+        if labelled and arm in labelled:
+            value = labelled[arm]
+            lab = {"f1": value, "precision": value, "recall": value, "labelled_pairs": 4}
         rec = S.arm_record(arm, _SUMMARY, _stats(**report), (1, "d"), expected_matchkeys)
-        rec.update(crashed=None, peak_rss_mb=20.0, wall_seconds=0.1, process_seconds=0.2)
+        rec.update(
+            crashed=None, peak_rss_mb=20.0, wall_seconds=0.1, process_seconds=0.2, labelled=lab
+        )
         payload = {
             "summary": _SUMMARY,
             "report": report,
             "partition": [1, "d"],
             "wall_seconds": 0.1,
+            "labelled": lab,
         }
         return rec, payload
 
@@ -628,8 +745,14 @@ def test_a_crashed_rule_arm_counts_below_default_and_is_reported(tmp_path, monke
 
     holdout_card = S.merge_cards([_card("abc", abt_buy={**rec, "corpus": "holdout"})])
     gate = S.render_markdown({"meta": holdout_card["meta"], "datasets": {}}, holdout_card)
-    assert "| abt_buy | 0.9000 | 1 | 0 | 1 |" in gate.splitlines()
-    assert "prior" not in gate.split("### Held-out")[1]
+    assert (
+        "Measured 1 of 1 held-out datasets. Datasets with at least one rule below "
+        "default: 1. Datasets with a crashed rule: 1." in gate
+    )
+    held_out_section = gate.split("### Held-out")[1]
+    assert "prior" not in held_out_section
+    assert "abt_buy" not in held_out_section
+    assert "0.9000" not in held_out_section
 
 
 def test_a_crashed_baseline_arm_fails_the_dataset(tmp_path, monkeypatch):
@@ -699,6 +822,84 @@ def test_arm_log_line_omits_f1_for_holdout_datasets(tmp_path, monkeypatch, capsy
 
     assert len(holdout) == len(arms) and not [ln for ln in holdout if "f1" in ln]
     assert len(design) == len(arms) and all("f1=0.9" in ln for ln in design)
+
+
+# ─── labelled-pairs metric (P4) ───────────────────────────────────────────────
+
+
+def test_labelled_summary_scores_only_labelled_pairs():
+    clusters = {1: {"members": [0, 1, 2]}, 2: {"members": [3]}, 3: {"members": [4, 5]}}
+    labels = {(0, 1): True, (0, 2): False, (3, 4): True, (4, 5): False}
+    # (0,1) match together: TP. (0,2) non-match together: FP. (3,4) match apart: FN.
+    # (4,5) non-match together: FP. The unlabelled (1,2) counts for nothing.
+    assert S.labelled_summary(clusters, labels) == {
+        "f1": 0.4,
+        "precision": 0.3333,
+        "recall": 0.5,
+        "labelled_pairs": 4,
+    }
+
+
+def test_execute_arm_adds_the_labelled_metric_only_when_labels_are_given(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import goldenmatch
+
+    clusters = {1: {"members": [0, 1]}, 2: {"members": [2]}}
+    monkeypatch.setattr(
+        goldenmatch, "dedupe_df", lambda df, config: SimpleNamespace(clusters=clusters, stats={})
+    )
+    plain = S.execute_arm(None, {(0, 1)}, _cfg(), "default_loaded", tmp_path)
+    labelled = S.execute_arm(
+        None, {(0, 1)}, _cfg(), "default_loaded", tmp_path, labels={(0, 1): True, (1, 2): False}
+    )
+    assert plain["labelled"] is None
+    assert labelled["labelled"] == {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "labelled_pairs": 2,
+    }
+    assert labelled["summary"] == plain["summary"]
+
+
+def test_gate_metric_is_labelled_for_magellan_datasets_only():
+    assert S.gate_metric_of("walmart_amazon") == "labelled"
+    assert S.gate_metric_of("fodors_zagats") == "labelled"
+    assert S.gate_metric_of("abt_buy") == "f1"
+    assert S.metric_value({"f1": 0.9, "labelled": {"f1": 0.7}}, "labelled") == 0.7
+    assert S.metric_value({"f1": 0.9, "labelled": None}, "labelled") is None
+    assert S.metric_value({"f1": 0.9, "labelled": {"f1": 0.7}}, "f1") == 0.9
+
+
+def test_sweep_dataset_gates_magellan_datasets_on_the_labelled_metric(tmp_path, monkeypatch):
+    _small_person(monkeypatch)
+    labelled = {"default": 0.8, "default_loaded": 0.8, "evidence_9": 0.7}
+    monkeypatch.setattr(S, "run_arm", _fake_run_arm({}, labelled=labelled))
+    arms = ("default", "default_loaded", "evidence_9")
+
+    magellan = S.sweep_dataset("walmart_amazon", tmp_path, arms=arms)
+    plain = S.sweep_dataset("person", tmp_path, arms=arms)
+
+    assert magellan["gate_metric"] == "labelled"
+    assert magellan["below_default"] == ["evidence_9"]
+    assert plain["gate_metric"] == "f1"
+    assert plain["below_default"] == []
+
+
+def test_run_reports_failure_when_the_labelled_metric_is_missing(tmp_path, monkeypatch):
+    _clear_cut_env(monkeypatch)
+
+    def fake(name, work_dir):
+        rec = _record("holdout", {})
+        rec["gate_metric"] = "labelled"
+        return rec
+
+    monkeypatch.setattr(S, "sweep_dataset", fake)
+    out = tmp_path / "card.json"
+    assert S.run(["--datasets", "walmart_amazon", "--out", str(out)]) == 1
+    card = json.loads(out.read_text())
+    assert "walmart_amazon: labelled metric missing on the baseline arm" in card["meta"]["failures"]
 
 
 # ─── best_rule / merge_cards / render_markdown / merge CLI ────────────────────
@@ -777,9 +978,15 @@ def test_render_markdown_design_table_then_holdout_gate_view():
         "| febrl3 | 0.9000 | prior_mid | 0.9500 | +0.0500 | midpoint | none | none | same |"
         in lines
     )
-    assert "| abt_buy | 0.8000 | 1 | 0 | 0 |" in lines
-    # gate view is counts only: no rule names, no per-rule F1.
-    assert "evidence_12" not in md.split("### Held-out")[1]
+    held_out_section = md.split("### Held-out")[1]
+    assert (
+        "Measured 1 of 1 held-out datasets. Datasets with at least one rule below "
+        "default: 1. Datasets with a crashed rule: 0." in md
+    )
+    # gate view is counts only: no dataset names, no rule names, no per-dataset F1.
+    assert "abt_buy" not in held_out_section
+    assert "evidence_12" not in held_out_section
+    assert "0.8000" not in held_out_section
 
 
 def test_render_markdown_shows_no_rule_applied_when_nothing_applied():
@@ -819,7 +1026,43 @@ def test_render_markdown_missing_rows_land_in_the_matching_corpus_table():
     design_card, holdout_card = S._split_by_corpus(full)
     md = S.render_markdown(design_card, holdout_card)
     assert "| dblp_acm |" + " MISSING |" * 8 in md
-    assert "| walmart_amazon | MISSING | MISSING | MISSING | MISSING |" in md
+    # A missing held-out dataset is counted in M, never named or rendered as a row.
+    assert "walmart_amazon" not in md
+    held_out_section = md.split("### Held-out")[1]
+    assert (
+        "Measured 0 of 1 held-out datasets. Datasets with at least one rule below "
+        "default: 0. Datasets with a crashed rule: 0." in held_out_section
+    )
+
+
+def test_render_markdown_holdout_counts_below_default_and_crashed_without_naming():
+    """A held-out dataset with a below-default rule AND a crash is counted in both
+    K and C, but neither it nor its rule is ever named in the held-out section."""
+    clean = _record("holdout", {})
+    clean["below_default"] = []
+    troubled = _record("holdout", {})
+    troubled["below_default"] = ["prior"]
+    troubled["crashed"] = {"prior": "memory_cap"}
+    full = S.merge_cards(
+        [
+            _card(
+                "abc",
+                febrl3=_record("design", {}),
+                abt_buy=clean,
+                walmart_amazon=troubled,
+            )
+        ]
+    )
+    design_card, holdout_card = S._split_by_corpus(full)
+    md = S.render_markdown(design_card, holdout_card)
+    held_out_section = md.split("### Held-out")[1]
+    assert (
+        "Measured 2 of 2 held-out datasets. Datasets with at least one rule below "
+        "default: 1. Datasets with a crashed rule: 1." in held_out_section
+    )
+    assert "abt_buy" not in held_out_section
+    assert "walmart_amazon" not in held_out_section
+    assert "prior" not in held_out_section
 
 
 def test_render_markdown_renders_a_failures_section():
@@ -913,4 +1156,11 @@ def test_merge_cli_holdout_gate_view_hides_rule_names(tmp_path):
     assert rc == 0
     text = md.read_text()
     assert "prior_mid" in text
-    assert "evidence_12" not in text.split("### Held-out")[1]
+    held_out_section = text.split("### Held-out")[1]
+    assert "evidence_12" not in held_out_section
+    assert "abt_buy" not in held_out_section
+    assert "0.8000" not in held_out_section
+    assert (
+        "Measured 1 of 1 held-out datasets. Datasets with at least one rule below "
+        "default: 1. Datasets with a crashed rule: 0." in held_out_section
+    )

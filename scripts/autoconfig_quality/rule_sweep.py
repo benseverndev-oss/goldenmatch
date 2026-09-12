@@ -1,4 +1,4 @@
-"""Per-rule link-cut matrix (spec 2026-09-11-fs-cut-rule-routing-design, P3).
+"""Per-rule link-cut matrix (spec 2026-09-11-fs-cut-rule-routing-design, P3; routed arm and labelled metric P4).
 
 For one dataset: auto-configure the probabilistic config once, then run the full
 pipeline once per arm, each arm in its own child process under a memory cap and a
@@ -11,8 +11,9 @@ Arms, in run order:
   default_loaded  link_cut_rule unset; loads the saved model -- the baseline
                   every rule arm is compared against, on the same model
   <rule>          one arm per fs_cut_rules.CUT_RULES name, model loaded
+  routed          link_cut_rule unset, GOLDENMATCH_FS_CUT_ROUTER=on, model loaded
 
-Measurement only: nothing here chooses a rule.
+Measurement only: nothing here chooses a rule (cut_gate.py gates rows on this output).
 
 Usage:
   python -m scripts.autoconfig_quality.rule_sweep --corpus all --ci --out cut-rules.json
@@ -32,13 +33,18 @@ import tempfile  # noqa: E402
 from collections.abc import Callable  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-from goldenmatch.core.fs_cut_rules import CUT_RULES  # noqa: E402
+from goldenmatch.core.fs_cut_rules import CUT_RULES, ROUTED_REASON_PREFIX  # noqa: E402
 
 BASELINE_ARM = "default_loaded"
-ARMS: tuple[str, ...] = ("default", BASELINE_ARM, *CUT_RULES)
+#: link_cut_rule unset, GOLDENMATCH_FS_CUT_ROUTER on, model loaded: the shipped routing table
+#: end to end. Its partition must equal the arm pinning the rule it routed to.
+ROUTED_ARM = "routed"
+ARMS: tuple[str, ...] = ("default", BASELINE_ARM, *CUT_RULES, ROUTED_ARM)
 
 #: The spec's gate tolerance: a rule is below the default when F1 < default - 0.01.
 TOLERANCE = 0.01
+
+ROUTER_ENV = "GOLDENMATCH_FS_CUT_ROUTER"
 
 #: Env vars that move the cut or void a pin process-wide. A sweep run with any of
 #: them set measures something other than the shipped default, so it refuses.
@@ -50,7 +56,14 @@ CUT_ENV_VARS = (
     # Passes a pair_filter to load_or_train_em, which stops model_path from
     # saving, so arms would retrain their own model instead of sharing one.
     "GOLDENMATCH_FS_SIGNATURE_PRUNE",
+    # The sweep sets it per child (arm_env): on for ROUTED_ARM, off for every other arm.
+    ROUTER_ENV,
 )
+
+
+def pinned_rule(arm: str) -> str | None:
+    """The ``link_cut_rule`` an arm pins: its own name for a rule arm, None otherwise."""
+    return arm if arm in CUT_RULES else None
 
 
 def cut_env_overrides(environ: dict[str, str] | None = None) -> dict[str, str]:
@@ -122,7 +135,7 @@ def arm_record(
         }
         for name, entry in sorted(report.items())
     }
-    rule = None if arm in ("default", BASELINE_ARM) else arm
+    rule = pinned_rule(arm)
     missing_expected = [name for name in expected_matchkeys if name not in per_mk]
     voided = (
         not per_mk
@@ -156,6 +169,49 @@ def _model_hashes(model_dir: Path) -> dict[str, str]:
     return {
         p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(model_dir.glob("*.json"))
     }
+
+
+def labelled_summary(clusters: dict, labels: dict[tuple[int, int], bool]) -> dict:
+    """Precision / recall / F1 over the labelled pairs only.
+
+    A labelled match inside one predicted cluster is a TP, a labelled non-match inside one is
+    an FP, and a labelled match split apart is an FN. Unlabelled pairs count for nothing."""
+    from goldenmatch.core.evaluate import EvalResult
+
+    cluster_of: dict[int, object] = {}
+    for cid, info in clusters.items():
+        for member in info.get("members", []):
+            cluster_of[member] = cid
+    tp = fp = fn = 0
+    for (i, j), is_match in labels.items():
+        together = i in cluster_of and cluster_of[i] == cluster_of.get(j)
+        if is_match and together:
+            tp += 1
+        elif is_match:
+            fn += 1
+        elif together:
+            fp += 1
+    summary = EvalResult(tp=tp, fp=fp, fn=fn).summary()
+    return {
+        **{key: summary[key] for key in ("f1", "precision", "recall")},
+        "labelled_pairs": len(labels),
+    }
+
+
+def gate_metric_of(name: str) -> str:
+    """``"labelled"`` for a DeepMatcher/Magellan dataset (F1 over labelled pairs only), else
+    ``"f1"``."""
+    from scripts.bench_er_headtohead.datasets import MAGELLAN_SUBDIRS
+
+    return "labelled" if name in MAGELLAN_SUBDIRS else "f1"
+
+
+def metric_value(arm_record: dict, metric: str) -> float | None:
+    """An arm's gate metric: ``f1``, or the labelled-pairs F1; None when not measured."""
+    if metric == "labelled":
+        labelled = arm_record.get("labelled")
+        return None if labelled is None else labelled["f1"]
+    return arm_record.get("f1")
 
 
 #: Watchdog limits for one arm's child process. The memory cap leaves headroom on
@@ -212,6 +268,7 @@ def killed_record(
         "recall": None,
         "pairs": None,
         "digest": None,
+        "labelled": None,
         "matchkeys": {},
         "applied": False,
         "voided": False,
@@ -366,15 +423,17 @@ def run_arm(
         peak_rss_mb=round(peak, 1),
         wall_seconds=payload["wall_seconds"],
         process_seconds=round(process_seconds, 1),
+        labelled=payload.get("labelled"),
     )
     return record, payload
 
 
-def execute_arm(df, gt: set, cfg, arm: str, model_dir: Path) -> dict:
+def execute_arm(df, gt: set, cfg, arm: str, model_dir: Path, labels: dict | None = None) -> dict:
     """Run one arm on one labelled frame and return its JSON-able result.
 
-    The only place an arm's pipeline runs: the ``arm`` child process calls it, and
-    so does any in-process caller."""
+    The only place an arm's pipeline runs: the ``arm`` child process calls it, and so does any
+    in-process caller. ``labels`` (``datasets.labelled_pairs``) adds the labelled-pairs
+    metric."""
     import time
 
     import goldenmatch
@@ -383,7 +442,7 @@ def execute_arm(df, gt: set, cfg, arm: str, model_dir: Path) -> dict:
     from scripts.bench_er_headtohead.ab_lever import _partition_fingerprint
 
     start = time.perf_counter()
-    rule = None if arm in ("default", BASELINE_ARM) else arm
+    rule = pinned_rule(arm)
     result = goldenmatch.dedupe_df(df, config=pin_rule(cfg, rule, model_dir))
     summary = evaluate_clusters(result.clusters, gt).summary()
     pairs, digest = _partition_fingerprint(result.clusters)
@@ -392,13 +451,19 @@ def execute_arm(df, gt: set, cfg, arm: str, model_dir: Path) -> dict:
         "report": (result.stats or {}).get("fs_link_thresholds") or {},
         "partition": [pairs, digest],
         "wall_seconds": round(time.perf_counter() - start, 1),
+        "labelled": labelled_summary(result.clusters, labels) if labels is not None else None,
     }
 
 
-def arm_env() -> dict[str, str]:
-    """A child's env: the parent's, plus one hash seed shared by every arm and no
-    autoconfig memory."""
-    return {**os.environ, "PYTHONHASHSEED": "0", "GOLDENMATCH_AUTOCONFIG_MEMORY": "0"}
+def arm_env(arm: str | None = None) -> dict[str, str]:
+    """A child's env: the parent's, plus one hash seed shared by every arm, no autoconfig
+    memory, and the link-cut router on for ``ROUTED_ARM`` only."""
+    return {
+        **os.environ,
+        "PYTHONHASHSEED": "0",
+        "GOLDENMATCH_AUTOCONFIG_MEMORY": "0",
+        ROUTER_ENV: "on" if arm == ROUTED_ARM else "off",
+    }
 
 
 def arm_argv(name: str, config_path: Path, arm: str, model_dir: Path, out_path: Path) -> list[str]:
@@ -441,9 +506,40 @@ def arm_main(argv: list[str]) -> int:
         return 1
     df, gt = loaded
     cfg = GoldenMatchConfig.model_validate_json(args.config.read_text(encoding="utf-8"))
-    payload = execute_arm(df, gt, cfg, args.arm, args.model_dir)
+    from scripts.autoconfig_quality.datasets import labelled_pairs
+
+    payload = execute_arm(
+        df, gt, cfg, args.arm, args.model_dir, labels=labelled_pairs(args.dataset)
+    )
     args.out.write_text(json.dumps(payload), encoding="utf-8")
     return 0
+
+
+def routed_check(arms: dict[str, dict]) -> tuple[dict[str, str | None], bool | None]:
+    """What the router picked per matchkey on the routed arm, and whether that arm's partition
+    equals the arm pinning the same rule (the baseline when no row fired).
+
+    ``{matchkey: rule}`` holds the rule only where ``cut_reason`` says a row routed it, else
+    None. The match is None when there is nothing to compare:
+    - no routed arm;
+    - a crashed or voided arm on either side;
+    - matchkeys routed to different rules, which no single pinned arm measures."""
+    routed = arms.get(ROUTED_ARM)
+    if routed is None or routed.get("crashed") or routed.get("voided"):
+        return {}, None
+    rules = {
+        mk: entry["cut_rule"]
+        if (entry.get("cut_reason") or "").startswith(ROUTED_REASON_PREFIX)
+        else None
+        for mk, entry in routed["matchkeys"].items()
+    }
+    picked = set(rules.values())
+    if len(picked) != 1:
+        return rules, None
+    target = arms.get(picked.pop() or BASELINE_ARM)
+    if target is None or target.get("crashed") or target.get("voided"):
+        return rules, None
+    return rules, routed["digest"] == target["digest"]
 
 
 def sweep_dataset(
@@ -487,11 +583,11 @@ def sweep_dataset(
     rows, gt_pairs = df.height, len(gt)
     del loaded, df, gt  # every child reloads the dataset; the parent holds none of it
 
-    env = arm_env()
     budget = _limit(budget_s, DATASET_BUDGET_ENV, DATASET_BUDGET_S)
     arm_timeout = _limit(None, ARM_TIMEOUT_ENV, ARM_TIMEOUT_S)
     # Held-out per-rule F1 stays out of CI logs, like it stays out of the gate view.
     holdout = corpus_of(name) == "holdout"
+    metric = gate_metric_of(name)
     records: dict[str, dict] = {}
     diagnostics: dict[str, dict | None] = {}
     models_saved: list[str] = []
@@ -509,7 +605,7 @@ def sweep_dataset(
             out_path = dataset_dir / f"arm_{arm}.json"
             argv = arm_argv(name, config_path, arm, model_dir, out_path)
             records[arm], payload = run_arm(
-                argv, out_path, arm, probabilistic_matchkeys, env=env, timeout_s=timeout_s
+                argv, out_path, arm, probabilistic_matchkeys, env=arm_env(arm), timeout_s=timeout_s
             )
         rec = records[arm]
         f1_part = "" if holdout else f" f1={rec['f1']}"
@@ -527,7 +623,9 @@ def sweep_dataset(
                 mk: entry.get("cut_diagnostics") for mk, entry in sorted(payload["report"].items())
             }
     hashes_after_last = _model_hashes(model_dir)
-    baseline = records[BASELINE_ARM]["f1"]
+    routed_rules, routed_matches = routed_check(records)
+    baseline_f1 = records[BASELINE_ARM]["f1"]
+    baseline_gate = metric_value(records[BASELINE_ARM], metric)
     rules = [arm for arm in arms if arm in CUT_RULES]
     # Without both baselines there is nothing to compare a rule against; run() fails it.
     baseline_ok = not records["default"]["crashed"] and not records[BASELINE_ARM]["crashed"]
@@ -546,21 +644,31 @@ def sweep_dataset(
         "probabilistic_matchkeys": probabilistic_matchkeys,
         "arms": records,
         "cut_diagnostics": diagnostics,
+        "gate_metric": metric,
+        "routed_rules": routed_rules,
+        "routed_matches": routed_matches,
         "models_saved": models_saved,
         "model_complete": model_complete,
         "model_stable": model_stable,
         "reload_partition_match": (
             records["default"]["digest"] == records[BASELINE_ARM]["digest"] if baseline_ok else None
         ),
-        "model_reload_delta": (float(baseline - records["default"]["f1"]) if baseline_ok else None),
-        # A rule arm that was killed or crashed is worse than the baseline.
+        "model_reload_delta": (
+            float(baseline_f1 - records["default"]["f1"]) if baseline_ok else None
+        ),
+        # A rule arm that was killed or crashed is worse than the baseline. Magellan datasets
+        # compare on the labelled-pairs metric (gate_metric).
         "below_default": sorted(
             rule
             for rule in rules
             if baseline_ok
             and (
                 records[rule]["crashed"]
-                or (records[rule]["applied"] and records[rule]["f1"] < baseline - TOLERANCE)
+                or (
+                    records[rule]["applied"]
+                    and baseline_gate is not None
+                    and (metric_value(records[rule], metric) or 0.0) < baseline_gate - TOLERANCE
+                )
             )
         ),
         "crashed": {rule: records[rule]["crashed"] for rule in rules if records[rule]["crashed"]},
@@ -638,6 +746,12 @@ def run(argv: list[str]) -> int:
             status = record["arms"].get(arm, {}).get("crashed")
             if status:
                 failures.append(f"{name}: baseline arm {arm} {status}")
+        if record.get("gate_metric") == "labelled":
+            baseline_arm = record["arms"].get(BASELINE_ARM, {})
+            if not baseline_arm.get("crashed") and baseline_arm.get("labelled") is None:
+                failures.append(f"{name}: labelled metric missing on the baseline arm")
+        if record.get("routed_matches") is False:
+            failures.append(f"{name}: routed arm partition differs from the arm pinning its rule")
         if not record.get("model_complete"):
             failures.append(f"{name}: shared EM model not saved for every probabilistic matchkey")
         if not record.get("model_stable"):
@@ -732,9 +846,10 @@ def _f1_cell(value: float | None) -> str:
 
 def render_markdown(card: dict, holdout_card: dict | None = None) -> str:
     """The design table (full detail), and -- when ``holdout_card`` is given -- the
-    held-out gate view (counts only, no rule names or per-rule F1: the held-out set
-    stays out of view of row-writing). Missing datasets (``card["meta"]["missing"]``)
-    render as an all-MISSING row in whichever table matches their corpus."""
+    held-out gate view (set-level counts only: no held-out dataset name and no
+    held-out F1 anywhere in that section -- the held-out set stays out of view of
+    row-writing). Design's missing datasets (``card["meta"]["missing"]``) render as
+    an all-MISSING row; a missing held-out dataset is counted, never named."""
     from scripts.autoconfig_quality.corpus import corpus_of
 
     missing = sorted(card["meta"].get("missing") or [])
@@ -772,24 +887,20 @@ def render_markdown(card: dict, holdout_card: dict | None = None) -> str:
     out = "\n".join(lines) + "\n"
 
     if holdout_card is not None:
+        n_measured = len(holdout_card["datasets"])
+        n_expected = n_measured + len(holdout_missing)
+        k_below = sum(
+            1 for record in holdout_card["datasets"].values() if record.get("below_default")
+        )
+        c_crashed = sum(1 for record in holdout_card["datasets"].values() if record.get("crashed"))
         h_lines = [
             "",
             "### Held-out (gate view)",
             "",
-            "| dataset | default F1 | rules below default | rules not applied | rules crashed |",
-            "|---|---|---|---|---|",
+            f"Measured {n_measured} of {n_expected} held-out datasets. Datasets with at "
+            f"least one rule below default: {k_below}. Datasets with a crashed rule: "
+            f"{c_crashed}.",
         ]
-        for name in sorted(holdout_card["datasets"]):
-            record = holdout_card["datasets"][name]
-            baseline = record["arms"][BASELINE_ARM]["f1"]
-            below_n = len(record.get("below_default") or [])
-            not_applied_n = len(_not_applied_rules(record))
-            crashed_n = len(record.get("crashed") or {})
-            h_lines.append(
-                f"| {name} | {_f1_cell(baseline)} | {below_n} | {not_applied_n} | {crashed_n} |"
-            )
-        for name in holdout_missing:
-            h_lines.append(f"| {name} |" + " MISSING |" * 4)
         out += "\n".join(h_lines) + "\n"
 
     failures = card["meta"].get("failures") or []
