@@ -48,6 +48,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   the same empty keys, and the run returned no matches and raised nothing. Key-less
   plans now keep their strategy. On DBLP-Scholar (66,879 rows) zero-config
   `dedupe_df` went from 0 clusters to 43,957 scored pairs (F1 0.0 to 0.189).
+- **Postflight no longer re-cuts a Fellegi-Sunter matchkey's pairs.** On
+  auto-configured runs, postflight reads the score histogram against the first
+  weighted matchkey's threshold, or 0.7 when there is none. An FS-only config was
+  therefore judged against 0.7, a weighted default unrelated to the link cut the FS
+  model resolved. When the histogram was bimodal, every FS pair below its valley was
+  dropped before clustering, bypassing the FS refit and its over-merge and
+  expelled-share checks. Postflight now emits a threshold adjustment only when there
+  is a weighted threshold (or a caller-supplied one) to move, and says why when it
+  declines. Weighted matchkeys are unchanged. On MusicBrainz-20K zero-config
+  `dedupe_df` (with the bucket-route fix applied) went from F1 0.176 to 0.475.
 
 ## [3.17.1] - 2026-08-31
 
