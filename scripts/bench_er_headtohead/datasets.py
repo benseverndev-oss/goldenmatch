@@ -10,6 +10,7 @@ people, with a ground-truth cluster label). Loaded via splink_datasets when
 splink is installed, else from a vendored parquet under the gitignored
 tests/benchmarks/datasets/.
 """
+
 from __future__ import annotations
 
 import csv
@@ -30,9 +31,7 @@ logger = logging.getLogger(__name__)
 
 def _rename_columns(table: pa.Table, mapping: dict[str, str]) -> pa.Table:
     """Rename columns via a {old: new} mapping (pyarrow renames by full list)."""
-    return table.rename_columns(
-        [mapping.get(name, name) for name in table.column_names]
-    )
+    return table.rename_columns([mapping.get(name, name) for name in table.column_names])
 
 
 def _cast_column_to_string(table: pa.Table, name: str) -> pa.Table:
@@ -61,14 +60,13 @@ def _read_csv_lossy(path: Path) -> pa.Table:
     )
 
 
-def _with_source_ids(
-    table: pa.Table, src: str, rename: dict[str, str] | None = None
-) -> pa.Table:
+def _with_source_ids(table: pa.Table, src: str, rename: dict[str, str] | None = None) -> pa.Table:
     """Rename columns, then replace ``id`` with a trailing ``record_id`` of ``<src>:<id>``."""
     if rename:
         table = _rename_columns(table, rename)
     ids = pa.array([f"{src}:{v}" for v in table.column("id").to_pylist()], pa.string())
     return table.append_column("record_id", ids).drop_columns(["id"])
+
 
 REPO = Path(__file__).resolve().parents[2]
 DATASETS_DIR = REPO / "packages" / "python" / "goldenmatch" / "tests" / "benchmarks" / "datasets"
@@ -127,19 +125,17 @@ def _historical_50k() -> tuple[pa.Table, pa.Table]:
     if splink_datasets is not None:
         try:
             df = pa.Table.from_pandas(
-                splink_datasets.historical_50k, preserve_index=False  # type: ignore
+                splink_datasets.historical_50k,
+                preserve_index=False,  # type: ignore
             )
         except Exception as e:  # splink present but dataset unusable -> try vendored
-            logger.warning(
-                "splink_datasets.historical_50k failed (%s); trying vendored parquet", e
-            )
+            logger.warning("splink_datasets.historical_50k failed (%s); trying vendored parquet", e)
             df = None
     if df is None:
         vendored = DATASETS_DIR / "historical_50k.parquet"
         if not vendored.exists():
             raise DatasetUnavailable(
-                "install `goldenmatch[bench]` (for splink_datasets) or vendor "
-                f"{vendored}"
+                f"install `goldenmatch[bench]` (for splink_datasets) or vendor {vendored}"
             )
         df = pq.read_table(vendored)
 
@@ -219,9 +215,7 @@ def _febrl3() -> tuple[pa.Table, pa.Table]:
     records = _cast_column_to_string(records, "record_id")
 
     all_ids = records.column("record_id").to_pylist()
-    pairs: list[tuple[Hashable, Hashable]] = [
-        (str(a), str(b)) for a, b in links
-    ]
+    pairs: list[tuple[Hashable, Hashable]] = [(str(a), str(b)) for a, b in links]
     cmap = _cluster_ids_from_pairs(all_ids, pairs)
     truth = pa.table(
         {
@@ -255,7 +249,14 @@ def _ncvr() -> tuple[pa.Table, pa.Table]:
     )
 
 
-def _synthetic(shape: str, rows: int) -> tuple[pa.Table, pa.Table]:
+def _synthetic(
+    shape: str,
+    rows: int,
+    *,
+    dupe_rate: float = 0.20,
+    seed: int = 42,
+    corruption: float = 1.0,
+) -> tuple[pa.Table, pa.Table]:
     """Synthetic rows of one head-to-head SHAPE, as a (records, truth) dataset.
 
     Reuses ``generate_fixture.generate`` (writes records + truth parquet to a
@@ -295,12 +296,13 @@ def _synthetic(shape: str, rows: int) -> tuple[pa.Table, pa.Table]:
         truth_path = Path(td) / "truth.parquet"
         generate(
             rows=rows,
-            dupe_rate=0.20,
+            dupe_rate=dupe_rate,
             out=out,
             truth=truth_path,
-            seed=42,
+            seed=seed,
             batch=1_000_000,
             shape=shape,
+            corruption=corruption,
         )
         records = pq.read_table(out)
         truth = pq.read_table(truth_path)
@@ -376,9 +378,7 @@ def _two_source_leipzig(
     ]
     all_ids = records.column("record_id").to_pylist()
     cmap = _cluster_ids_from_pairs(all_ids, pairs)
-    truth = pa.table(
-        {"record_id": all_ids, "cluster_id": [cmap[r] for r in all_ids]}
-    )
+    truth = pa.table({"record_id": all_ids, "cluster_id": [cmap[r] for r in all_ids]})
     return records, truth
 
 
@@ -388,9 +388,13 @@ def _dblp_scholar() -> tuple[pa.Table, pa.Table]:
     linkage — Scholar side is web-scraped) — so it tests whether an FS lever
     tuned on dblp_acm generalises to unseen bibliographic data."""
     return _two_source_leipzig(
-        "DBLP-Scholar", "DBLP1.csv", "Scholar.csv",
-        "DBLP-Scholar_perfectMapping.csv", ("idDBLP", "idScholar"),
-        "dblp", "scholar",
+        "DBLP-Scholar",
+        "DBLP1.csv",
+        "Scholar.csv",
+        "DBLP-Scholar_perfectMapping.csv",
+        ("idDBLP", "idScholar"),
+        "dblp",
+        "scholar",
     )
 
 
@@ -400,9 +404,14 @@ def _amazon_google() -> tuple[pa.Table, pa.Table]:
     threshold lever tuned on PII + bibliographic panels. Google's ``name`` is
     renamed to ``title`` so the two sources share a comparable field."""
     return _two_source_leipzig(
-        "Amazon-Google", "Amazon.csv", "GoogleProducts.csv",
-        "Amzon_GoogleProducts_perfectMapping.csv", ("idAmazon", "idGoogleBase"),
-        "amazon", "google", rename={"name": "title"},
+        "Amazon-Google",
+        "Amazon.csv",
+        "GoogleProducts.csv",
+        "Amzon_GoogleProducts_perfectMapping.csv",
+        ("idAmazon", "idGoogleBase"),
+        "amazon",
+        "google",
+        rename={"name": "title"},
     )
 
 
@@ -420,6 +429,7 @@ def _febrl4() -> tuple[pa.Table, pa.Table]:
         ) from e
 
     dfa, dfb, links = load_febrl4(return_links=True)
+
     # Indices are globally unique across the two frames ('rec-N-org' vs
     # 'rec-N-dup-0'), so a plain concat keeps record ids distinct. recordlinkage
     # hands back its own frames: convert each once here and stay in arrow after.
@@ -433,10 +443,296 @@ def _febrl4() -> tuple[pa.Table, pa.Table]:
     all_ids = records.column("record_id").to_pylist()
     pairs: list[tuple[Hashable, Hashable]] = [(str(a), str(b)) for a, b in links]
     cmap = _cluster_ids_from_pairs(all_ids, pairs)
-    truth = pa.table(
-        {"record_id": all_ids, "cluster_id": [cmap[r] for r in all_ids]}
-    )
+    truth = pa.table({"record_id": all_ids, "cluster_id": [cmap[r] for r in all_ids]})
     return records, truth
+
+
+# ── Held-out corpus for FS link-cut routing (spec 2026-09-11, P3) ─────────────
+# Never used to write or tune a routing row. Data is fetched at run time (see
+# .github/workflows/fs-cut-rule-matrix.yml) and never committed.
+
+
+def _abt_buy() -> tuple[pa.Table, pa.Table]:
+    """Leipzig Abt-Buy product ER (CC-BY: credit the Database Group Leipzig and
+    Köpcke, Thor & Rahm, VLDB 2010). Buy's extra ``manufacturer`` column is kept,
+    null on Abt rows."""
+    return _two_source_leipzig(
+        "Abt-Buy",
+        "Abt.csv",
+        "Buy.csv",
+        "abt_buy_perfectMapping.csv",
+        ("idAbt", "idBuy"),
+        "abt",
+        "buy",
+    )
+
+
+_MAGELLAN_SPLITS = ("train.csv", "valid.csv", "test.csv")
+
+
+def _magellan(subdir: str) -> tuple[pa.Table, pa.Table]:
+    """A DeepMatcher/Magellan structured benchmark (cite-only: fetched at run time,
+    never committed; Konda et al. 2016, Mudgal et al. 2018).
+
+    Records are tableA + tableB with ``a:<id>`` / ``b:<id>`` ids. Truth links the
+    ``label == 1`` pairs of the train/valid/test candidate splits: it covers only
+    DeepMatcher's labelled candidate positives. An unlabelled true match that a
+    rule links is scored as a false positive, so lower cuts are penalised; recall
+    a higher cut loses on unlabelled matches is not counted. The bias therefore
+    favours high-cut rules such as ``evidence_12`` and ``posterior_099``."""
+    base = DATASETS_DIR / "Magellan" / subdir
+    paths = [base / "tableA.csv", base / "tableB.csv", *(base / s for s in _MAGELLAN_SPLITS)]
+    missing = [p for p in paths if not p.exists()]
+    if missing:
+        raise DatasetUnavailable(
+            f"{subdir} Magellan CSVs not found under {base}; missing: {[p.name for p in missing]}"
+        )
+    records = pa.concat_tables(
+        [
+            _with_source_ids(_read_csv_lossy(paths[0]), "a"),
+            _with_source_ids(_read_csv_lossy(paths[1]), "b"),
+        ],
+        promote_options="default",
+    )
+    pairs: list[tuple[Hashable, Hashable]] = []
+    for split in paths[2:]:
+        table = _read_csv_lossy(split)
+        for left, right, label in zip(
+            table.column("ltable_id").to_pylist(),
+            table.column("rtable_id").to_pylist(),
+            table.column("label").to_pylist(),
+        ):
+            if label.strip() == "1":
+                pairs.append((f"a:{left}", f"b:{right}"))
+    all_ids = records.column("record_id").to_pylist()
+    cmap = _cluster_ids_from_pairs(all_ids, pairs)
+    truth = pa.table({"record_id": all_ids, "cluster_id": [cmap[r] for r in all_ids]})
+    return records, truth
+
+
+def _walmart_amazon() -> tuple[pa.Table, pa.Table]:
+    """Magellan Walmart-Amazon: electronics products, ~24.6k records."""
+    return _magellan("Walmart-Amazon")
+
+
+def _itunes_amazon() -> tuple[pa.Table, pa.Table]:
+    """Magellan iTunes-Amazon: music tracks, ~62.8k records, not saturated."""
+    return _magellan("iTunes-Amazon")
+
+
+def _fodors_zagats() -> tuple[pa.Table, pa.Table]:
+    """Magellan Fodors-Zagats: restaurants, 946 records, near-saturated (F1 ~1.0)."""
+    return _magellan("Fodors-Zagats")
+
+
+def _febrl_raw(name: str) -> tuple[pa.Table, pa.Table]:
+    """FEBRL ``dataset1`` / ``dataset2`` from the raw CSVs recordlinkage ships (ANU
+    open-source licence, MPL-1.1 derived; Christen 2008), read without pandas.
+
+    Headers and values carry a space after each comma, so both are trimmed.
+    ``rec-<N>-org`` and ``rec-<N>-dup-<k>`` are the same entity ``N``."""
+    path = DATASETS_DIR / "FEBRL" / f"{name}.csv"
+    if not path.exists():
+        raise DatasetUnavailable(f"FEBRL {name} not found at {path}")
+    raw = _read_csv_lossy(path)
+    records = _rename_columns(
+        pa.table(
+            {col.strip(): pc.utf8_trim_whitespace(raw.column(col)) for col in raw.column_names}
+        ),
+        {"rec_id": "record_id"},
+    )
+    ids = records.column("record_id").to_pylist()
+    entity: list[int] = []
+    for rid in ids:
+        parts = rid.split("-")
+        if len(parts) < 3 or parts[0] != "rec" or not parts[1].isdigit():
+            raise ValueError(f"FEBRL {name}: unexpected rec_id {rid!r}")
+        entity.append(int(parts[1]))
+    truth = pa.table({"record_id": ids, "cluster_id": entity})
+    return records, truth
+
+
+def _febrl1() -> tuple[pa.Table, pa.Table]:
+    """FEBRL dataset1: 1,000 records, 500 originals with one duplicate each."""
+    return _febrl_raw("dataset1")
+
+
+def _febrl2() -> tuple[pa.Table, pa.Table]:
+    """FEBRL dataset2: 5,000 records, 4,000 originals and 1,000 duplicates."""
+    return _febrl_raw("dataset2")
+
+
+# ── DESIGN corpus widening (spec 2026-09-11-fs-cut-rule-routing-design, P3) ───
+# Leipzig clustering trio (many-source, not two-source like _two_source_leipzig)
+# plus synthetic design variants. Approved so the candidate rule
+# "lambda < 0.004 with the prior binding -> posterior_099" does not rest on
+# dblp_acm alone. DESIGN, never HOLDOUT: see corpus.py.
+
+
+def _musicbrainz_20k() -> tuple[pa.Table, pa.Table]:
+    """Leipzig MusicBrainz 20K clustering benchmark (CC-BY: credit the Database
+    Group Leipzig and Saeedi, Peukert & Rahm, ADBIS 2017). 5 sources of the same
+    ~10K tracks; ``CID`` is the ground-truth cluster id, never empty."""
+    path = DATASETS_DIR / "Leipzig-Clustering" / "MusicBrainz" / "musicbrainz-20-A01.csv"
+    if not path.exists():
+        raise DatasetUnavailable(f"MusicBrainz 20K not found at {path}")
+    raw = _read_csv_lossy(path)
+    record_ids = pa.array([f"mb:{v}" for v in raw.column("TID").to_pylist()], pa.string())
+    cluster_ids = pa.array([int(v) for v in raw.column("CID").to_pylist()], pa.int64())
+    keep = ["number", "title", "length", "artist", "album", "year", "language"]
+    records = raw.select(keep).append_column("record_id", record_ids)
+    truth = pa.table({"record_id": record_ids, "cluster_id": cluster_ids})
+    return records, truth
+
+
+def _geo_settlements() -> tuple[pa.Table, pa.Table]:
+    """Leipzig geographic settlements clustering benchmark (CC-BY: credit the
+    Database Group Leipzig and Saeedi, Peukert & Rahm, ADBIS 2017). Settlement
+    labels from 5 sources; ``combinedSettlements(PerfectMatch).json``'s
+    ``clusteredVertices`` give the ground-truth clusters (one record can appear
+    in two clusters, which then merge under union)."""
+    import json
+
+    base = DATASETS_DIR / "Leipzig-Clustering" / "GeoSettlements"
+    records_path = base / "settlements.json"
+    clusters_path = base / "combinedSettlements(PerfectMatch).json"
+    missing = [p for p in (records_path, clusters_path) if not p.exists()]
+    if missing:
+        raise DatasetUnavailable(
+            f"GeoSettlements source JSON not found (vendor under {base}); "
+            f"missing: {[p.name for p in missing]}"
+        )
+
+    record_ids: list[str] = []
+    labels: list[str | None] = []
+    lats: list[str | None] = []
+    lons: list[str | None] = []
+    types: list[str | None] = []
+    for line in records_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        obj = json.loads(line)
+        data = obj.get("data", {})
+        record_ids.append(f"geo:{obj['id']}")
+        labels.append(data.get("label"))
+        lat = data.get("lat")
+        lon = data.get("lon")
+        lats.append(str(lat) if lat is not None else None)
+        lons.append(str(lon) if lon is not None else None)
+        t = data.get("type")
+        if isinstance(t, list):
+            t = "|".join(t)
+        types.append(t)
+    records = pa.table(
+        {
+            "record_id": pa.array(record_ids, pa.string()),
+            "label": pa.array(labels, pa.string()),
+            "lat": pa.array(lats, pa.string()),
+            "lon": pa.array(lons, pa.string()),
+            "type": pa.array(types, pa.string()),
+        }
+    )
+
+    pairs: list[tuple[Hashable, Hashable]] = []
+    for line in clusters_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        obj = json.loads(line)
+        vertices = obj.get("data", {}).get("clusteredVertices") or []
+        ids = [f"geo:{v}" for v in vertices]
+        pairs.extend(zip(ids, ids[1:]))
+
+    all_ids = records.column("record_id").to_pylist()
+    cmap = _cluster_ids_from_pairs(all_ids, pairs)
+    truth = pa.table({"record_id": all_ids, "cluster_id": [cmap[r] for r in all_ids]})
+    return records, truth
+
+
+def _affiliations() -> tuple[pa.Table, pa.Table]:
+    """Leipzig affiliation-strings clustering benchmark (CC-BY: credit the
+    Database Group Leipzig and Saeedi, Peukert & Rahm, ADBIS 2017). Free-text
+    affiliation strings; the headerless mapping CSV's id pairs give the
+    ground-truth clusters."""
+    import csv as _csv
+
+    base = DATASETS_DIR / "Leipzig-Clustering" / "Affiliations"
+    ids_path = base / "affiliationstrings_ids.csv"
+    mapping_path = base / "affiliationstrings_mapping.csv"
+    missing = [p for p in (ids_path, mapping_path) if not p.exists()]
+    if missing:
+        raise DatasetUnavailable(
+            f"Affiliations source CSVs not found (vendor under {base}); "
+            f"missing: {[p.name for p in missing]}"
+        )
+
+    ids_table = _read_csv_lossy(ids_path)
+    record_ids = pa.array([f"aff:{v}" for v in ids_table.column("id1").to_pylist()], pa.string())
+    records = pa.table({"record_id": record_ids, "affiliation": ids_table.column("affil1")})
+
+    text = mapping_path.read_bytes().decode("utf-8-sig", errors="replace")
+    pairs: list[tuple[Hashable, Hashable]] = [
+        (f"aff:{row[0]}", f"aff:{row[1]}") for row in _csv.reader(io.StringIO(text)) if row
+    ]
+
+    all_ids = records.column("record_id").to_pylist()
+    cmap = _cluster_ids_from_pairs(all_ids, pairs)
+    truth = pa.table({"record_id": all_ids, "cluster_id": [cmap[r] for r in all_ids]})
+    return records, truth
+
+
+#: Seed for the design-set synthetic variants: distinct from the held-out 1009 and
+#: the design panel's 42.
+_DESIGN_SYNTH_SEED = 7
+
+#: name -> (shape, corruption, dupe_rate). d02 = dupe_rate 0.02 (tiny lambda), d20 = 0.20.
+_SYNTH_DESIGN: dict[str, tuple[str, float, float]] = {
+    "synth_biblio_d02": ("biblio", 1.0, 0.02),
+    "synth_person_d02": ("person", 1.0, 0.02),
+    "synth_product_d02": ("product", 1.0, 0.02),
+    "synth_product_d20": ("product", 1.0, 0.20),
+}
+
+
+def _synthetic_design(shape: str, corruption: float, dupe_rate: float) -> tuple[pa.Table, pa.Table]:
+    """A design synthetic variant: the design panel's dedicated seed (distinct
+    from both the held-out seed and the head-to-head panel's default 42), at
+    ``dupe_rate`` and ``corruption``."""
+    return _synthetic(
+        shape,
+        _synthetic_rows(),
+        dupe_rate=dupe_rate,
+        seed=_DESIGN_SYNTH_SEED,
+        corruption=corruption,
+    )
+
+
+#: Seed for the held-out synthetic variants; the design panel's synthetic sets use 42.
+_HELDOUT_SYNTH_SEED = 1009
+
+#: name -> (shape, corruption, dupe_rate). c05 = corruption 0.5, c20 = 2.0;
+#: d10 = dupe_rate 0.10, d40 = 0.40.
+_SYNTH_HELDOUT: dict[str, tuple[str, float, float]] = {
+    f"synth_{shape}_c{int(round(c * 10)):02d}_d{int(round(d * 100)):02d}": (shape, c, d)
+    for shape in ("person", "biblio")
+    for c in (0.5, 2.0)
+    for d in (0.10, 0.40)
+}
+
+
+def _synthetic_heldout(
+    shape: str, corruption: float, dupe_rate: float
+) -> tuple[pa.Table, pa.Table]:
+    """A held-out synthetic variant: a seed the design panel never used, duplicate
+    noise scaled by ``corruption``, and ``dupe_rate`` duplicates."""
+    return _synthetic(
+        shape,
+        _synthetic_rows(),
+        dupe_rate=dupe_rate,
+        seed=_HELDOUT_SYNTH_SEED,
+        corruption=corruption,
+    )
 
 
 _LOADERS = {
@@ -450,10 +746,26 @@ _LOADERS = {
     # agreeing byte-for-byte while person's diverge, and only a labelled score
     # distribution can say whether an empty band is why.
     "synthetic_biblio": _synthetic_biblio,
-    # Held-out (never in the FS-lever tuning panel) -- generalisation tests.
+    # Not in the FS threshold-refit tuning panel (these are DESIGN datasets for
+    # link-cut routing).
     "febrl4": _febrl4,
     "dblp_scholar": _dblp_scholar,
     "amazon_google": _amazon_google,
+    # Held-out corpus for FS link-cut routing (P3): never used to write a row.
+    "abt_buy": _abt_buy,
+    "walmart_amazon": _walmart_amazon,
+    "itunes_amazon": _itunes_amazon,
+    "fodors_zagats": _fodors_zagats,
+    "febrl1": _febrl1,
+    "febrl2": _febrl2,
+    **{
+        name: (lambda spec=spec: _synthetic_heldout(*spec)) for name, spec in _SYNTH_HELDOUT.items()
+    },
+    # DESIGN corpus widening (P3): Leipzig clustering trio + synthetic variants.
+    "musicbrainz_20k": _musicbrainz_20k,
+    "geo_settlements": _geo_settlements,
+    "affiliations": _affiliations,
+    **{name: (lambda spec=spec: _synthetic_design(*spec)) for name, spec in _SYNTH_DESIGN.items()},
 }
 
 

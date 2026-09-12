@@ -1,0 +1,66 @@
+# The cheap unit signal for the fs-cut-rule-matrix code (corpus, loaders, the
+# generator knob, and the sweep itself). NOT in ci-required -- it exists so a
+# PR that touches this code gets fast feedback without waiting on the full
+# weekly sweep, which stays on its own workflow (fs-cut-rule-matrix.yml) and
+# fetches real benchmark data.
+name: fs-cut-rule-matrix-unit
+
+on:
+  pull_request:
+    paths:
+      - "scripts/autoconfig_quality/**"
+      - "scripts/bench_er_headtohead/datasets.py"
+      - "scripts/bench_er_headtohead/generate_fixture.py"
+      - "scripts/bench_er_headtohead/test_heldout_loaders.py"
+      - "scripts/bench_er_headtohead/test_design_loaders.py"
+      - "scripts/bench_er_headtohead/test_generate_fixture_corruption.py"
+      - "packages/python/goldenmatch/goldenmatch/core/fs_cut_rules.py"
+      - "packages/python/goldenmatch/goldenmatch/core/probabilistic.py"
+      - ".github/workflows/fs-cut-rule-matrix-unit.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/autoconfig_quality/**"
+      - "scripts/bench_er_headtohead/datasets.py"
+      - "scripts/bench_er_headtohead/generate_fixture.py"
+      - "scripts/bench_er_headtohead/test_heldout_loaders.py"
+      - "scripts/bench_er_headtohead/test_design_loaders.py"
+      - "scripts/bench_er_headtohead/test_generate_fixture_corruption.py"
+      - "packages/python/goldenmatch/goldenmatch/core/fs_cut_rules.py"
+      - "packages/python/goldenmatch/goldenmatch/core/probabilistic.py"
+      - ".github/workflows/fs-cut-rule-matrix-unit.yml"
+
+permissions:
+  contents: read
+
+env:
+  # pyarrow's bundled mimalloc SIGSEGVs on goldenmatch's pipeline worker threads.
+  ARROW_DEFAULT_MEMORY_POOL: system
+  # jemalloc page-decay: return freed polars pages to the OS between arms.
+  _RJEM_MALLOC_CONF: "dirty_decay_ms:1000,muzzy_decay_ms:0"
+  GOLDENMATCH_AUTOCONFIG_MEMORY: "0"
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Sync workspace
+        run: uv sync --all-packages
+      - name: Unit tests for the corpus, loaders, generator knob and sweep
+        run: >-
+          uv run python -m pytest -q
+          scripts/autoconfig_quality/tests/test_corpus.py
+          scripts/autoconfig_quality/tests/test_rule_sweep.py
+          scripts/bench_er_headtohead/test_heldout_loaders.py
+          scripts/bench_er_headtohead/test_design_loaders.py
+          scripts/bench_er_headtohead/test_generate_fixture_corruption.py

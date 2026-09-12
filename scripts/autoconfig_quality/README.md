@@ -81,6 +81,83 @@ routing off):
 The probabilistic strategy carries a small EM-convergence wobble (±0.004, recall
 stable); the 0.01 floor tolerance absorbs it.
 
+## Per-rule link-cut matrix (FS link-cut routing P3)
+
+`rule_sweep.py` measures every Fellegi-Sunter link-cut rule on every labelled
+dataset in the frozen corpus (`corpus.py`). For each dataset it auto-configures the
+probabilistic config once, then runs the full pipeline once per arm on one shared
+EM model (`MatchkeyConfig.model_path`):
+
+- `default` trains and saves the model;
+- `default_loaded` reloads it and is the baseline;
+- each `link_cut_rule` arm reloads it too.
+
+A pinned arm that an earlier precedence step overrode is **voided** and fails the
+run, so a leaked `GOLDENMATCH_FS_EVIDENCE_CUT` cannot quietly turn nine arms into
+nine copies of the default. The sweep also refuses to start while any cut-moving
+env var is set.
+
+Each arm runs in its own child process, reading one shared config file, under a
+watchdog:
+
+- an RSS cap on the child tree (`GOLDENMATCH_CUT_RULES_ARM_MEM_MB`, default 12000);
+- a floor on the machine's available memory (`GOLDENMATCH_CUT_RULES_MIN_AVAILABLE_MB`,
+  default 1500; lower it on a laptop that already runs below that);
+- a per-arm timeout (`GOLDENMATCH_CUT_RULES_ARM_TIMEOUT_S`, default 3600);
+- an optional budget for all of a dataset's arms
+  (`GOLDENMATCH_CUT_RULES_DATASET_BUDGET_S`). Each arm gets at most its share of what
+  is left, and arms the budget cannot fit are recorded as timed out without starting.
+
+A rule arm that is killed or crashes is recorded (`crashed`: `memory_cap`, `timeout`
+or `crashed`, plus `kill_reason`, `peak_rss_mb` and `process_seconds`) and counts as
+below default, since blowing up is worse than the baseline; the rest of the
+dataset's arms still run. A crashed `default` or `default_loaded` arm leaves no
+baseline, so it fails the dataset.
+
+```bash
+python -m scripts.autoconfig_quality.rule_sweep --datasets person --out person.json
+python -m scripts.autoconfig_quality.rule_sweep merge a.json b.json --out m.json --summary-md m.md
+```
+
+Measurement only: it writes no routing row. Large datasets run in the
+`fs-cut-rule-matrix` workflow (one job per dataset), never on a laptop.
+
+| Corpus | Datasets | Source and licence |
+|---|---|---|
+| design | person, household_hardneg, cotenant_hardneg, febrl3, febrl4, ncvr_synthetic, ncvr_real (local only), historical_50k, dblp_acm, dblp_scholar, amazon_google | as listed above |
+| design | musicbrainz_20k, geo_settlements, affiliations | Leipzig clustering trio, CC-BY: Database Group Leipzig; Saeedi, Peukert & Rahm, ADBIS 2017 |
+| design | synth_biblio_d02, synth_person_d02, synth_product_d02, synth_product_d20 | `generate_fixture.py`, seed 7, corruption 1.0, dupe rate 0.02/0.20 |
+| design | ncvr_synthetic_s7, household_hardneg_s7, cotenant_hardneg_s7 | seed-7 variants of the same generators as their default-seed design entries |
+| holdout | abt_buy | Leipzig, CC-BY: Database Group Leipzig; Köpcke, Thor & Rahm, VLDB 2010 |
+| holdout | walmart_amazon, itunes_amazon, fodors_zagats | Magellan/DeepMatcher, cite-only, fetched for evaluation and never committed: Konda et al. 2016; Mudgal et al. 2018 |
+| holdout | febrl1, febrl2 | FEBRL raw CSVs from recordlinkage, ANU open-source licence: Christen 2008 |
+| holdout | synth_{person,biblio}_c{05,20}_d{10,40} | `generate_fixture.py`, seed 1009, corruption 0.5/2.0, dupe rate 0.10/0.40 |
+
+The held-out set is frozen: a routing row ships only if it is never more than 0.01
+F1 below the default on every design **and** held-out dataset. Changing the
+held-out list after any row exists means re-running the full gate.
+
+**Row authors (P4) read the `cut-rule-matrix` design artifact only.** The
+held-out json and the per-dataset `cut-rules-<holdout dataset>` artifacts are
+gate inputs, not evidence -- they must not be read while writing a row, or the
+held-out set stops being held out.
+
+**Magellan truth bias.** The Magellan/DeepMatcher truth (walmart_amazon,
+itunes_amazon, fodors_zagats) covers only DeepMatcher's labelled candidate
+pairs, so an unlabelled true match a rule links is scored as a false positive
+and lower cuts are penalised -- the bias favours high-cut rules such as
+`evidence_12` and `posterior_099`. A labelled-pairs-only metric is a P4
+prerequisite before these datasets gate a row.
+
+**Held-out independence.** Not every held-out dataset is an independent check:
+`febrl1`/`febrl2` share the FEBRL generator with design's `febrl3`/`febrl4`, the
+eight `synth_*` variants share one generator, and `fodors_zagats` is
+near-saturated (F1 ~1.0, little room to show a regression). The genuinely
+independent real held-out sets are `abt_buy`, `walmart_amazon` and
+`itunes_amazon`. The design synthetic variants (`synth_*_d02`, `synth_product_d20`)
+share a generator with the held-out synthetic variants, so they are weaker
+evidence than the real datasets.
+
 ## The gate
 
 `gate` diffs the current scorecard against the committed baseline
