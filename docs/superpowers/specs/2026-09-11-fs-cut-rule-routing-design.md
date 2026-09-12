@@ -68,6 +68,8 @@ this order:
 4. the router's choice, when the router is enabled;
 5. the shipped default rule: `prior_mid` if #2939 has landed, else `midpoint`.
 
+A pinned rule the model cannot compute (for example `otsu` without a training histogram) falls back to the default rule, with a note. The router never replaces an explicit pin.
+
 Explicit user choices that change the **score scale** bypass the router entirely and behave as
 today: `GOLDENMATCH_FS_CALIBRATED=posterior` and `GOLDENMATCH_FS_EVIDENCE_CUT`.
 `GOLDENMATCH_FS_CALIBRATE_THRESHOLD=1` keeps producing a calibrated cutoff (step 2).
@@ -110,7 +112,7 @@ Every input is available right after EM, with no extra scoring pass:
 - **Profile:** column type mix and `DomainProfile.detected_domain`.
 
 When routing, the router reads the diagnostics without the training-histogram pass, so `admitted_fraction` is None:
-- The pass computes every rule's cutoff plus an Otsu split. A link cut is resolved once per scored block, so the pass would dominate the router's cost.
+- The pass computes every rule's cutoff plus an Otsu split. Direct callers of the scorer API resolve a link cut once per scored block, so there the pass would dominate the router's cost. The pipeline hands its scorers a matchkey with the cutoff already set, and resolves it only a few times per matchkey.
 - A row therefore may not read `admitted_fraction`.
 - The gate replays exactly these inputs, at full float precision.
 
@@ -206,6 +208,7 @@ All failures degrade to the shipped default and say why:
 - **λ depends on the route.** On the bucket-vs-legacy e2e fixture (8 rows) the two routes' EM estimate λ at 0.99 and 0.05. Rules that read λ inherit that sensitivity. No panel dataset moved because of it, but the gate is the check.
 - **Refit interaction.** The valley refit may raise any routed cut. Rows are judged end to end, so a rule that only helps before the refit will not pass.
 - **Small corpus.** Even with a held-out set, a few dozen datasets is a small base. Prefer few, simple rows with a clear mechanism over many narrow ones.
+- **Spark tier stays unrouted (P5).** The Spark scorer scores the posterior P(match) but resolves the cutoff on the linear scale. That mismatch predates routing. Spark resolves with `route=False` until a Spark lane measures routed cuts and the scale mismatch is fixed.
 - **Out of scope:** routing the score scale (posterior vs linear), routing blocking passes, and a TypeScript port of the rules. Each is a later, separate design.
 
 ## References
