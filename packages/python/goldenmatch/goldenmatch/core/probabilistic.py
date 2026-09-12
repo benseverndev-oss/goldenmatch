@@ -4749,6 +4749,10 @@ class ResolvedCut:
     normalized: float
 
 
+#: ``cut_reason`` when the router ran and no row matched: the default rule placed the cut.
+_FS_ROUTER_DECLINED_REASON = "default rule (router: no row matched)"
+
+
 def _fs_resolved_cut(
     mk: MatchkeyConfig, em_result: EMResult, calibrated: bool
 ) -> ResolvedCut | None:
@@ -4785,6 +4789,7 @@ def _fs_resolved_cut(
     if envelope is None or getattr(em_result, "proportion_matched", None) is None:
         return None
     candidates: list[tuple[str, str]] = []
+    declined = False
     pinned = getattr(mk, "link_cut_rule", None)
     if pinned:
         candidates.append((pinned, "pinned by link_cut_rule"))
@@ -4792,9 +4797,10 @@ def _fs_resolved_cut(
         routed = choose_cut_rule(cut_diagnostics(mk, em_result, admitted=False))
         if routed is not None:
             candidates.append(routed)
+        declined = routed is None
     default = _fs_linear_cut_rule()
     if default is not None and all(default != rule for rule, _ in candidates):
-        candidates.append((default, "default rule"))
+        candidates.append((default, _FS_ROUTER_DECLINED_REASON if declined else "default rule"))
     note = ""
     for rule, reason in candidates:
         bits = rule_bits(rule, envelope, em_result)
