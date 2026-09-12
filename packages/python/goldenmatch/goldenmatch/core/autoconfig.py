@@ -5804,12 +5804,27 @@ def _legacy_auto_configure_v0(  # pyright: ignore[reportUnusedFunction]  # kept 
         # block-bounding value is redundant. `build_blocking` already gated the
         # union on OR-coverage before emitting it, so KEEP any strong-id union it
         # returned rather than overwriting it. Learned blocking stays the default
-        # for every non-union large shape.
+        # for every other large shape that has blocking keys.
         if _is_strong_identifier_union(blocking, profiles):
             logger.info(
                 "Keeping the strong-identifier blocking UNION at %d rows; learned "
                 "blocking under-blocks this null-sparse multi-source shape (see "
                 "#1316).",
+                total_rows,
+            )
+        elif not blocking.keys:
+            # Learned blocking needs keys. Its first pass is static blocking on
+            # `blocking.keys` over a sample, run to find training pairs. A key-less
+            # plan -- the token / lsh / simhash plans `_text_corpus_blocking` returns
+            # for free text -- builds no sample blocks, finds no training pairs, and
+            # "falls back to static blocking" on the same empty keys: zero blocks,
+            # zero candidate pairs, zero matches, and nothing raised. Measured on
+            # DBLP-Scholar (66,879 rows): zero-config returned 0 clusters; keeping
+            # the token plan scores 43,957 pairs.
+            logger.info(
+                "Keeping key-less %s blocking at %d rows; learned blocking needs "
+                "blocking keys to sample on.",
+                blocking.strategy,
                 total_rows,
             )
         else:

@@ -17,6 +17,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   the same ordering for weighted matchkeys; the FS route kept it. The strategy
   check now runs first, and such plans score on the memory-bounded external-blocks
   scorer. On MusicBrainz-20K zero-config `dedupe_df` went from F1 0.034 to 0.176.
+- **Zero-config no longer returns zero matches on large free-text data.** At 50,000
+  rows or more, auto-config replaced the blocking plan with learned blocking. For
+  free text that plan is key-less (token, LSH or SimHash), and learned blocking
+  samples on blocking keys, so it built no blocks, fell back to static blocking on
+  the same empty keys, and the run returned no matches and raised nothing. Key-less
+  plans now keep their strategy. On DBLP-Scholar (66,879 rows) zero-config
+  `dedupe_df` went from 0 clusters to 43,957 scored pairs (F1 0.0 to 0.189).
 
 ## [3.17.1] - 2026-08-31
 
