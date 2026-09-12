@@ -141,7 +141,23 @@ def test_no_matching_row_falls_through_to_the_default_rule(monkeypatch):
     monkeypatch.setenv("GOLDENMATCH_FS_CUT_ROUTER", "on")
     monkeypatch.setattr(R, "ROWS", (_SPARSE,))
     resolved = _fs_resolved_cut(_mk(), _em(0.2), calibrated=False)
+    assert (resolved.rule, resolved.reason) == ("prior_mid", "default rule (router: no row matched)")
+
+
+def test_router_off_keeps_the_plain_default_reason(monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_FS_CUT_ROUTER", "off")
+    monkeypatch.setattr(R, "ROWS", (_SPARSE,))
+    resolved = _fs_resolved_cut(_mk(), _em(0.2), calibrated=False)
     assert (resolved.rule, resolved.reason) == ("prior_mid", "default rule")
+
+
+def test_a_declined_route_is_reported(monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_FS_CUT_ROUTER", "on")
+    monkeypatch.setattr(R, "ROWS", (_SPARSE,))
+    report = link_cut_report(_mk(), _em(0.2))
+    assert (report["cut_rule"], report["cut_reason"]) == (
+        "prior_mid", "default rule (router: no row matched)",
+    )
 
 
 def test_the_router_with_the_default_rule_off_places_only_routed_cuts(monkeypatch):
