@@ -149,8 +149,13 @@ class CutDiagnostics:
     admitted_fraction: dict[str, float] | None
 
 
-def cut_diagnostics(mk: Any, em_result: Any) -> CutDiagnostics | None:
-    """Router inputs for ``mk`` from its trained model, or None without usable weights."""
+def cut_diagnostics(mk: Any, em_result: Any, *, admitted: bool = True) -> CutDiagnostics | None:
+    """Router inputs for ``mk`` from its trained model, or None without usable weights.
+
+    ``admitted=False`` skips the training-histogram pass (every rule's cutoff plus the Otsu
+    split) and leaves ``admitted_fraction`` None. The router reads the diagnostics this way,
+    because a link cut is resolved once per scored block and the pass is most of its cost.
+    """
     envelope = weight_envelope(mk, em_result)
     lam = getattr(em_result, "proportion_matched", None)
     if envelope is None or lam is None:
@@ -161,12 +166,12 @@ def cut_diagnostics(mk: Any, em_result: Any) -> CutDiagnostics | None:
         for f in mk.fields
         if (w := match_weights.get(f.field))
     }
-    admitted = None
+    admitted_fraction = None
     hist = getattr(em_result, "training_score_histogram", None)
-    if hist and sum(hist["counts"]) > 0 and hist["hi"] > hist["lo"]:
+    if admitted and hist and sum(hist["counts"]) > 0 and hist["hi"] > hist["lo"]:
         counts = hist["counts"]
         total = float(sum(counts))
-        admitted = {}
+        admitted_fraction = {}
         for rule in CUT_RULES:
             bits = rule_bits(rule, envelope, em_result)
             if bits is None:
@@ -177,7 +182,7 @@ def cut_diagnostics(mk: Any, em_result: Any) -> CutDiagnostics | None:
             # NE fields the two scales diverge, so this admitted fraction is approximate.
             t = min(max((bits - hist["lo"]) / (hist["hi"] - hist["lo"]), 0.0), 1.0)
             start = min(math.ceil(t * len(counts)), len(counts))
-            admitted[rule] = sum(counts[start:]) / total
+            admitted_fraction[rule] = sum(counts[start:]) / total
     return CutDiagnostics(
         proportion_matched=float(lam),
         lo=envelope.lo,
@@ -187,7 +192,7 @@ def cut_diagnostics(mk: Any, em_result: Any) -> CutDiagnostics | None:
         n_fields=len(mk.fields),
         has_negative_evidence=bool(getattr(mk, "negative_evidence", None)),
         field_weight_spans=spans,
-        admitted_fraction=admitted,
+        admitted_fraction=admitted_fraction,
     )
 
 
@@ -195,8 +200,10 @@ def cut_diagnostics(mk: Any, em_result: Any) -> CutDiagnostics | None:
 class CutRow:
     """One routing-table row: when ``when(diagnostics)`` holds, ``rule`` places the cut.
 
-    ``when`` reads only :class:`CutDiagnostics` -- no labels, no scoring pass. ``reason`` is the
-    human-readable mechanism, reported in ``cut_reason``.
+    ``when`` reads only :class:`CutDiagnostics` -- no labels, no scoring pass -- and never
+    ``admitted_fraction``, which is None on the routing path (``cut_diagnostics(...,
+    admitted=False)``) and in the gate's replay. ``reason`` is the human-readable mechanism,
+    reported in ``cut_reason``.
     """
 
     name: str

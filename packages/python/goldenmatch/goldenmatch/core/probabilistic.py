@@ -4789,7 +4789,7 @@ def _fs_resolved_cut(
     if pinned:
         candidates.append((pinned, "pinned by link_cut_rule"))
     elif _fs_cut_router_enabled():
-        routed = choose_cut_rule(cut_diagnostics(mk, em_result))
+        routed = choose_cut_rule(cut_diagnostics(mk, em_result, admitted=False))
         if routed is not None:
             candidates.append(routed)
     default = _fs_linear_cut_rule()

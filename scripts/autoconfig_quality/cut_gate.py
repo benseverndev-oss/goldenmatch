@@ -64,7 +64,9 @@ def _routes(record: dict, rows: Sequence[CutRow]) -> dict[str, str | None]:
     routes: dict[str, str | None] = {}
     for mk in record.get("probabilistic_matchkeys") or []:
         d = diagnostics.get(mk)
-        choice = choose_cut_rule(CutDiagnostics(**d) if d else None, rows)
+        # Exactly what the live router reads: no admitted_fraction (P5).
+        replay = CutDiagnostics(**{**d, "admitted_fraction": None}) if d else None
+        choice = choose_cut_rule(replay, rows)
         routes[mk] = None if choice is None else choice[0]
     return routes
 

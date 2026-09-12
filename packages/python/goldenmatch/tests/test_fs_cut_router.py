@@ -209,3 +209,35 @@ def test_the_shipped_rows_fire_where_the_design_matrix_says():
         )
         routed[name] = None if choice is None else choice[0]
     assert routed == _EXPECTED_ROUTES
+
+
+# ─── P5: the routing path is cheap and never reads admitted_fraction ──────────
+
+
+def test_routing_diagnostics_skip_the_admitted_fraction_pass(monkeypatch):
+    em = _em()
+    em.training_score_histogram = {"counts": [5] * 100, "lo": -10.0, "hi": 14.0}
+    calls: list[str] = []
+    real = R.rule_bits
+    monkeypatch.setattr(R, "rule_bits", lambda rule, *a, **k: calls.append(rule) or real(rule, *a, **k))
+
+    lean = R.cut_diagnostics(_mk(), em, admitted=False)
+    assert lean is not None and lean.admitted_fraction is None
+    assert calls == [], "routing must not compute any rule cutoff for admitted_fraction"
+
+    full = R.cut_diagnostics(_mk(), em)
+    assert full.admitted_fraction is not None and calls
+    same = {k: v for k, v in vars(lean).items() if k != "admitted_fraction"}
+    assert same == {k: v for k, v in vars(full).items() if k != "admitted_fraction"}
+
+
+def test_the_router_routes_on_diagnostics_without_admitted_fraction(monkeypatch):
+    monkeypatch.setenv("GOLDENMATCH_FS_CUT_ROUTER", "on")
+    em = _em()
+    em.training_score_histogram = {"counts": [5] * 100, "lo": -10.0, "hi": 14.0}
+    blind = R.CutRow(
+        name="blind", rule="evidence_12", reason="admitted_fraction is absent",
+        when=lambda d: d.admitted_fraction is None,
+    )
+    monkeypatch.setattr(R, "ROWS", (blind,))
+    assert _fs_resolved_cut(_mk(), em, calibrated=False).rule == "evidence_12"

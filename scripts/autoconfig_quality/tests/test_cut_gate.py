@@ -246,3 +246,14 @@ def test_the_empty_shipped_table_passes_when_every_routed_arm_kept_the_default(
 def test_no_candidate_is_already_shipped():
     shipped = {row.name for row in fs_cut_rules.ROWS}
     assert not shipped & {row.name for row in cut_rows.CANDIDATES}
+
+
+def test_the_gate_replays_routing_without_admitted_fraction():
+    """P5: the live router never sees admitted_fraction, so the replay must not either."""
+    blind = CutRow(
+        name="blind", rule="evidence_12", reason="r", when=lambda d: d.admitted_fraction is None
+    )
+    diag = {**_diag(), "admitted_fraction": {"prior_mid": 0.1}}
+    rec = _rec({"default_loaded": 0.9, "evidence_12": 0.95}, diags={"fs": diag})
+    v = G.judge(rec, (blind,))
+    assert (v.fired, v.rule, v.passed) == (True, "evidence_12", True)
