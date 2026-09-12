@@ -1,3 +1,15 @@
+# Line endings: identical bytes on the Linux homelab and the Windows laptop, whatever each machine's
+# core.autocrlf says. Text is stored and checked out with LF, Windows scripts with CRLF, and data
+# fixtures byte for byte. More specific lines below override these.
+* text=auto eol=lf
+*.sh   text eol=lf
+*.bash text eol=lf
+*.cmd  text eol=crlf
+*.bat  text eol=crlf
+*.ps1  text eol=crlf
+*.csv  -text
+*.tsv  -text
+
 /tests/fixtures/synthetic_1m.csv filter=lfs diff=lfs merge=lfs -text
 /packages/python/goldenmatch/tests/fixtures/synthetic_1m.csv filter=lfs diff=lfs merge=lfs -text
 
