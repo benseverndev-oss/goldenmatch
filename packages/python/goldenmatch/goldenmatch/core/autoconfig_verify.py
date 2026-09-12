@@ -1338,8 +1338,26 @@ def postflight(
                 f"not a boundary between populations, so no threshold "
                 f"adjustment was emitted."
             )
+    # A threshold adjustment moves a WEIGHTED matchkey's cut: `_resolve_current_threshold`
+    # reads the first weighted matchkey's threshold and otherwise falls back to 0.7. An
+    # FS-only config has no weighted threshold, so its pairs were read against that 0.7
+    # fallback -- unrelated to the link cut the FS model resolved -- and a valley far from
+    # 0.7 re-cut every FS pair below it in `_apply_postflight`. That re-cut bypasses the FS
+    # refit, which only moves the cut when re-clustering passes its over-merge and
+    # expelled-share checks. Measured on MusicBrainz-20K zero-config: F1 0.176 with the
+    # re-cut, 0.475 without it. A caller-supplied threshold still counts as a cut to move.
+    _has_weighted_cut = current_threshold is not None or any(
+        mk.type == "weighted" and mk.threshold is not None
+        for mk in config.get_matchkeys()
+    )
     if is_bimodal and valley is not None and not _tail_artifact:
-        if abs(valley - threshold) > 0.05 and not strict:
+        if abs(valley - threshold) > 0.05 and not strict and not _has_weighted_cut:
+            report.advisories.append(
+                f"score distribution is bimodal (valley at {valley:.3f}), but the config "
+                f"has no weighted matchkey threshold to move: a probabilistic matchkey's "
+                f"link cut is resolved by its model, so postflight does not re-cut it."
+            )
+        elif abs(valley - threshold) > 0.05 and not strict:
             report.adjustments.append(
                 PostflightAdjustment(
                     field="threshold",
