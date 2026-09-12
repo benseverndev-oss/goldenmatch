@@ -3790,7 +3790,8 @@ def resolve_thresholds(
 LINK_THRESHOLD_CONFIGURED = "configured"
 LINK_THRESHOLD_CALIBRATED = "calibrated"
 LINK_THRESHOLD_FALLBACK = "fallback"
-#: The linear cutoff came from the ``GOLDENMATCH_FS_LINEAR_CUT`` evidence rule. Chosen from
+#: The linear cutoff came from a link-cut rule: pinned (``link_cut_rule``), routed
+#: (``GOLDENMATCH_FS_CUT_ROUTER``), or the ``GOLDENMATCH_FS_LINEAR_CUT`` default. Chosen from
 #: the trained model, so it is neither warned about as a fallback nor stamped as calibrated.
 LINK_THRESHOLD_EVIDENCE_RULE = "evidence_rule"
 

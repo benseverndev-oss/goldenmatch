@@ -47,7 +47,7 @@ TOLERANCE = 0.01
 ROUTER_ENV = "GOLDENMATCH_FS_CUT_ROUTER"
 
 #: Env vars that move the cut or void a pin process-wide. A sweep run with any of
-#: them set measures something other than the shipped default, so it refuses.
+#: them set measures something other than the unrouted default (the gate reference), so it refuses.
 CUT_ENV_VARS = (
     "GOLDENMATCH_FS_LINEAR_CUT",
     "GOLDENMATCH_FS_CALIBRATED",

@@ -1,4 +1,4 @@
-"""FS link-cut router (spec 2026-09-11-fs-cut-rule-routing-design, P4)."""
+"""FS link-cut router (spec 2026-09-11-fs-cut-rule-routing-design, P4-P5)."""
 
 from __future__ import annotations
 

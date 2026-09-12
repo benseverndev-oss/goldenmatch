@@ -645,8 +645,8 @@ class MatchkeyConfig(BaseModel):
     )
     # Probabilistic-only: pin the rule that places the LINEAR link cutoff, as an evidence
     # cutoff in bits. These names must match goldenmatch.core.fs_cut_rules.CUT_RULES.
-    # None uses the default rule; an explicit link_threshold or an EM-calibrated cutoff
-    # still wins over a pinned rule.
+    # None lets the link-cut router pick the rule (GOLDENMATCH_FS_CUT_ROUTER, on by default),
+    # else the default rule; an explicit link_threshold or an EM-calibrated cutoff still wins.
     link_cut_rule: Literal[
         "midpoint", "prior", "prior_mid", "posterior_099",
         "evidence_3", "evidence_5", "evidence_9", "evidence_12", "otsu",
@@ -654,7 +654,8 @@ class MatchkeyConfig(BaseModel):
         default=None,
         description=(
             "Rule that places the probabilistic link cutoff by evidence bits, for example "
-            "prior_mid or evidence_9. Unset uses the default rule; link_threshold, when set, "
+            "prior_mid or evidence_9. Unset lets the link-cut router pick the rule "
+            "(GOLDENMATCH_FS_CUT_ROUTER), else the default rule; link_threshold, when set, "
             "still wins."
         ),
     )
