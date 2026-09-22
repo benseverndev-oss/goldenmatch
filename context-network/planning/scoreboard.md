@@ -5,16 +5,16 @@
 [north-star-roadmap.md](./north-star-roadmap.md): *is GoldenMatch becoming the
 tool developers reach for by default?* Trend > snapshot.
 
-**Latest: 2026-09-21** (vs previous snapshot)
+**Latest: 2026-09-22** (vs previous snapshot)
 
 | Signal | Now | WoW | North Star reading |
 |---|---|---|---|
-| GitHub stars | 132 | 132 (▬0) | discovery momentum |
+| GitHub stars | 133 | 133 (▲+1) | discovery momentum |
 | Forks | 15 | 15 (▬0) | intent-to-use |
-| PyPI downloads (30d, suite) | 43.3k | 43.3k | actual reach |
-| npm downloads (30d, suite) | 1.4k | 1.4k (▼-88) | actual reach (TS) |
+| PyPI downloads (30d, suite) | — | — | actual reach |
+| npm downloads (30d, suite) | 1.4k | 1.4k (▲+2) | actual reach (TS) |
 | Open issues, non-maintainer | 1 | 1 (▬0) | "someone reached for it"† |
-| Time-to-first-success | 25.4s · F1 1.00 | ▲+2.0s | zero-config friction‡ |
+| Time-to-first-success | 20.1s · F1 1.00 | ▼-5.3s | zero-config friction‡ |
 
 † Raw count — still needs human triage to exclude badge-marketing bots
 (e.g. MCP-marketplace "live badge" issues). The roadmap's true gate is **≥1
@@ -31,6 +31,7 @@ the probe itself did not run. The two are never merged.
 
 | Date | Stars | Forks | PyPI 30d | npm 30d | Ext. issues | TTFS |
 |---|---|---|---|---|---|---|
+| 2026-09-22 | 133 | 15 | — | 1.4k | 1 | 20.1s |
 | 2026-09-21 | 132 | 15 | 43.3k | 1.4k | 1 | 25.4s |
 | 2026-09-20 | 132 | 15 | — | 1.5k | 1 | 23.4s |
 | 2026-09-19 | 132 | 15 | — | 1.5k | 1 | 16.0s |
@@ -46,7 +47,6 @@ the probe itself did not run. The two are never merged.
 | 2026-09-09 | 131 | 13 | 127.2k | 3.2k | 1 | 19.1s |
 | 2026-09-08 | 131 | 13 | — | 3.2k | 1 | 16.5s |
 | 2026-09-07 | 131 | 13 | — | 3.2k | 1 | 21.4s |
-| 2026-09-06 | 131 | 13 | — | 4.7k | 1 | 18.1s |
 
 ## The gates (from the roadmap)
 
