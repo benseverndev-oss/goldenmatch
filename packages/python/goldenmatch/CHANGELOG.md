@@ -6,6 +6,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+
+- **A deduplicated output: one row per real-world entity.** Golden records hold only the
+  entities that had duplicates -- 4 of the 7 people in a 12-record file with 4 duplicate
+  groups -- so "my records minus the duplicates" had no single output. `result.deduplicated`,
+  `result.to_csv(path, which="deduplicated")` and `goldenmatch dedupe --output-deduplicated`
+  return the golden records plus the records that had no duplicate, each with its
+  `__cluster_id__`. A bare `goldenmatch dedupe customers.csv` now writes
+  `<run>_deduplicated.csv` alongside `<run>_golden.csv` (still written, so existing
+  consumers keep working); `--output-all` includes it. Values are post-standardization.
+  (#2991)
+
 ### Fixed
 
 - **The GoldenCheck quality scan announces once, on stderr.** Every auto-config iteration
@@ -14,6 +26,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   when goldencheck and polars are installed, as they are in a `golden-suite` install.
   Sample runs are now silent (fixes still apply, so the sample profile is unchanged), and
   the real run's single announcement goes to stderr. (#2997)
+- **Result tables no longer carry pipeline working columns.** `result.dupes`, `result.unique`
+  and `result.golden`, the `--output-*` files and `dedupe_to_parquet` output leaked
+  `__mk_*`, hashed `__xform_*`, `__block_key__`, `__bucket__` and `__raw__*` columns. They are
+  dropped at the user-facing boundary; `__row_id__` and `__source__` stay, and the pipeline's
+  internal result dict is unchanged. (#2991)
+- **`DedupeResult.to_csv` rejects an unknown `which`.** Any value other than the documented
+  ones -- `"clusters"`, say -- wrote nothing and returned the path as if it had.
+- **The docs and examples no longer call `result.golden.write_csv(...)`.** `golden` has been a
+  `pa.Table` since 3.0.0 and has no `write_csv`, so the quickstart, overview and two runnable
+  examples raised `AttributeError`. They use `result.to_csv(...)`.
 
 ## [3.18.1] - 2026-09-24
 

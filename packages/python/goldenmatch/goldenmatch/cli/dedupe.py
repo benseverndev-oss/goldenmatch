@@ -80,6 +80,7 @@ def dedupe_cmd(
     preview_size: int = typer.Option(10000, "--preview-size", help="Number of records for preview sample"),
     preview_random: bool = typer.Option(False, "--preview-random", help="Deprecated no-op: accepted for back-compat but not applied (preview uses the first N)."),
     output_golden: bool = typer.Option(False, "--output-golden", help="Output golden records"),
+    output_deduplicated: bool = typer.Option(False, "--output-deduplicated", help="Output the deduplicated list: one row per entity (golden records + unique records)"),
     output_clusters: bool = typer.Option(False, "--output-clusters", help="Output cluster info"),
     output_dupes: bool = typer.Option(False, "--output-dupes", help="Output duplicate records"),
     output_unique: bool = typer.Option(False, "--output-unique", help="Output unique records"),
@@ -277,6 +278,7 @@ def dedupe_cmd(
 
     if output_all:
         output_golden = True
+        output_deduplicated = True
         output_clusters = True
         output_dupes = True
         output_unique = True
@@ -291,15 +293,21 @@ def dedupe_cmd(
         and not preview
         and not merge_preview
         and not any([
-            output_golden, output_clusters, output_dupes, output_unique,
-            output_report, html_report, dashboard,
+            output_golden, output_deduplicated, output_clusters, output_dupes,
+            output_unique, output_report, html_report, dashboard,
         ])
     ):
+        # Golden records alone are only the entities that HAD duplicates (4 of
+        # the 7 people in a 12-record file with 4 duplicate groups), so the
+        # default also writes the deduplicated list -- one row per entity (#2991).
+        # Golden stays on so existing `*_golden.csv` consumers keep working.
         output_golden = True
+        output_deduplicated = True
         if not quiet:
             console.print(
-                "[dim]No output flag given -- writing golden records by default "
-                "(use --output-all / --output-dir to control, --tui to review).[/dim]"
+                "[dim]No output flag given -- writing the deduplicated list (one row per "
+                "entity) and golden records by default (use --output-all / --output-dir "
+                "to control, --tui to review).[/dim]"
             )
 
     # Enable auto-fix from CLI flag
@@ -380,6 +388,7 @@ def dedupe_cmd(
             output_dupes=output_dupes,
             output_unique=output_unique,
             output_report=output_report,
+            output_deduplicated=output_deduplicated,
             across_files_only=across_files_only,
             llm_retrain=llm_retrain,
             llm_provider=llm_provider,

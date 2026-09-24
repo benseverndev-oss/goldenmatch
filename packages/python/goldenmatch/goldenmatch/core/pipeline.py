@@ -22,6 +22,7 @@ from goldenmatch.core.block_analyzer import analyze_blocking
 from goldenmatch.core.blocker import build_blocks
 from goldenmatch.core.ingest import apply_column_map, load_file, validate_columns
 from goldenmatch.core.matchkey import compute_matchkeys, precompute_matchkey_transforms
+from goldenmatch.core.output_tables import deduplicated_table, strip_pipeline_internals
 from goldenmatch.core.scorer import (
     find_exact_matches,
     rerank_top_pairs,
@@ -2080,6 +2081,7 @@ def run_dedupe(
     llm_provider: str | None = None,
     llm_max_labels: int = 500,
     output_dir: str | None = None,
+    output_deduplicated: bool = False,
 ) -> dict:
     """Run the dedupe pipeline.
 
@@ -2090,6 +2092,8 @@ def run_dedupe(
         output_clusters: Whether to output cluster info.
         output_dupes: Whether to output duplicate records.
         output_unique: Whether to output unique records.
+        output_deduplicated: Whether to output the deduplicated list -- one row
+            per entity, golden records plus unique records (#2991).
         output_report: Whether to generate a report.
         across_files_only: If True, only match across different sources.
         output_dir: When set with ``GOLDENMATCH_FS_OUT_OF_CORE=1`` on an eligible
@@ -2230,6 +2234,7 @@ def run_dedupe(
         # kill-switch restores the classic shim.
         _writes_outputs = bool(
             output_golden or output_clusters or output_dupes or output_unique
+            or output_deduplicated
         )
         if (
             _lane_ok
@@ -2245,6 +2250,7 @@ def run_dedupe(
                 output_dupes, output_unique, output_report,
                 across_files_only, llm_retrain, llm_provider, llm_max_labels,
                 output_dir=output_dir,
+                output_deduplicated=output_deduplicated,
                 _eager_stages_done=_eager_done,
             )
         # W5b-1 shim (single, post-eager-stages): everything below is still
@@ -2260,6 +2266,7 @@ def run_dedupe(
         output_dupes, output_unique, output_report,
         across_files_only, llm_retrain, llm_provider, llm_max_labels,
         output_dir=output_dir,
+        output_deduplicated=output_deduplicated,
         # Seed the prep cache with (id, height) like the dedupe_df path. The
         # bare ``id(combined_lf)`` default is unsafe here: ``combined_lf`` is a
         # fresh object that's GC-eligible the moment this call returns, so
@@ -3200,6 +3207,7 @@ def _run_dedupe_pipeline(
     auto_config: bool = False,
     auto_config_llm_provider: str | None = None,
     output_dir: str | None = None,
+    output_deduplicated: bool = False,
     _eager_stages_done: frozenset[str] = frozenset(),
     _prep_cache_seed: tuple[int, int] | int | None = None,
     _prep_store: PreparedRecordStore | None = None,
@@ -5148,7 +5156,7 @@ def _run_dedupe_pipeline(
     directory = config.output.directory or config.output.path or "."
 
     if output_golden and golden_df is not None:
-        write_output(golden_df, directory, run_name, "golden", fmt)
+        write_output(strip_pipeline_internals(golden_df), directory, run_name, "golden", fmt)
 
     if output_clusters:
         # Build clusters DataFrame
@@ -5175,10 +5183,18 @@ def _run_dedupe_pipeline(
             write_output(clusters_out, directory, run_name, "clusters", fmt)
 
     if output_dupes and len(dupes_df) > 0:
-        write_output(dupes_df, directory, run_name, "dupes", fmt)
+        write_output(strip_pipeline_internals(dupes_df), directory, run_name, "dupes", fmt)
 
     if output_unique and len(unique_df) > 0:
-        write_output(unique_df, directory, run_name, "unique", fmt)
+        write_output(strip_pipeline_internals(unique_df), directory, run_name, "unique", fmt)
+
+    if output_deduplicated:
+        # One row per entity (#2991): golden records alone are only the entities
+        # that had duplicates. Written here, beside the other outputs, so the
+        # output directory and run name are resolved in exactly one place.
+        _dedup = deduplicated_table(golden_df, unique_df, _clusters_dict())
+        if _dedup is not None and _dedup.num_rows:
+            write_output(_dedup, directory, run_name, "deduplicated", fmt)
 
     # ── Step 7.5: LINEAGE (always save when outputting) ──
     if output_golden or output_clusters or output_dupes:

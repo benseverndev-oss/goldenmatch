@@ -87,7 +87,7 @@ These are the zero-config (weighted-path) numbers. On the separate **probabilist
 import goldenmatch as gm
 
 result = gm.dedupe("customers.csv", exact=["email"], fuzzy={"name": 0.85, "zip": 0.95})
-result.golden.write_csv("deduped.csv")
+result.to_csv("deduped.csv", which="deduplicated")  # one row per entity
 ```
 
 <Tip>

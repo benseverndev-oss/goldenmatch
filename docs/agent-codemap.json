@@ -4,7 +4,7 @@
   "packages": {
     "goldenmatch": {
       "root": "packages/python/goldenmatch/goldenmatch",
-      "module_count": 484,
+      "module_count": 485,
       "modules": [
         {
           "module": "goldenmatch",
@@ -98,6 +98,7 @@
             "_run_auto_refit",
             "_run_config_lint",
             "_to_result_table",
+            "_user_table",
             "_warn_on_implausible_fallback_match_rate",
             "add_correction",
             "dedupe",
@@ -138,6 +139,7 @@
             "goldenmatch.core.memory.corrections",
             "goldenmatch.core.memory.learner",
             "goldenmatch.core.memory.store",
+            "goldenmatch.core.output_tables",
             "goldenmatch.core.pairs",
             "goldenmatch.core.pipeline",
             "goldenmatch.core.recall_certificate",
@@ -4000,6 +4002,18 @@
           ]
         },
         {
+          "module": "goldenmatch.core.output_tables",
+          "file": "packages/python/goldenmatch/goldenmatch/core/output_tables.py",
+          "purpose": "User-facing dedupe output tables: what a person gets back, not pipeline state.",
+          "defines": [
+            "_as_arrow",
+            "_concat_aligned",
+            "_without",
+            "deduplicated_table",
+            "strip_pipeline_internals"
+          ]
+        },
+        {
           "module": "goldenmatch.core.pairs",
           "file": "packages/python/goldenmatch/goldenmatch/core/pairs.py",
           "purpose": "Native Core pair + candidate-estimation primitives.",
@@ -4210,6 +4224,7 @@
             "goldenmatch.core.memory.corrections",
             "goldenmatch.core.memory.learner",
             "goldenmatch.core.memory.store",
+            "goldenmatch.core.output_tables",
             "goldenmatch.core.pairs",
             "goldenmatch.core.probabilistic",
             "goldenmatch.core.profile_emitter",

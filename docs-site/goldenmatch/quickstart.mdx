@@ -10,14 +10,14 @@ keywords: ["goldenmatch", "quickstart", "dedupe", "match", "config", "matchkey"]
 goldenmatch dedupe customers.csv
 ```
 
-This auto-detects column types, assigns scorers, picks a blocking strategy, runs, and writes golden records (a timestamped `*_golden.csv` in the current directory), no config, no prompts. Add `--tui` to review interactively instead, or `--output-all` for every artifact. The same in Python:
+This auto-detects column types, assigns scorers, picks a blocking strategy, runs, and writes the deduplicated list (a timestamped `*_deduplicated.csv`, one row per real-world entity) and golden records (`*_golden.csv`, one merged record per duplicate group) in the current directory, no config, no prompts. Add `--tui` to review interactively instead, or `--output-all` for every artifact. The same in Python:
 
 ```python
 import goldenmatch as gm
 
 result = gm.dedupe("customers.csv")
-print(result)  # DedupeResult(records=5000, clusters=847, match_rate=12.0%)
-result.golden.write_csv("deduped.csv")
+print(result)  # DedupeResult(records=12, clusters=4, match_rate=75.0%)
+result.to_csv("deduped.csv", which="deduplicated")  # one row per entity
 ```
 
 ## Match two files
