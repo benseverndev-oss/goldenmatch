@@ -6,6 +6,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.18.1] - 2026-09-24
+
+<!-- README-callout
+**`gm.dedupe("customers.csv")` works with no config.** The documented zero-config
+file call -- the first Python example in the README -- raised
+`KeyError: 'Field "__placeholder__" does not exist in schema'` on 3.18.0. It now
+auto-configures the files the way `goldenmatch dedupe customers.csv` does.
+-->
+
 ### Fixed
 
 - **`gm.dedupe("customers.csv")` works with no config.** The documented zero-config file
