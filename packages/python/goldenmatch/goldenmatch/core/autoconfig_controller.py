@@ -707,12 +707,17 @@ class AutoConfigController:
             yellow_profile = self._yellow_sentinel_profile(n_rows, user_cols)
             return v0, yellow_profile, RunHistory()
 
-        # Diag flush prints to localize 5M Linux hang. controller.run was found
-        # to be the hidden hang site after PRs #310-#314 attacked the wrong
-        # layers (bench heartbeat stage dict missed full-df-only substeps here).
+        # Stage timings, added to localize a 5M Linux hang: controller.run was
+        # the hidden hang site after PRs #310-#314 attacked the wrong layers.
+        # They were bare stdout prints, so every zero-config run -- a user's
+        # first `dedupe_df` or `goldenmatch dedupe` -- printed a dozen internal
+        # timing lines. Debug-level now: enable the
+        # goldenmatch.core.autoconfig_controller logger to see them again.
         _diag_t0 = time.time()
         def _diag(msg: str) -> None:
-            print(f"[controller.run n_rows={n_rows}] t={time.time()-_diag_t0:.1f}s: {msg}", flush=True)
+            logger.debug(
+                "[controller.run n_rows=%d] t=%.1fs: %s", n_rows, time.time() - _diag_t0, msg
+            )
         _diag("entry")
 
         # Iteration loop (Task 4.2)
