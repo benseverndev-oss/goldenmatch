@@ -4,6 +4,16 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.5.5] - 2026-09-24
+
+### Changed
+
+- **`goldenmatch` floor raised to `>=3.18.1`.** 3.18.0's documented zero-config file call,
+  `gm.dedupe("customers.csv")` -- the first Python example in the README -- raised
+  `KeyError: 'Field "__placeholder__" does not exist in schema'`. 3.18.1 auto-configures the
+  files instead. The floor moves so a suite install never resolves to the version where
+  that first call crashes.
+
 ## [0.5.4] - 2026-09-24
 
 ### Changed
