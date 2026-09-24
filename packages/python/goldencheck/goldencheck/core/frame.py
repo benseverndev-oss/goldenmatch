@@ -603,7 +603,7 @@ class ArrowColumn:
 
     def sort(self) -> ArrowColumn:
         _, pc = _arrow()
-        idx = pc.sort_indices(self._arr, null_placement="at_start")   # ascending, nulls-first (Polars)
+        idx = pc.array_sort_indices(self._arr, null_placement="at_start")   # ascending, nulls-first (Polars), stable
         return ArrowColumn(self._arr.take(idx))
 
     def to_list(self) -> list:
@@ -779,7 +779,7 @@ class ArrowColumn:
         a = self._arr
         if len(a) <= 1:
             return True
-        idx = pc.sort_indices(a, null_placement="at_start")   # ascending nulls-first (Polars)
+        idx = pc.array_sort_indices(a, null_placement="at_start")   # ascending nulls-first (Polars)
         return a.equals(a.take(idx))
 
     def count_gt(self, value: Any) -> int:
