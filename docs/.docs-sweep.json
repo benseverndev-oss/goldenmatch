@@ -1,9 +1,9 @@
 {
-  "version": "3.17.1",
-  "commit": "824502d94",
-  "date": "2026-08-31",
-  "previous_swept_version": "3.17.0",
+  "version": "3.18.0",
+  "commit": "910cb1eb1",
+  "date": "2026-09-24",
+  "previous_swept_version": "3.17.1",
   "note": "Set by the rollout-docs-sweep skill when a docs sweep completes for a release. The check_docs_sweep.py gate asserts version == current packages/python/goldenmatch version; bump this marker at the END of a docs sweep.",
-  "sweep_scope": "3.17.1 is a bugfix-only cut for the leak 3.17.0 shipped (negative evidence on an exact matchkey still bridged to polars). No prose surface makes a claim that this changes -- installation.mdx was already corrected in the 3.17.0 sweep, and it is now simply TRUE where it was aspirational. Marker advanced to keep the release gate armed; no new sweep was performed and none was owed.",
+  "sweep_scope": "Scoped sweep for 3.18.0 (41 package commits since 3.17.1). Every GOLDENMATCH_* flag added or changed since v3.17.1 (14) was checked against tuning.mdx: all present, none removed from code. scoring.mdx gained link-cutoff placement (prior_mid default, cut router, link_cut_rule, GOLDENMATCH_FS_LINEAR_CUT). CHANGELOG backfilled 31 changes that had no entry. Cross-language parity prose on tied-edge splits re-read and still accurate. config-matrix.mdx and api-surface.mdx are generated. The field-dependence correction stays default-OFF, so no prose default changed for it.",
   "backlog_note": "NO FULL PROSE SWEEP HAS BEEN PERFORMED FOR 3.4.0..3.16.0. The gate script existed but was wired into no workflow, so the marker sat at 3.3.1 across 13 minor releases while nothing enforced it. It is now wired into cut-goldenmatch-release.yml. The marker was advanced to 3.16.0 to arm the gate rather than to claim those releases were swept, and 3.17.0's scoped sweep (above) does not discharge that backlog either. Delete this key at the first full sweep."
 }

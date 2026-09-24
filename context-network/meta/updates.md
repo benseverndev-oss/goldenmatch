@@ -2,6 +2,19 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-09-24 -- goldenmatch 3.18.0: the adoption plan's first stranger run, and a release
+- A 90-day adoption plan (Python-developer user, scale work frozen to 2026-12-23) started by
+  running the pitch as a stranger would: PyPI 3.17.1 on a 12-row customer CSV. With an `id`
+  column, zero-config `dedupe_df` found 1 of 4 duplicate groups, because a row key was promoted
+  to negative evidence (#2986). First-run stdout noise was fixed in #2987; the rest of the
+  friction is filed as `user-session` issues #2988-#2992. #2992 (the pyarrow 25
+  `null_placement` warning) was fixed by the first homelab fanout contest (#2993).
+- The scoreboard now leads with `goldenmatch`'s own macOS+Windows downloads and stranger
+  issues/PRs; the suite totals are labelled CI-dominated (#2985).
+- 3.18.0 ships everything since 3.17.1, including the FS link-cut router and `prior_mid` cutoff
+  on by default. The field-dependence correction stays default-OFF (ADR 0066). The changelog
+  backfills 31 changes that had no entry. `scoring.mdx` documents link-cutoff placement.
+
 ## 2026-09-10 -- ADR 0066 addendum: the correction subtracts the two-class double-count by default
 - The field-dependence correction originally subtracted only the NON-MATCH lift. The
   record-linkage literature models interactions in either or both classes and finds dependence
