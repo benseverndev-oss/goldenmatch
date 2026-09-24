@@ -2,6 +2,14 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-09-24 -- goldenmatch 3.18.1: the documented first Python call works
+- Writing the README first screen (#2998) found that `gm.dedupe("customers.csv")`, the first
+  Python example in the README and python-api.mdx, raised `KeyError` on `__placeholder__` in
+  3.18.0: the file API fell through to a stub matchkey instead of auto-configuring. `match()`
+  had been fixed earlier; `dedupe()` / `dedupe_to_parquet()` had not (#2996).
+- The same pass filed #2997 (GoldenCheck announces on stdout once per auto-config iteration)
+  and extended #2991 (outputs leak internal columns and standardised values).
+
 ## 2026-09-24 -- goldenmatch 3.18.0: the adoption plan's first stranger run, and a release
 - A 90-day adoption plan (Python-developer user, scale work frozen to 2026-12-23) started by
   running the pitch as a stranger would: PyPI 3.17.1 on a 12-row customer CSV. With an `id`
