@@ -11,8 +11,8 @@
     "clean": "turbo run clean"
   },
   "devDependencies": {
-    "turbo": "^2.10.12",
-    "vite": "^8.2.2"
+    "turbo": "^2.11.2",
+    "vite": "^8.3.0"
   },
   "pnpm": {
     "overrides": {
