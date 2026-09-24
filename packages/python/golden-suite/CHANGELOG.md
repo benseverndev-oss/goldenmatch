@@ -4,6 +4,19 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.5.4] - 2026-09-24
+
+### Changed
+
+- **`goldenmatch` floor raised to `>=3.18.0`.** 3.18.0 fixes a zero-config recall bug
+  that hits most real files: auto-config promoted a row key such as `id` to negative
+  evidence, so the penalty fired on every pair and `dedupe_df` on 12 obvious customer
+  records with an `id` column found 1 of 4 duplicate groups. It also places the
+  Fellegi-Sunter link cutoff per matchkey from the trained model instead of a fixed
+  0.50 midpoint (dblp_acm F1 at the default cutoff 0.3758 to 0.8159), and stops printing
+  the controller's internal timings on every run. The floor moves so a suite install
+  guarantees those fixes rather than merely allowing them.
+
 ## [0.5.3] - 2026-08-31
 
 ### Changed
