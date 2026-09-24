@@ -567,11 +567,9 @@
             "goldenmatch.config.settings",
             "goldenmatch.core.autoconfig",
             "goldenmatch.core.ingest",
-            "goldenmatch.core.output_tables",
             "goldenmatch.core.pipeline",
             "goldenmatch.core.preview",
             "goldenmatch.core.suggest.surface",
-            "goldenmatch.output.writer",
             "goldenmatch.tui.app",
             "goldenmatch.tui.engine"
           ]

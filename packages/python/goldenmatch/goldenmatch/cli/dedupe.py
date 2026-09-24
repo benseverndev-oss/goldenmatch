@@ -310,13 +310,6 @@ def dedupe_cmd(
                 "to control, --tui to review).[/dim]"
             )
 
-    if output_deduplicated and not cfg.output.run_name:
-        # The pipeline names its files `<run_name>_<kind>`; fix the run name up
-        # front so the deduplicated file written below shares it.
-        from datetime import datetime as _dt
-
-        cfg.output.run_name = _dt.now().strftime("%Y%m%d_%H%M%S")
-
     # Enable auto-fix from CLI flag
     if auto_fix:
         from goldenmatch.config.schemas import ValidationConfig
@@ -395,6 +388,7 @@ def dedupe_cmd(
             output_dupes=output_dupes,
             output_unique=output_unique,
             output_report=output_report,
+            output_deduplicated=output_deduplicated,
             across_files_only=across_files_only,
             llm_retrain=llm_retrain,
             llm_provider=llm_provider,
@@ -407,22 +401,6 @@ def dedupe_cmd(
         raise typer.Exit(code=3)
     if _excl_token is not None:
         _RUNTIME_EXCLUDE_COLUMNS.reset(_excl_token)
-
-    if output_deduplicated:
-        from goldenmatch.core.output_tables import deduplicated_table
-        from goldenmatch.output.writer import write_output
-
-        _dedup = deduplicated_table(
-            results.get("golden"), results.get("unique"), results.get("clusters")
-        )
-        if _dedup is not None and _dedup.num_rows:
-            write_output(
-                _dedup,
-                cfg.output.directory or cfg.output.path or ".",
-                cfg.output.run_name,
-                "deduplicated",
-                cfg.output.format or "csv",
-            )
 
     # Show AutoConfigController telemetry before the report. We only render
     # when the controller actually ran in this command (i.e., auto-config
