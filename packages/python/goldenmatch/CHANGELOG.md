@@ -48,6 +48,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Fixed
 
+- **Zero-config no longer lets an `id` column veto every match.** Auto-config promoted a
+  row key (`id`, `row_id`: a distinct value on every row) to negative evidence because its
+  name scores as an identity field. A row key never agrees on any pair, so the penalty fired
+  on every pair, true duplicates included: `dedupe_df` on 12 obvious customer records with
+  an `id` column merged one duplicate pair out of four. A generic column that is unique on
+  every row of the full frame is now skipped (`_is_row_key`), the same shape
+  `_is_perfect_surrogate` already keeps out of exact matchkeys. Recognised contact fields
+  (phone, email, address, date) keep their negative evidence, because they can agree after
+  normalisation. The distributed path checks only a sample, where uniqueness cannot tell a
+  row key from a real identifier, so it is unchanged. The CLI hid this by accident: the same
+  penalty raised a `TypeError` on an integer `id` and was skipped.
 - **A planner-chosen `backend="bucket"` no longer sends a Fellegi-Sunter matchkey
   onto a blocking plan the bucket scorer cannot express.** The execution planner
   writes `backend="bucket"` onto zero-config configs, and `_fs_use_bucket_route`
