@@ -39,6 +39,12 @@ Zero-config entity resolution for Python. Point it at a CSV or a table: it choos
 </div>
 
 <!-- README-callouts:start  (auto-synced from packages/python/goldenmatch/CHANGELOG.md by scripts/sync_readme_callouts.py; edit the CHANGELOG, not this block) -->
+> **v3.19.0: One row per person, and clean result tables.** A bare `goldenmatch dedupe customers.csv`
+now also writes `<run>_deduplicated.csv` -- the golden records plus the records that had no
+duplicate, one row per real-world entity -- and `result.deduplicated` returns the same.
+Golden records alone were only the people who had duplicates. Result tables no longer
+leak the pipeline's working columns, and the GoldenCheck scan announces once, on stderr.
+>
 > **v3.18.1: `gm.dedupe("customers.csv")` works with no config.** The documented zero-config
 file call -- the first Python example in the README -- raised
 `KeyError: 'Field "__placeholder__" does not exist in schema'` on 3.18.0. It now
@@ -50,12 +56,6 @@ routed per matchkey instead of a fixed 0.50 midpoint, with `u` estimated from 50
 pairs: dblp_acm F1 at the default cutoff went from 0.3758 to 0.8159. Separately, a row key
 such as `id` is no longer promoted to negative evidence, which had cost a 12-record
 zero-config dedupe three of its four duplicate groups.
->
-> **v3.17.1: The polars-free first run actually works now.** 3.17.0 claimed this and did not
-deliver it: auto-config puts negative evidence on the exact matchkey by default,
-and that path still bridged to polars, so `goldenmatch dedupe customers.csv`
-exited 3 on a default install. Verified the way it should have been the first
-time -- `pip install` into a clean polars-free venv, then the documented command.
 <!-- README-callouts:end -->
 
 ---

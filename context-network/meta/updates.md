@@ -2,6 +2,17 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-09-24 -- goldenmatch 3.19.0: one row per person, and a mint pin
+- `result.deduplicated` / `--output-deduplicated` (#3004): golden records alone were only the
+  entities that had duplicates (4 of 7 people on the README demo). A bare
+  `goldenmatch dedupe` now writes `<run>_deduplicated.csv` beside `<run>_golden.csv`. Result
+  tables drop pipeline working columns at the user-facing boundary only
+  (`core/output_tables.py`); the pipeline dict and parity tests are unchanged. Returning
+  values as entered rather than standardized is split to #3003 (memory-sensitive).
+- The GoldenCheck scan announces once, on stderr (#3001).
+- `docs_render` pins `mint@4.2.930` (#3006): 4.2.931 depends on `@mintlify/auth-edge`, which
+  is not on npm, and failed every docs PR.
+
 ## 2026-09-24 -- goldenmatch 3.18.1: the documented first Python call works
 - Writing the README first screen (#2998) found that `gm.dedupe("customers.csv")`, the first
   Python example in the README and python-api.mdx, raised `KeyError` on `__placeholder__` in
