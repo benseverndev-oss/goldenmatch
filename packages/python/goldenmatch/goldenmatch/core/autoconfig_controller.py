@@ -776,7 +776,9 @@ class AutoConfigController:
         from goldenmatch.core.autoconfig_negative_evidence import promote_negative_evidence
         _ne_df = init_sample if distributed else df  # type: ignore[assignment]
         with stage("controller_pre_promote_negative_evidence"):
-            config_v0 = promote_negative_evidence(config_v0, _ne_df, column_priors)
+            config_v0 = promote_negative_evidence(
+                config_v0, _ne_df, column_priors, full_frame=not distributed
+            )
         _diag("promote_negative_evidence done")
         config_n = config_v0
 

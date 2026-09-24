@@ -2232,6 +2232,7 @@
             "_is_exact_matchkey_field",
             "_is_in_blocking",
             "_is_in_matchkey_fields",
+            "_is_row_key",
             "_pick_scorer_for_column",
             "promote_negative_evidence"
           ],

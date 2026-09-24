@@ -65,6 +65,24 @@ def _pick_scorer_for_column(col_name: str, col_type: str) -> tuple[list[str], st
     return ([], "ensemble")
 
 
+def _is_row_key(cardinality_ratio: float, transforms: list[str], scorer: str) -> bool:
+    """True when disagreement on this column says nothing about identity.
+
+    A column with a distinct value on every row of the FULL frame never agrees
+    on any pair, so an NE penalty on it fires on every pair, true duplicates
+    included. That is the row-primary-key shape (`id`, `row_id`), the same
+    "perfectly-unique surrogate" that `autoconfig._is_perfect_surrogate` already
+    keeps out of exact matchkeys. Promoting it cost a zero-config dedupe of 12
+    obvious customer records every duplicate but one.
+
+    Limited to GENERIC columns, compared raw ([] transforms, the fallback
+    `ensemble` scorer). A recognised contact field can be raw-unique yet agree
+    after normalisation ("555-201-3344" vs "(555) 201-3344" under digits_only),
+    so its disagreement still carries signal and its NE is kept.
+    """
+    return cardinality_ratio >= 1.0 and not transforms and scorer == "ensemble"
+
+
 def _is_in_matchkey_fields(col: str, mk: MatchkeyConfig) -> bool:
     """Return True if col appears in the positive fields of this matchkey."""
     return any(f.field == col for f in mk.fields)
@@ -99,6 +117,8 @@ def promote_negative_evidence(
     config: GoldenMatchConfig,
     df: pl.DataFrame,
     column_priors: dict[str, ColumnPrior],
+    *,
+    full_frame: bool = True,
 ) -> GoldenMatchConfig:
     """Add NE fields to weighted AND exact matchkeys based on column priors.
 
@@ -119,6 +139,12 @@ def promote_negative_evidence(
         (anchor safety) doesn't apply when iterating the exact matchkey itself.
         When NE is added to an exact matchkey with threshold=None, the
         threshold is set to 0.5 to activate score-and-threshold filtering.
+
+    Row-key gate (both branches): a generic column unique on every row of
+    `df` is skipped (`_is_row_key`). Applied only when `full_frame` is True:
+    uniqueness over a SAMPLE rises toward 1.0 for every real identifier as the
+    frame grows, so a sample cannot tell a row key from an identifier. The
+    distributed path passes a sample and `full_frame=False`.
 
     Idempotent: skips columns already in the NE list for each matchkey.
 
@@ -199,6 +225,14 @@ def promote_negative_evidence(
             # branches in _pick_scorer_for_column handle the dispatch.
             col_type_hint = ""
             transforms, scorer = _pick_scorer_for_column(col, col_type_hint)
+            if full_frame and _is_row_key(cardinality_ratio, transforms, scorer):
+                logger.info(
+                    "auto-config: not promoting negative_evidence field=%s on "
+                    "matchkey=%s (unique on every row -- a row key, so "
+                    "disagreement carries no identity signal)",
+                    col, mk.name,
+                )
+                continue
 
             # FD-admitted fields scale the penalty by FD confidence (capped at the
             # default); name-admitted fields keep the default penalty.
