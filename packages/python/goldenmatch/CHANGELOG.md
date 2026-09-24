@@ -6,6 +6,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+
+- **`gm.dedupe("customers.csv")` works with no config.** The documented zero-config file
+  call -- the first Python example in the README and `python-api.mdx` -- raised
+  `KeyError: 'Field "__placeholder__" does not exist in schema'` (reproduced on 3.18.0).
+  With no `config` and no `exact`/`fuzzy`, the file API built a stub matchkey on a
+  column that never exists instead of auto-configuring the files the way
+  `goldenmatch dedupe customers.csv` does. `gm.dedupe` and `gm.dedupe_to_parquet` now
+  auto-configure (`blocking=`, `llm_scorer=` and `backend=` still apply), and
+  `_build_config` refuses to emit the stub. `gm.match` had the same fix earlier.
+
 ## [3.18.0] - 2026-09-24
 
 <!-- README-callout

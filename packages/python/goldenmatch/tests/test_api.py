@@ -585,12 +585,16 @@ class TestMatchResultHtml:
 
 
 class TestBuildConfig:
-    def test_auto_config_no_args(self):
-        """_build_config with no args creates auto placeholder."""
+    def test_no_args_refuses_instead_of_emitting_a_stub(self):
+        """_build_config with no exact/fuzzy raises rather than returning a stub.
+
+        It used to return a matchkey on a non-existent ``__placeholder__`` column,
+        which crashed the pipeline. Zero-config now auto-configures before this
+        point (``_file_dedupe_config``), so reaching it with nothing is a bug.
+        """
         from goldenmatch._api import _build_config
-        cfg = _build_config()
-        mks = cfg.get_matchkeys()
-        assert len(mks) >= 1
+        with pytest.raises(ValueError, match="exact= or fuzzy="):
+            _build_config()
 
     def test_fuzzy_auto_blocking(self):
         """_build_config with fuzzy auto-suggests blocking."""

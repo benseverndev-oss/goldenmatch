@@ -613,19 +613,10 @@ def dedupe(
     """
     from goldenmatch.core.pipeline import run_dedupe
 
-    # Build config
-    if isinstance(config, str):
-        cfg = load_config(config)
-    elif config is not None:
-        cfg = config
-    else:
-        cfg = _build_config(exact, fuzzy, blocking, threshold, llm_scorer, backend)
-
-    if backend and hasattr(cfg, "backend"):
-        cfg.backend = backend
-
-    # Build file specs
     file_specs = [(str(f), Path(f).stem) for f in files]
+    cfg = _file_dedupe_config(
+        file_specs, config, exact, fuzzy, blocking, threshold, llm_scorer, backend
+    )
 
     # Run pipeline
     result = run_dedupe(file_specs, cfg)
@@ -693,17 +684,10 @@ def dedupe_to_parquet(
 
     from goldenmatch.core.pipeline import run_dedupe
 
-    if isinstance(config, str):
-        cfg = load_config(config)
-    elif config is not None:
-        cfg = config
-    else:
-        cfg = _build_config(exact, fuzzy, blocking, threshold, False, backend)
-
-    if backend and hasattr(cfg, "backend"):
-        cfg.backend = backend
-
     file_specs = [(str(f), Path(f).stem) for f in files]
+    cfg = _file_dedupe_config(
+        file_specs, config, exact, fuzzy, blocking, threshold, False, backend
+    )
     result = run_dedupe(file_specs, cfg, output_dir=out_dir)
 
     if result.get("streaming"):
@@ -1659,6 +1643,50 @@ def evaluate(
 # ── Internal helpers ──
 
 
+def _file_dedupe_config(
+    file_specs: list[tuple[str, str]],
+    config: str | Any | None,
+    exact: list[str] | None,
+    fuzzy: dict[str, float] | None,
+    blocking: list[str] | None,
+    threshold: float | None,
+    llm_scorer: bool,
+    backend: str | None,
+) -> Any:
+    """Resolve the config for the file-based dedupe entry points.
+
+    With no ``config`` and no ``exact`` / ``fuzzy``, this is zero-config: the
+    files are auto-configured exactly as ``goldenmatch dedupe customers.csv``
+    does. That path used to fall through to ``_build_config``, which emitted a
+    stub matchkey on a non-existent ``__placeholder__`` column, so the
+    documented ``gm.dedupe("customers.csv")`` raised
+    ``KeyError: 'Field "__placeholder__" does not exist in schema'``.
+    ``match()`` got the same fix earlier; ``dedupe()`` never did.
+    """
+    from goldenmatch.config.schemas import BlockingConfig, BlockingKeyConfig, LLMScorerConfig
+
+    if isinstance(config, str):
+        cfg = load_config(config)
+    elif config is not None:
+        cfg = config
+    elif exact or fuzzy:
+        cfg = _build_config(exact, fuzzy, blocking, threshold, llm_scorer, backend)
+    else:
+        from goldenmatch.core.autoconfig import auto_configure
+
+        cfg = auto_configure(file_specs)
+        if blocking:
+            cfg.blocking = BlockingConfig(
+                keys=[BlockingKeyConfig(fields=blocking, transforms=["lowercase"])],
+            )
+        if llm_scorer:
+            cfg.llm_scorer = LLMScorerConfig(enabled=True)
+
+    if backend and hasattr(cfg, "backend"):
+        cfg.backend = backend
+    return cfg
+
+
 def _build_config(
     exact: list[str] | None = None,
     fuzzy: dict[str, float] | None = None,
@@ -1705,12 +1733,12 @@ def _build_config(
         ))
 
     if not matchkeys:
-        # Auto-config: will be handled by pipeline's auto-suggest
-        matchkeys.append(MatchkeyConfig(
-            name="auto",
-            type="exact",
-            fields=[MatchkeyField(field="__placeholder__")],
-        ))
+        # Zero-config is resolved before this point (`_file_dedupe_config`,
+        # `match`). The stub matchkey this used to emit named a column that
+        # never exists, so any caller that reached it crashed in the pipeline.
+        raise ValueError(
+            "_build_config needs exact= or fuzzy=; with neither, auto-configure instead"
+        )
 
     blocking_config = None
     if blocking:

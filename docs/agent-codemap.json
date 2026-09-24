@@ -86,6 +86,7 @@
             "_compute_refit_suggestion",
             "_detect_llm_provider",
             "_extract_stats",
+            "_file_dedupe_config",
             "_frame_columns",
             "_frame_head_dicts",
             "_frame_height",
