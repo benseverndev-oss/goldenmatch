@@ -34,8 +34,8 @@ The same in Python:
 import goldenmatch as gm
 
 result = gm.dedupe("customers.csv")
-print(result)  # DedupeResult(records=5000, clusters=847, match_rate=12.0%)
-result.golden.write_csv("deduped.csv")
+print(result)  # DedupeResult(records=12, clusters=4, match_rate=75.0%)
+result.to_csv("deduped.csv", which="deduplicated")  # one row per entity
 ```
 
 And in TypeScript:

@@ -463,7 +463,9 @@ class DedupeResult:
     postflight_report: PostflightReport | None  # v1.5.0: signals + advisories + adjustments
     native: NativeDispatchSummary | None  # v2.1.0: whether the scoring hot path used the Rust kernel or fell back
 
-    def to_csv(path, which="golden")  # Write results to CSV
+    deduplicated: pa.Table | None     # Property: one row per entity (golden + unique records)
+
+    def to_csv(path, which="golden")  # Write results to CSV; which: "golden" | "deduplicated" | "dupes" | "unique" | "all"
     match_rate: float                 # Property: percentage of dupes
     total_records: int                # Property
     total_clusters: int               # Property

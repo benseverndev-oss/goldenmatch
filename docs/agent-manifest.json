@@ -2696,6 +2696,13 @@
               "help": "Output golden records"
             },
             {
+              "name": "--output-deduplicated",
+              "type": "boolean",
+              "required": false,
+              "default": "False",
+              "help": "Output the deduplicated list: one row per entity (golden records + unique records)"
+            },
+            {
               "name": "--output-clusters",
               "type": "boolean",
               "required": false,

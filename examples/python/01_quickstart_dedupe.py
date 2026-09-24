@@ -26,8 +26,8 @@ def main(path: str) -> None:
     print(result)  # DedupeResult(records=N, clusters=M, match_rate=X%)
     out = csv.with_name(csv.stem + ".deduped.csv")
     if result.golden is not None:
-        result.golden.write_csv(out)
-        print(f"wrote golden records → {out}")
+        result.to_csv(str(out), which="deduplicated")  # one row per entity
+        print(f"wrote the deduplicated list → {out}")
     else:
         print("no clusters found (data may be already unique)")
 

@@ -492,7 +492,7 @@ result = gm.dedupe("customers.csv")
 
 # Exact + fuzzy matching
 result = gm.dedupe("customers.csv", exact=["email"], fuzzy={"name": 0.85, "zip": 0.95})
-result.golden.write_csv("deduped.csv")
+result.to_csv("deduped.csv", which="deduplicated")  # one row per entity
 print(result)  # DedupeResult(records=5000, clusters=847, match_rate=12.0%)
 
 # Match across files

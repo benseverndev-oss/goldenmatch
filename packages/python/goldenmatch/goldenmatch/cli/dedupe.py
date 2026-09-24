@@ -80,6 +80,7 @@ def dedupe_cmd(
     preview_size: int = typer.Option(10000, "--preview-size", help="Number of records for preview sample"),
     preview_random: bool = typer.Option(False, "--preview-random", help="Deprecated no-op: accepted for back-compat but not applied (preview uses the first N)."),
     output_golden: bool = typer.Option(False, "--output-golden", help="Output golden records"),
+    output_deduplicated: bool = typer.Option(False, "--output-deduplicated", help="Output the deduplicated list: one row per entity (golden records + unique records)"),
     output_clusters: bool = typer.Option(False, "--output-clusters", help="Output cluster info"),
     output_dupes: bool = typer.Option(False, "--output-dupes", help="Output duplicate records"),
     output_unique: bool = typer.Option(False, "--output-unique", help="Output unique records"),
@@ -277,6 +278,7 @@ def dedupe_cmd(
 
     if output_all:
         output_golden = True
+        output_deduplicated = True
         output_clusters = True
         output_dupes = True
         output_unique = True
@@ -291,16 +293,29 @@ def dedupe_cmd(
         and not preview
         and not merge_preview
         and not any([
-            output_golden, output_clusters, output_dupes, output_unique,
-            output_report, html_report, dashboard,
+            output_golden, output_deduplicated, output_clusters, output_dupes,
+            output_unique, output_report, html_report, dashboard,
         ])
     ):
+        # Golden records alone are only the entities that HAD duplicates (4 of
+        # the 7 people in a 12-record file with 4 duplicate groups), so the
+        # default also writes the deduplicated list -- one row per entity (#2991).
+        # Golden stays on so existing `*_golden.csv` consumers keep working.
         output_golden = True
+        output_deduplicated = True
         if not quiet:
             console.print(
-                "[dim]No output flag given -- writing golden records by default "
-                "(use --output-all / --output-dir to control, --tui to review).[/dim]"
+                "[dim]No output flag given -- writing the deduplicated list (one row per "
+                "entity) and golden records by default (use --output-all / --output-dir "
+                "to control, --tui to review).[/dim]"
             )
+
+    if output_deduplicated and not cfg.output.run_name:
+        # The pipeline names its files `<run_name>_<kind>`; fix the run name up
+        # front so the deduplicated file written below shares it.
+        from datetime import datetime as _dt
+
+        cfg.output.run_name = _dt.now().strftime("%Y%m%d_%H%M%S")
 
     # Enable auto-fix from CLI flag
     if auto_fix:
@@ -392,6 +407,22 @@ def dedupe_cmd(
         raise typer.Exit(code=3)
     if _excl_token is not None:
         _RUNTIME_EXCLUDE_COLUMNS.reset(_excl_token)
+
+    if output_deduplicated:
+        from goldenmatch.core.output_tables import deduplicated_table
+        from goldenmatch.output.writer import write_output
+
+        _dedup = deduplicated_table(
+            results.get("golden"), results.get("unique"), results.get("clusters")
+        )
+        if _dedup is not None and _dedup.num_rows:
+            write_output(
+                _dedup,
+                cfg.output.directory or cfg.output.path or ".",
+                cfg.output.run_name,
+                "deduplicated",
+                cfg.output.format or "csv",
+            )
 
     # Show AutoConfigController telemetry before the report. We only render
     # when the controller actually ran in this command (i.e., auto-config

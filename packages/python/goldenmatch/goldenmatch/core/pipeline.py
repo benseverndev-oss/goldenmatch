@@ -22,6 +22,7 @@ from goldenmatch.core.block_analyzer import analyze_blocking
 from goldenmatch.core.blocker import build_blocks
 from goldenmatch.core.ingest import apply_column_map, load_file, validate_columns
 from goldenmatch.core.matchkey import compute_matchkeys, precompute_matchkey_transforms
+from goldenmatch.core.output_tables import strip_pipeline_internals
 from goldenmatch.core.scorer import (
     find_exact_matches,
     rerank_top_pairs,
@@ -5148,7 +5149,7 @@ def _run_dedupe_pipeline(
     directory = config.output.directory or config.output.path or "."
 
     if output_golden and golden_df is not None:
-        write_output(golden_df, directory, run_name, "golden", fmt)
+        write_output(strip_pipeline_internals(golden_df), directory, run_name, "golden", fmt)
 
     if output_clusters:
         # Build clusters DataFrame
@@ -5175,10 +5176,10 @@ def _run_dedupe_pipeline(
             write_output(clusters_out, directory, run_name, "clusters", fmt)
 
     if output_dupes and len(dupes_df) > 0:
-        write_output(dupes_df, directory, run_name, "dupes", fmt)
+        write_output(strip_pipeline_internals(dupes_df), directory, run_name, "dupes", fmt)
 
     if output_unique and len(unique_df) > 0:
-        write_output(unique_df, directory, run_name, "unique", fmt)
+        write_output(strip_pipeline_internals(unique_df), directory, run_name, "unique", fmt)
 
     # ── Step 7.5: LINEAGE (always save when outputting) ──
     if output_golden or output_clusters or output_dupes:

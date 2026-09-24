@@ -97,7 +97,7 @@ def main() -> None:
     print(f"\n{result.total_clusters} canonical entities from {result.total_records} input rows")
     if result.golden is not None:
         out = Path("unified.csv")
-        result.golden.write_csv(out)
+        result.to_csv(str(out), which="deduplicated")  # one row per entity
         print(f"wrote → {out}")
 
 

@@ -663,6 +663,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `dedupe` | `--preview-size` | integer | `10000` | Number of records for preview sample |
 | `dedupe` | `--preview-random` | boolean | `False` | Deprecated no-op: accepted for back-compat but not applied (preview uses the first N). |
 | `dedupe` | `--output-golden` | boolean | `False` | Output golden records |
+| `dedupe` | `--output-deduplicated` | boolean | `False` | Output the deduplicated list: one row per entity (golden records + unique records) |
 | `dedupe` | `--output-clusters` | boolean | `False` | Output cluster info |
 | `dedupe` | `--output-dupes` | boolean | `False` | Output duplicate records |
 | `dedupe` | `--output-unique` | boolean | `False` | Output unique records |

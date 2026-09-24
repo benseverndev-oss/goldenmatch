@@ -166,6 +166,14 @@ def _to_result_table(obj: Any) -> Any:
     return obj.to_arrow()
 
 
+def _user_table(obj: Any) -> Any:
+    """A pipeline result frame as the user sees it: a pa.Table without the
+    pipeline's working columns (#2991). See ``core/output_tables``."""
+    from goldenmatch.core.output_tables import strip_pipeline_internals
+
+    return strip_pipeline_internals(_to_result_table(obj))
+
+
 def _frame_height(obj: Any) -> int:
     return obj.num_rows if hasattr(obj, "num_rows") else obj.height
 
@@ -385,15 +393,35 @@ class DedupeResult:
             value = []
         self.__dict__["_scored_pairs"] = value
 
+    @property
+    def deduplicated(self) -> Any:
+        """One row per real-world entity: the golden records plus the unique ones.
+
+        ``golden`` alone holds only the entities that had duplicates; this is the
+        record list with the duplicates removed. Every row carries
+        ``__cluster_id__``; values are post-standardization. (#2991)
+        """
+        from goldenmatch.core.output_tables import deduplicated_table
+
+        return deduplicated_table(self.golden, self.unique, self.clusters)
+
     def to_csv(self, path: str, which: str = "golden") -> Path:
         """Write results to CSV.
 
         Args:
             path: Output file path.
-            which: Which result to write: "golden", "dupes", "unique", or "all".
+            which: Which result to write: "golden", "deduplicated", "dupes",
+                "unique", or "all" (all four, as ``<stem>_<which>.csv``).
         """
+        valid = ("golden", "deduplicated", "dupes", "unique", "all")
+        if which not in valid:
+            raise ValueError(f"which must be one of {valid}, got {which!r}")
         p = Path(path)
-        if which == "golden" and self.golden is not None:
+        if which == "deduplicated":
+            dedup = self.deduplicated
+            if dedup is not None:
+                _frame_write_csv(dedup, p)
+        elif which == "golden" and self.golden is not None:
             _frame_write_csv(self.golden, p)
         elif which == "dupes" and self.dupes is not None:
             _frame_write_csv(self.dupes, p)
@@ -404,6 +432,9 @@ class DedupeResult:
             parent = p.parent
             if self.golden is not None:
                 _frame_write_csv(self.golden, parent / f"{stem}_golden.csv")
+            dedup = self.deduplicated
+            if dedup is not None:
+                _frame_write_csv(dedup, parent / f"{stem}_deduplicated.csv")
             if self.dupes is not None:
                 _frame_write_csv(self.dupes, parent / f"{stem}_dupes.csv")
             if self.unique is not None:
@@ -623,10 +654,10 @@ def dedupe(
 
     _mem = result.get("memory_stats")
     return DedupeResult(
-        golden=_to_result_table(result.get("golden")),
+        golden=_user_table(result.get("golden")),
         clusters=result.get("clusters", {}),
-        dupes=_to_result_table(result.get("dupes")),
-        unique=_to_result_table(result.get("unique")),
+        dupes=_user_table(result.get("dupes")),
+        unique=_user_table(result.get("unique")),
         stats=_extract_stats(result),
         # #2417: `scored_pairs` is None on the B2c FS path; the Arrow table
         # is the backing and the property materializes on first read.
@@ -702,9 +733,9 @@ def dedupe_to_parquet(
     unique_path = _os.path.join(out_dir, "unique.parquet")
     dupes_path = _os.path.join(out_dir, "dupes.parquet")
     golden_path = _os.path.join(out_dir, "golden.parquet")
-    unique = result.get("unique")
-    dupes = result.get("dupes")
-    golden = result.get("golden")
+    unique = _user_table(result.get("unique"))
+    dupes = _user_table(result.get("dupes"))
+    golden = _user_table(result.get("golden"))
     unique_count = _frame_write_parquet(unique, unique_path) if unique is not None else 0
     dupes_count = _frame_write_parquet(dupes, dupes_path) if dupes is not None else 0
     # Only write golden.parquet when it actually has rows (mirrors the streaming
@@ -989,10 +1020,10 @@ def dedupe_df(
     warn_if_slow_path(_native, logger)
 
     dedupe_result = DedupeResult(
-        golden=_to_result_table(result.get("golden")),
+        golden=_user_table(result.get("golden")),
         clusters=result.get("clusters", {}),
-        dupes=_to_result_table(result.get("dupes")),
-        unique=_to_result_table(result.get("unique")),
+        dupes=_user_table(result.get("dupes")),
+        unique=_user_table(result.get("unique")),
         stats=_extract_stats(result),
         # #2417: `scored_pairs` is None on the B2c FS path; the Arrow table
         # is the backing and the property materializes on first read.
