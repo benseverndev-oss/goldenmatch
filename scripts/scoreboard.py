@@ -30,6 +30,7 @@ from pathlib import Path
 from suite_download_badges import (
     NPM_PACKAGES,
     PYPI_PACKAGES,
+    _fetch_json,
     _Throttled,
     humanize,
     npm_last_month,
@@ -42,6 +43,22 @@ _DATA = _ROOT / "context-network" / "planning" / "scoreboard.jsonl"
 _DOC = _ROOT / "context-network" / "planning" / "scoreboard.md"
 # Accounts that are the maintainer, not "someone who reached for it".
 _MAINTAINERS = {"benzsevern", "benzsevern-mjh"}
+# Accounts whose issues/PRs promote their own product rather than use ours
+# (an MCP-marketplace "live badge", a docs-hosting tool, a security-scan badge).
+# Triaged by hand: add an account here when its filing is marketing, never to
+# hide a real complaint.
+_PROMO_ACCOUNTS = {"healthai-hq", "codeboost-tr", "OyaAIProd"}
+
+# The package a stranger actually installs. The suite totals sum ~20 packages
+# and are dominated by CI -- this repo's own lanes `pip install` from PyPI every
+# night -- so they read ~100x larger than human use. Measured 2026-09-24:
+# suite 127k/30d vs goldenmatch 1.2k/30d, of which macOS+Windows was ~130.
+_CORE_PKG = "goldenmatch"
+# pypistats reports the OS per download. macOS + Windows is the best available
+# proxy for a person installing on a laptop; Linux is overwhelmingly CI and
+# containers, and "null" is installers that send no OS at all.
+_DESKTOP_OS = ("Darwin", "Windows")
+_WINDOW_DAYS = 30
 
 
 def _gh(url: str) -> dict | list | None:
@@ -75,6 +92,56 @@ def _github_metrics() -> dict:
         "stars": repo.get("stargazers_count"),
         "forks": repo.get("forks_count"),
         "open_issues_nonmaintainer": ext,
+        **_stranger_inbound(),
+    }
+
+
+def _stranger_inbound() -> dict:
+    """Every issue AND PR, open or closed, ever filed by a genuine outsider.
+
+    The roadmap's real gate is ">=1 genuine inbound issue/PR from a stranger".
+    `open_issues_nonmaintainer` cannot answer it: it drops closed items and PRs,
+    and counts promo bots. The maintainers and the two first-party bots are
+    excluded in the query so the result fits one page; other bots and promo
+    accounts are filtered here. The numbers are kept so the count is auditable.
+    `None` means the search failed -- "not measured", never 0.
+    """
+    excluded = [*sorted(_MAINTAINERS), "app/dependabot", "app/github-actions"]
+    q = f"repo:{_REPO}" + "".join(f"+-author:{a}" for a in excluded)
+    res = _gh(f"https://api.github.com/search/issues?q={q}&per_page=100")
+    if not isinstance(res, dict) or "items" not in res:
+        return {"stranger_inbound_total": None, "stranger_inbound_numbers": None}
+    nums = sorted(
+        it["number"]
+        for it in res["items"]
+        if (it.get("user") or {}).get("type") == "User"
+        and (it.get("user") or {}).get("login") not in _PROMO_ACCOUNTS
+    )
+    return {"stranger_inbound_total": len(nums), "stranger_inbound_numbers": nums}
+
+
+def _core_downloads() -> dict:
+    """`goldenmatch`'s own last-30-day downloads, mirrors excluded, and the
+    macOS + Windows share of them.
+
+    One pypistats `system` call answers both: it is per-day, per-OS and already
+    excludes mirrors (its per-OS sum equals `overall?mirrors=false` exactly).
+    The window is the latest 30 days pypistats has, not "today - 30", because
+    pypistats lags a day or two. A throttled fetch is `None` for both.
+    """
+    try:
+        data = _fetch_json(f"https://pypistats.org/api/packages/{_CORE_PKG}/system")
+    except _Throttled:
+        return {"core_pypi_30d": None, "core_desktop_30d": None}
+    rows = (data or {}).get("data") or []
+    if not rows:
+        return {"core_pypi_30d": None, "core_desktop_30d": None}
+    last = max(datetime.date.fromisoformat(r["date"]) for r in rows)
+    start = last - datetime.timedelta(days=_WINDOW_DAYS - 1)
+    window = [r for r in rows if datetime.date.fromisoformat(r["date"]) >= start]
+    return {
+        "core_pypi_30d": sum(r["downloads"] for r in window),
+        "core_desktop_30d": sum(r["downloads"] for r in window if r["category"] in _DESKTOP_OS),
     }
 
 
@@ -119,6 +186,7 @@ def _load_ttfs(path: str | None) -> dict:
 def _collect(ttfs_json: str | None = None) -> dict:
     row: dict = {"date": datetime.date.today().isoformat()}
     row.update(_github_metrics())
+    row.update(_core_downloads())
     row["pypi_30d"] = _download_total(PYPI_PACKAGES, pypi_last_month)
     row["npm_30d"] = _download_total(NPM_PACKAGES, npm_last_month)
     row.update(_load_ttfs(ttfs_json))
@@ -192,6 +260,20 @@ def _ttfs_history_cell(row: dict) -> str:
     return f"{total:.1f}s" if total is not None else "—"
 
 
+def _cnt(v) -> str:
+    """A count where `None` (not measured: a row from before the field existed,
+    or a failed search) must read differently from a measured 0."""
+    return "—" if v is None else str(v)
+
+
+def _nums(nums) -> str:
+    if nums is None:
+        return "not measured"
+    if not nums:
+        return "none"
+    return ", ".join(f"#{n}" for n in nums)
+
+
 def _render(rows: list[dict]) -> str:
     if not rows:
         return "# North Star scoreboard\n\n_No data yet — run `python scripts/scoreboard.py`._\n"
@@ -214,25 +296,34 @@ def _render(rows: list[dict]) -> str:
     lines = [
         "# North Star scoreboard",
         "",
-        "**GENERATED — do not hand-edit.** `python scripts/scoreboard.py` (weekly via",
+        "**GENERATED — do not hand-edit.** `python scripts/scoreboard.py` (nightly via",
         "`.github/workflows/scoreboard.yml`). The falsifiable adoption metric behind",
         "[north-star-roadmap.md](./north-star-roadmap.md): *is GoldenMatch becoming the",
         "tool developers reach for by default?* Trend > snapshot.",
         "",
-        f"**Latest: {cur['date']}** (vs previous snapshot)",
+        f"**Latest: {cur['date']}** (change vs the previous snapshot)",
         "",
-        "| Signal | Now | WoW | North Star reading |",
+        "| Signal | Now | Change | North Star reading |",
         "|---|---|---|---|",
+        f"| **Stranger issues + PRs, ever** | {_cnt(cur.get('stranger_inbound_total'))} | {_delta(cur.get('stranger_inbound_total'), prev.get('stranger_inbound_total'))} | someone reached for it† |",
+        f"| **`goldenmatch` desktop downloads (30d)** | {dl(cur.get('core_desktop_30d'))} | {dl_delta('core_desktop_30d')} | people installing it§ |",
+        f"| `goldenmatch` downloads (30d) | {dl(cur.get('core_pypi_30d'))} | {dl_delta('core_pypi_30d')} | reach, mostly CI§ |",
         f"| GitHub stars | {cur.get('stars', '—')} | {_delta(cur.get('stars'), prev.get('stars'))} | discovery momentum |",
         f"| Forks | {cur.get('forks', '—')} | {_delta(cur.get('forks'), prev.get('forks'))} | intent-to-use |",
-        f"| PyPI downloads (30d, suite) | {dl(cur.get('pypi_30d'))} | {dl_delta('pypi_30d')} | actual reach |",
-        f"| npm downloads (30d, suite) | {dl(cur.get('npm_30d'))} | {dl_delta('npm_30d')} | actual reach (TS) |",
-        f'| Open issues, non-maintainer | {cur.get("open_issues_nonmaintainer", "—")} | {_delta(cur.get("open_issues_nonmaintainer"), prev.get("open_issues_nonmaintainer"))} | "someone reached for it"† |',
         f"| Time-to-first-success | {_ttfs_cell(cur)} | {_ttfs_delta(cur, prev)} | zero-config friction‡ |",
+        f"| PyPI downloads (30d, whole suite) | {dl(cur.get('pypi_30d'))} | {dl_delta('pypi_30d')} | CI-dominated, not adoption§ |",
+        f"| npm downloads (30d, whole suite) | {dl(cur.get('npm_30d'))} | {dl_delta('npm_30d')} | CI-dominated, not adoption§ |",
+        f"| Open issues, non-maintainer | {cur.get('open_issues_nonmaintainer', '—')} | {_delta(cur.get('open_issues_nonmaintainer'), prev.get('open_issues_nonmaintainer'))} | raw, includes promo accounts |",
         "",
-        "† Raw count — still needs human triage to exclude badge-marketing bots",
-        '(e.g. MCP-marketplace "live badge" issues). The roadmap\'s true gate is **≥1',
-        "GENUINE inbound issue from a stranger**; a bot filing a promo badge does not count.",
+        "† Issues and PRs, open or closed, from accounts that are not the maintainer,",
+        "not a bot, and not a triaged promo account (`_PROMO_ACCOUNTS`: marketplace and",
+        "security-scan badges, a docs-hosting pitch). The roadmap's gate is **≥1 genuine inbound",
+        f"issue/PR from a stranger**. Counted now: {_nums(cur.get('stranger_inbound_numbers'))}.",
+        "",
+        "§ Downloads are pypistats, mirrors excluded. Linux is overwhelmingly CI,",
+        "including this repo's own nightly lanes, so the suite totals read ~100x larger",
+        "than human use. **macOS + Windows downloads of `goldenmatch` itself** are the",
+        "best available proxy for a person installing it.",
         "",
         "‡ `pip install goldenmatch && goldenmatch dedupe customers.csv` in a clean",
         "container, from **PyPI** — so it tracks the last RELEASE, not `main`. Install",
@@ -243,21 +334,23 @@ def _render(rows: list[dict]) -> str:
         "",
         "## History",
         "",
-        "| Date | Stars | Forks | PyPI 30d | npm 30d | Ext. issues | TTFS |",
-        "|---|---|---|---|---|---|---|",
+        "| Date | Strangers | GM desktop 30d | GM 30d | Stars | Forks | Suite PyPI 30d | Suite npm 30d | TTFS |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for r in rows[-16:][::-1]:
         lines.append(
-            f"| {r['date']} | {r.get('stars', '—')} | {r.get('forks', '—')} | "
-            f"{dl(r.get('pypi_30d'))} | {dl(r.get('npm_30d'))} | "
-            f"{r.get('open_issues_nonmaintainer', '—')} | {_ttfs_history_cell(r)} |"
+            f"| {r['date']} | {_cnt(r.get('stranger_inbound_total'))} | "
+            f"{dl(r.get('core_desktop_30d'))} | {dl(r.get('core_pypi_30d'))} | "
+            f"{r.get('stars', '—')} | {r.get('forks', '—')} | "
+            f"{dl(r.get('pypi_30d'))} | {dl(r.get('npm_30d'))} | {_ttfs_history_cell(r)} |"
         )
     lines += [
         "",
         "## The gates (from the roadmap)",
         "",
-        "- **Stars velocity + weekly downloads trend UP over a rolling 4-week window.**",
-        "- **≥1 genuine inbound issue/PR from a stranger** (not a badge bot).",
+        "- **Stars velocity + `goldenmatch` desktop downloads trend UP over a rolling",
+        "  4-week window.** The suite totals are not a gate: CI moves them, people don't.",
+        "- **≥1 genuine inbound issue/PR from a stranger** (the Strangers column).",
         "- **Time-to-first-success trends DOWN**, and never records a FAILED probe on a",
         "  released version — a stranger's first run has to work before anything else",
         "  on this board can matter.",

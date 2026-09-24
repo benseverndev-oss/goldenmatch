@@ -1,24 +1,33 @@
 # North Star scoreboard
 
-**GENERATED — do not hand-edit.** `python scripts/scoreboard.py` (weekly via
+**GENERATED — do not hand-edit.** `python scripts/scoreboard.py` (nightly via
 `.github/workflows/scoreboard.yml`). The falsifiable adoption metric behind
 [north-star-roadmap.md](./north-star-roadmap.md): *is GoldenMatch becoming the
 tool developers reach for by default?* Trend > snapshot.
 
-**Latest: 2026-09-23** (vs previous snapshot)
+**Latest: 2026-09-23** (change vs the previous snapshot)
 
-| Signal | Now | WoW | North Star reading |
+| Signal | Now | Change | North Star reading |
 |---|---|---|---|
+| **Stranger issues + PRs, ever** | — | — | someone reached for it† |
+| **`goldenmatch` desktop downloads (30d)** | — | — | people installing it§ |
+| `goldenmatch` downloads (30d) | — | — | reach, mostly CI§ |
 | GitHub stars | 133 | 133 (▬0) | discovery momentum |
 | Forks | 15 | 15 (▬0) | intent-to-use |
-| PyPI downloads (30d, suite) | — | — | actual reach |
-| npm downloads (30d, suite) | 1.4k | 1.4k (▬0) | actual reach (TS) |
-| Open issues, non-maintainer | 1 | 1 (▬0) | "someone reached for it"† |
 | Time-to-first-success | 17.3s · F1 1.00 | ▼-2.8s | zero-config friction‡ |
+| PyPI downloads (30d, whole suite) | — | — | CI-dominated, not adoption§ |
+| npm downloads (30d, whole suite) | 1.4k | 1.4k (▬0) | CI-dominated, not adoption§ |
+| Open issues, non-maintainer | 1 | 1 (▬0) | raw, includes promo accounts |
 
-† Raw count — still needs human triage to exclude badge-marketing bots
-(e.g. MCP-marketplace "live badge" issues). The roadmap's true gate is **≥1
-GENUINE inbound issue from a stranger**; a bot filing a promo badge does not count.
+† Issues and PRs, open or closed, from accounts that are not the maintainer,
+not a bot, and not a triaged promo account (`_PROMO_ACCOUNTS`: marketplace and
+security-scan badges, a docs-hosting pitch). The roadmap's gate is **≥1 genuine inbound
+issue/PR from a stranger**. Counted now: not measured.
+
+§ Downloads are pypistats, mirrors excluded. Linux is overwhelmingly CI,
+including this repo's own nightly lanes, so the suite totals read ~100x larger
+than human use. **macOS + Windows downloads of `goldenmatch` itself** are the
+best available proxy for a person installing it.
 
 ‡ `pip install goldenmatch && goldenmatch dedupe customers.csv` in a clean
 container, from **PyPI** — so it tracks the last RELEASE, not `main`. Install
@@ -29,29 +38,30 @@ the probe itself did not run. The two are never merged.
 
 ## History
 
-| Date | Stars | Forks | PyPI 30d | npm 30d | Ext. issues | TTFS |
-|---|---|---|---|---|---|---|
-| 2026-09-23 | 133 | 15 | — | 1.4k | 1 | 17.3s |
-| 2026-09-22 | 133 | 15 | — | 1.4k | 1 | 20.1s |
-| 2026-09-21 | 132 | 15 | 43.3k | 1.4k | 1 | 25.4s |
-| 2026-09-20 | 132 | 15 | — | 1.5k | 1 | 23.4s |
-| 2026-09-19 | 132 | 15 | — | 1.5k | 1 | 16.0s |
-| 2026-09-18 | 132 | 14 | — | 1.6k | 1 | 18.7s |
-| 2026-09-17 | 132 | 14 | — | 1.6k | 1 | 20.3s |
-| 2026-09-16 | 131 | 14 | — | 3.0k | 1 | 24.3s |
-| 2026-09-15 | 131 | 14 | — | 3.0k | 1 | 19.6s |
-| 2026-09-14 | 131 | 14 | — | 3.0k | 1 | 20.7s |
-| 2026-09-13 | 131 | 13 | 87.7k | 3.0k | 1 | 18.6s |
-| 2026-09-12 | 131 | 13 | — | 3.0k | 1 | 20.2s |
-| 2026-09-11 | 131 | 13 | — | 3.1k | 1 | 17.9s |
-| 2026-09-10 | 131 | 13 | — | 3.1k | 1 | 19.3s |
-| 2026-09-09 | 131 | 13 | 127.2k | 3.2k | 1 | 19.1s |
-| 2026-09-08 | 131 | 13 | — | 3.2k | 1 | 16.5s |
+| Date | Strangers | GM desktop 30d | GM 30d | Stars | Forks | Suite PyPI 30d | Suite npm 30d | TTFS |
+|---|---|---|---|---|---|---|---|---|
+| 2026-09-23 | — | — | — | 133 | 15 | — | 1.4k | 17.3s |
+| 2026-09-22 | — | — | — | 133 | 15 | — | 1.4k | 20.1s |
+| 2026-09-21 | — | — | — | 132 | 15 | 43.3k | 1.4k | 25.4s |
+| 2026-09-20 | — | — | — | 132 | 15 | — | 1.5k | 23.4s |
+| 2026-09-19 | — | — | — | 132 | 15 | — | 1.5k | 16.0s |
+| 2026-09-18 | — | — | — | 132 | 14 | — | 1.6k | 18.7s |
+| 2026-09-17 | — | — | — | 132 | 14 | — | 1.6k | 20.3s |
+| 2026-09-16 | — | — | — | 131 | 14 | — | 3.0k | 24.3s |
+| 2026-09-15 | — | — | — | 131 | 14 | — | 3.0k | 19.6s |
+| 2026-09-14 | — | — | — | 131 | 14 | — | 3.0k | 20.7s |
+| 2026-09-13 | — | — | — | 131 | 13 | 87.7k | 3.0k | 18.6s |
+| 2026-09-12 | — | — | — | 131 | 13 | — | 3.0k | 20.2s |
+| 2026-09-11 | — | — | — | 131 | 13 | — | 3.1k | 17.9s |
+| 2026-09-10 | — | — | — | 131 | 13 | — | 3.1k | 19.3s |
+| 2026-09-09 | — | — | — | 131 | 13 | 127.2k | 3.2k | 19.1s |
+| 2026-09-08 | — | — | — | 131 | 13 | — | 3.2k | 16.5s |
 
 ## The gates (from the roadmap)
 
-- **Stars velocity + weekly downloads trend UP over a rolling 4-week window.**
-- **≥1 genuine inbound issue/PR from a stranger** (not a badge bot).
+- **Stars velocity + `goldenmatch` desktop downloads trend UP over a rolling
+  4-week window.** The suite totals are not a gate: CI moves them, people don't.
+- **≥1 genuine inbound issue/PR from a stranger** (the Strangers column).
 - **Time-to-first-success trends DOWN**, and never records a FAILED probe on a
   released version — a stranger's first run has to work before anything else
   on this board can matter.
