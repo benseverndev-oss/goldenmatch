@@ -17,11 +17,19 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping, Sequence
+from importlib.metadata import version as distribution_version
 from typing import Any, Protocol, runtime_checkable
 
 from goldenmatch._polars_lazy import pl
 
 _VALID_FRAME_BACKENDS = ("polars", "arrow")
+
+if int(distribution_version("pyarrow").partition(".")[0]) >= 25:
+    _ARROW_SORT_KEY_SUFFIX = ("ascending", "at_start")
+    _ARROW_SORT_OPTIONS: dict[str, str] = {}
+else:
+    _ARROW_SORT_KEY_SUFFIX = ("ascending",)
+    _ARROW_SORT_OPTIONS = {"null_placement": "at_start"}
 
 
 def resolve_frame_backend() -> str:
@@ -112,7 +120,7 @@ class Frame(Protocol):
     # - Join row ORDER is NOT part of any join op's contract; callers that need
     #   an order sort explicitly. Null keys never match (both engines' default).
     # - `sort` is stable, ascending, nulls FIRST (Polars' default; the Arrow
-    #   backend passes null_placement="at_start" to match).
+    #   backend explicitly requests nulls first to match).
     # - `partition_by_key` assumes the frame is ALREADY key-sorted (its one
     #   engine call site sorts first) and yields groups in encounter order.
     # - `filter_mask` drops null-mask rows (both engines' default).
@@ -1283,8 +1291,8 @@ class ArrowFrame:
         # at_end -- a pinned divergence).
         idx = pc.sort_indices(
             self._tbl,
-            sort_keys=[(k, "ascending") for k in keys],
-            null_placement="at_start",
+            sort_keys=[(k, *_ARROW_SORT_KEY_SUFFIX) for k in keys],
+            **_ARROW_SORT_OPTIONS,
         )
         return ArrowFrame(self._tbl.take(idx))
 

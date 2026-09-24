@@ -91,6 +91,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   is a weighted threshold (or a caller-supplied one) to move, and says why when it
   declines. Weighted matchkeys are unchanged. On MusicBrainz-20K zero-config
   `dedupe_df` (with the bucket-route fix applied) went from F1 0.176 to 0.475.
+- **`ArrowFrame.sort` no longer emits PyArrow 25's deprecated global
+  `null_placement` `FutureWarning`.** PyArrow 25+ now receives nulls-first placement
+  per sort key, while older supported releases retain their compatible call form (#2992).
 
 ## [3.17.1] - 2026-08-31
 
