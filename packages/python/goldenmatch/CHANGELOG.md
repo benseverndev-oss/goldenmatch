@@ -6,6 +6,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+
+- **The GoldenCheck quality scan announces once, on stderr.** Every auto-config iteration
+  runs the pipeline on a sample, and each run printed "GoldenCheck: scanning data
+  quality..." to stdout: six times for one `gm.dedupe("customers.csv")` on a 12-row file
+  when goldencheck and polars are installed, as they are in a `golden-suite` install.
+  Sample runs are now silent (fixes still apply, so the sample profile is unchanged), and
+  the real run's single announcement goes to stderr. (#2997)
+
 ## [3.18.1] - 2026-09-24
 
 <!-- README-callout

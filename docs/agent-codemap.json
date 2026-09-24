@@ -2074,6 +2074,7 @@
             "_identify_failing_subprofile",
             "_pick_stratification_key",
             "_should_measure_blocking",
+            "_silence_quality_announcement",
             "_stratified_sample",
             "_zero_label_commit_enabled",
             "resolve_planning_effort"
