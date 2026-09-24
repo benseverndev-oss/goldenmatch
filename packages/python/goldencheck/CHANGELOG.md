@@ -4,6 +4,15 @@ All notable changes to GoldenCheck will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Sorting a column no longer emits pyarrow 25's `null_placement` `FutureWarning`.**
+  `ArrowColumn.sort` and `is_sorted` called `pc.sort_indices(arr, null_placement=...)`,
+  which builds `SortOptions`, whose global `null_placement` pyarrow 25 deprecated. They now
+  use `pc.array_sort_indices`, whose `ArraySortOptions` keeps it, across the supported
+  `pyarrow>=14` range; ordering is unchanged (ascending, nulls first, stable). goldenmatch
+  fixed its own copy in #2993; this was the one a golden-suite install still printed. (#2992)
+
 ## [3.5.0] - 2026-08-15
 
 ### Fixed
