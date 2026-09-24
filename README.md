@@ -47,6 +47,13 @@ Zero-config matching that **beats expert-tuned Splink head-to-head on messy cust
 <p align="center"><sub><em>Pair drilldown in the web workbench: cluster members, field-level diff, and a one-line NL explanation per pair. <code>pip install goldenmatch[web]</code> then <code>goldenmatch serve-ui &lt;project&gt;</code>. <a href="https://github.com/benseverndev-oss/goldenmatch/wiki/Web-UI">More screenshots →</a></em></sub></p>
 
 <!-- README-callouts:start  (auto-synced from packages/python/goldenmatch/CHANGELOG.md by scripts/sync_readme_callouts.py; edit the CHANGELOG, not this block) -->
+> **v3.18.0: Fellegi-Sunter places its link cutoff from the trained model, and zero-config stops
+letting an `id` column veto matches.** The linear link cutoff is now an evidence-bits rule
+routed per matchkey instead of a fixed 0.50 midpoint, with `u` estimated from 50,000 random
+pairs: dblp_acm F1 at the default cutoff went from 0.3758 to 0.8159. Separately, a row key
+such as `id` is no longer promoted to negative evidence, which had cost a 12-record
+zero-config dedupe three of its four duplicate groups.
+>
 > **v3.17.1: The polars-free first run actually works now.** 3.17.0 claimed this and did not
 deliver it: auto-config puts negative evidence on the exact matchkey by default,
 and that path still bridged to polars, so `goldenmatch dedupe customers.csv`
@@ -60,15 +67,6 @@ produced since polars became an optional extra. Three separate polars imports on
 the zero-config path (auto-config ingest, the Arrow lane's preflight decline, and
 the csv writer) are gone, with polars' exact csv bytes reproduced and
 parity-pinned.
->
-> **v3.13.0: Fellegi-Sunter training runs distributed on Spark.** The E-step reads only the
-comparison vector, so identical vectors collapse to one counted row and the whole
-step becomes a Spark `GROUP BY` over agreement patterns -- the cluster counts, the
-driver only fits. Training cost tracks DISTINCT vectors (bounded by
-`prod(levels + 1)`), not pairs: 1M -> 5M rows grew candidate pairs 5.00x and the
-distributed counting stage 5.25x, while distinct patterns grew 3.0% (433 -> 446)
-and driver-side EM stayed at 0.01s. Runs on jar-only executors via
-`goldenmatch-spark`, off the same Rust kernel every other surface uses.
 <!-- README-callouts:end -->
 
 ---

@@ -6,6 +6,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.18.0] - 2026-09-24
+
+<!-- README-callout
+**Fellegi-Sunter places its link cutoff from the trained model, and zero-config stops
+letting an `id` column veto matches.** The linear link cutoff is now an evidence-bits rule
+routed per matchkey instead of a fixed 0.50 midpoint, with `u` estimated from 50,000 random
+pairs: dblp_acm F1 at the default cutoff went from 0.3758 to 0.8159. Separately, a row key
+such as `id` is no longer promoted to negative evidence, which had cost a 12-record
+zero-config dedupe three of its four duplicate groups.
+-->
+
 ### Added
 
 - **Probabilistic (FS) matchkeys can pin how the linear link cutoff is placed, as an
@@ -29,6 +40,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `EMResult` gains `training_score_histogram`: the EM training sample's linear-score
   histogram, read by the `otsu` rule and by `cut_diagnostics`. Saved FS model JSON files
   written before this change carry no such key and still load -- the field is `None`.
+- **An opt-in Fellegi-Sunter field-dependence correction, off by default.**
+  `GOLDENMATCH_FS_FIELD_DEPENDENCE` (default off; `1`/`true`/`on`/`yes`/`enabled` turns it
+  on) makes EM estimate, per correlated comparison-field pair, how much the two fields
+  co-agree at their top level beyond independence, and subtracts those bits from pairs that
+  agree on both. At most 3 field pairs are corrected, each only when its excess is at least
+  0.5 bits. With it on, the subtracted amount is the net double-count, non-match lift minus
+  match lift, weighted by EM's posterior; `GOLDENMATCH_FS_FD_CLASSES` (default `both`) set to
+  `nonmatch` subtracts the non-match lift alone. With the flag unset nothing is estimated and
+  output is unchanged. Measured with each arm at its own best evidence cut, the correction
+  ties on person and ncvr_synthetic and loses on historical_50k (0.8186 baseline vs 0.8124),
+  household_hardneg and cotenant_hardneg, which is why it stays off (ADR 0066). A model with
+  corrections is scored on the Python route, because the native kernel cannot apply them;
+  the corrections are saved in FS model JSON as `joint_corrections`.
+  `GOLDENMATCH_FS_FD_PROBE=1` logs how many near-cut pairs each correction reaches. When the
+  flag is on and nothing is corrected, a warning now says why. (#2914, #2915, #2918, #2919,
+  #2927)
+- **`GOLDENMATCH_FS_TF_CLAMP` overrides the 10-bit clamp on the FS term-frequency
+  adjustment.** Unset keeps 10 bits; empty, non-numeric and non-positive values also count as
+  unset. The native kernel carries its own fixed clamp, so any override, including `10`,
+  scores TF fields on the numpy route instead. It is a measurement knob: lowering the clamp
+  moved historical_50k's TF regression from -0.0116 (clamp 10) to +0.0058 (clamp 3), while
+  cotenant_hardneg and household_hardneg did not move at any clamp. TF adjustment itself
+  stays off by default. (#2923)
+- **`GOLDENMATCH_FS_SIGNATURE_PRUNE` prunes multi-pass FS candidate pairs by which blocking
+  passes they co-fire in, off by default.** `dominant` (also `1`/`true`/`on`/`yes`) drops
+  pairs that fire only one pass group when that group fires on at least 30% of candidates;
+  `multi` keeps only pairs that fire two or more groups. Passes whose co-firing phi is at
+  least 0.2 are merged into one group. EM trains on the pruned sample, and scored pairs are
+  filtered on the three dedupe bucket routes; other routes log that they declined. A pruned
+  model is never written to `model_path`. On the full panel `dominant` gained +0.0063 on
+  historical_50k and tied elsewhere, and `multi` lost 0.0120, so it stays off. (#2929)
 
 ### Changed
 
@@ -45,6 +87,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   febrl3 +0.0038 and febrl4 +0.0002. Spark-tier cutoffs stay unrouted for now: the Spark scorer
   compares a posterior against the linear-scale cutoff, and routing there waits for its own
   measurement.
+- **FS estimates `u` from 50,000 random pairs and places the linear link cutoff by evidence
+  bits, by default.** Blocked EM training, counted EM and label-anchored m estimation now draw
+  `u` from `min(5 * n_sample_pairs, 50000)` random pairs, 50,000 at the default
+  `n_sample_pairs=10000`, where it was `min(n_sample_pairs, 5000)`. Exact title and author
+  agreement never occurs in 5,000 random bibliographic pairs, so its `u` sat on the smoothing
+  floor and its agreement weight overtook the exact level's. `GOLDENMATCH_FS_U_PAIRS` sets the
+  budget outright (`5000` restores the old one; `0` or unset means the default). Unblocked
+  `train_em`, which trains m on the same random pairs, keeps the old budget. The linear link
+  cutoff now defaults to the `prior_mid` rule, linking at
+  `W >= max(log2((1-lambda)/lambda), midpoint, 0)` instead of the fixed 0.50 midpoint;
+  `GOLDENMATCH_FS_LINEAR_CUT=off` restores the midpoint. A rule-derived cutoff reports source
+  `evidence_rule`. With both changes, at the default cutoff dblp_acm F1 went 0.3758 to
+  0.8159 and ncvr_synthetic 0.9976 to 0.9990. The larger sample alone took dblp_scholar's
+  best F1 over the evidence cuts from 0.4213 to 0.5050, and `prior_mid` alone took
+  amazon_google from 0.0217 to 0.0475. The TypeScript port still applies the fixed
+  midpoint. (#2939)
+- **Auto-splitting an oversized cluster now cuts every tied weakest edge, and the result no
+  longer depends on pair order.** The MST splitter sorted tied scores in dict insertion
+  order, which follows Python's per-process string hashing, so the same pairs could split
+  differently from run to run (dblp_scholar: 27,125 vs 27,035 predicted pairs under two
+  `PYTHONHASHSEED` values). Ties are now ordered by endpoint, and by default every spanning-tree
+  edge within 1e-9 of the weakest is cut at once; a component whose edges all tie still loses
+  only one edge, so a block of exact duplicates is not shattered.
+  `GOLDENMATCH_CLUSTER_SPLIT_TIES` (default `level`) set to `single` cuts one edge. On the
+  panel it never scored lower: historical_50k F1 0.8274 to 0.8386 and dblp_scholar 0.3757 to
+  0.4213 at the default cutoff, with the other eight partitions unchanged. The pipeline
+  splitter, `split_oversized_cluster`, the Rust core, `goldenmatch-native` 0.2.2 (new symbol
+  `mst_split_components_level`), wasm and TypeScript `buildClusters` (`splitTies`, default
+  `"level"`) apply the same rule. An older native wheel falls back to the Python level cut.
+  (#2935, #2936, #2938)
+- **Zero-config blocking on bibliographic data compounds the year onto the exact-key pick.**
+  When auto-config picked a high-cardinality exact key such as the derived title key and a
+  year column was also eligible, it used the key alone. On bibliographic data it now tries
+  the key plus year and keeps the compound when the blocks shrink. On DBLP-ACM candidates went
+  from 33,563 to 5,749 with blocking recall unchanged at 0.9717. (#2875)
+- **Identity cold loads use 38% less peak memory and query Postgres in far fewer round
+  trips.** `apply_batch` now streams its prep in chunks instead of materializing every row
+  as a dict, computes each row's payload and hash once instead of twice, derives two row
+  maps instead of storing them, and keeps the 32-byte sha256 digest instead of its 64-char
+  hex. At 5M rows cold, peak RSS went from 12,555 MB to 7,791 MB (SQLite) and 7,800 MB
+  (Postgres), with wall time within run-to-run noise. `GOLDENMATCH_IDENTITY_PREP_CHUNK_ROWS`
+  (default 250,000; `0` for a single pass) sets the chunk size. Separately,
+  `lookup_entity_ids` chunked every backend at SQLite's 900-parameter cap; Postgres now takes
+  one `= ANY(array)` parameter per 100,000 ids, which cut that call from 50.8 s to 10.4 s at
+  5M rows. (#2895, #2900, #2902, #2903, #2904)
 
 ### Fixed
 
@@ -94,6 +181,66 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 - **`ArrowFrame.sort` no longer emits PyArrow 25's deprecated global
   `null_placement` `FutureWarning`.** PyArrow 25+ now receives nulls-first placement
   per sort key, while older supported releases retain their compatible call form (#2992).
+- **`GOLDENMATCH_FS_TF_ADJUSTMENT=1` now changes FS scoring on Arrow frames.** The TF tables
+  tested `field not in df.columns`, which on a `pyarrow.Table` compares against column
+  objects, not names, so every field was treated as missing and no adjustment ran. The same
+  test made auto-config skip the per-dataset name-frequency table for
+  `name_freq_weighted_jw` fields when given an Arrow table (`GOLDENMATCH_TF_NAME_WEIGHTING`,
+  default on), falling back to the static surname table. Both now read the column by name,
+  and frequencies are counted per distinct value instead of per row. (#2908)
+- **The numpy FS route no longer drops pairs that sit exactly on a level cut to a lower
+  level.** Similarity came back as float32 cast to float64, so Jaro-Winkler
+  ('anderson', 'andersen') read 0.94999999 and missed the 0.95 cut that the native route and
+  EM training both place it on. Cells within 1e-6 of a cut are now recomputed in float64,
+  which also stops negative evidence firing on those cells. Native and numpy disagreed on
+  112 pairs of a jaro_winkler probe before and 0 after. The numpy route runs where a matchkey
+  carries `ensemble` or no native wheel is installed. (#2924)
+- **`given_name_aliased_jw` no longer scores non-aliases as aliases in matrix scoring.**
+  `score_matrix` treated two names as aliases when their alias member sets overlapped, while
+  the scalar scorer and the native kernel require their canonical names to overlap, so
+  'catherine' and 'kathy' scored 1.0 in one and 0.644 in the others; 275 name pairs in the
+  bundled table disagreed. The matrix now applies the same rule, and on the numpy FS route
+  those pairs no longer take the top level. (#2926)
+- **An empty `GOLDENMATCH_FS_CALIBRATED` no longer disables `GOLDENMATCH_FS_EVIDENCE_CUT`.**
+  An empty value, which CI renders for an unset workflow input, fell through to linear
+  scoring, and the evidence cut is only read under posterior scoring. Empty now means unset.
+  (#2919)
+- **Multi-pass FS runs keep the calibrated link cutoff.** Combining per-pass EM results
+  dropped `calibrated_link_threshold`, so a multi-pass run with
+  `GOLDENMATCH_FS_CALIBRATE_THRESHOLD` on logged a calibrated cutoff and then used the fixed
+  fallback. It is now carried, averaged over the passes that calibrated. (#2919)
+- **Blocking honours a `multi_pass` config that puts its keys in `keys`.** The schema accepts
+  `strategy="multi_pass"` with `keys` instead of `passes`, but the main blocker iterated
+  `passes` only, returning zero blocks, zero pairs and no error. A `static` config carrying
+  both fields also blocked on `keys` locally but shuffled on `passes` in the distributed
+  backend. `BlockingConfig.resolved_keys()` now makes that decision for every blocker,
+  backend and auto-config plan-building site: the strategy's own field first, the other as a
+  fallback. (#2845, #2859)
+- **The bucket scorer blocks a `static` config on `keys`, not `passes`.** With both fields
+  set and `keys` holding a field `passes` lacked, which auto-config emits, the bucket route
+  blocked on different fields from the plan and returned zero pairs with no warning. On the
+  suggest-quality orgs_hard corpus that was 0 pairs against 242 on the legacy route. (#2833)
+- **An applied threshold suggestion is no longer undone by postflight.** On auto-configured
+  runs postflight recomputed a cut from the score distribution the new threshold had already
+  truncated, reverting the change. `apply_suggestion` now keeps a `set_threshold` patch as
+  set. On dblp_acm, convergence F1 went back from 0.5645 to 0.7296. (#2833)
+- **`goldenmatch match` works without polars installed.** Polars has been optional since
+  3.1.0, but file-entry `run_match` loaded input as a polars LazyFrame, so the command
+  printed `Runtime error: No module named 'polars'` and exited 3. Ingest now goes through
+  the Arrow lane for both configured and zero-config match. (#2832)
+- **The MCP `read_file` and `write_csv` tools work without polars installed.** Both
+  returned a `No module named 'polars'` error. `write_csv` output stays byte-identical to
+  what polars wrote, and columns that appear only in later rows are kept. (#2831)
+- **The Ray distributed pipeline no longer fails at the golden-record step when
+  `golden_rules` is unset.** Its fallback built `GoldenRulesConfig()` with no strategy,
+  which raises, after matching and clustering had finished. It now falls back to
+  `default_strategy="most_complete"`, like the other lanes. (#2844)
+- **Auto-config no longer writes an `email` standardization rule for derived exact columns.**
+  Domain-extracted columns such as `__title_key__` were tagged `col_type="email"`, so every
+  bibliographic auto-config carried `{'__title_key__': ['email']}` in its standardization
+  rules. That rule was inert only because standardization runs before domain extraction.
+  These columns now have their own `exact_derived` type, with blocking behaviour unchanged.
+  (#2880, #2882)
 
 ## [3.17.1] - 2026-08-31
 
