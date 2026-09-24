@@ -1,15 +1,11 @@
 <!-- mcp-name: io.github.benseverndev-oss/goldenmatch -->
 <div align="center">
 
-# Golden Suite
+# GoldenMatch
 
-Your customer data lives in a CRM, a billing system, and three spreadsheets nobody owns. Some records are duplicates. Some are the same company spelled four different ways. Nobody can answer *how many customers do we actually have*, and every dashboard built on top inherits the doubt.
+**Find the rows in your data that are the same person, company or product. No rules to write, no labelled pairs, no model to train.**
 
-**Splink-beating entity resolution, Arrow-native and Rust-fast with zero tuning, feeding a durable identity layer so messy records from every source become stable golden entities with whole-record, Customer-360 provenance.**
-
-Zero-config matching that **beats expert-tuned Splink head-to-head on messy customer records**, in an **Arrow-native, Rust-authoritative** engine verified from a laptop CSV to a **250M-row dedupe in 11.2 minutes**. The identities it produces live in a **transaction-native control plane** carrying stable `entity_id`s, per-field provenance, merge/split, and a tamper-evident audit log, all one call away as a Customer 360. It even **owns its primitives**: byte-identical, faster-than-`rapidfuzz` / `jellyfish` / FAISS Rust kernels, not rented dependencies.
-
-**Python · TypeScript · SQL, at 4-decimal parity · native in Postgres + DuckDB · edge WASM · 70+ MCP tools · beats hand-tuned Splink · 250M rows in 11.2 min**
+Zero-config entity resolution for Python. Point it at a CSV or a table: it chooses how to match, shows you what it chose, and merges each group of duplicates into one golden record.
 
 <br>
 
@@ -42,10 +38,6 @@ Zero-config matching that **beats expert-tuned Splink head-to-head on messy cust
 
 </div>
 
-[![GoldenMatch web workbench: pair drilldown with NL prose](packages/python/goldenmatch/docs/screenshots/web/web-inspector.png)](https://github.com/benseverndev-oss/goldenmatch/wiki/Web-UI)
-
-<p align="center"><sub><em>Pair drilldown in the web workbench: cluster members, field-level diff, and a one-line NL explanation per pair. <code>pip install goldenmatch[web]</code> then <code>goldenmatch serve-ui &lt;project&gt;</code>. <a href="https://github.com/benseverndev-oss/goldenmatch/wiki/Web-UI">More screenshots →</a></em></sub></p>
-
 <!-- README-callouts:start  (auto-synced from packages/python/goldenmatch/CHANGELOG.md by scripts/sync_readme_callouts.py; edit the CHANGELOG, not this block) -->
 > **v3.18.1: `gm.dedupe("customers.csv")` works with no config.** The documented zero-config
 file call -- the first Python example in the README -- raised
@@ -65,6 +57,66 @@ and that path still bridged to polars, so `goldenmatch dedupe customers.csv`
 exited 3 on a default install. Verified the way it should have been the first
 time -- `pip install` into a clean polars-free venv, then the documented command.
 <!-- README-callouts:end -->
+
+---
+
+## Try it
+
+```bash
+pip install goldenmatch
+goldenmatch dedupe customers.csv
+```
+
+Take a `customers.csv` where the same people were entered more than once:
+
+| id | name | email | phone | address | zip |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Maria Gonzalez | maria.gonzalez@example.com | 555-201-3344 | 14 Oak Street | 62704 |
+| 2 | Maria Gonzales | mgonzalez@example.com | (555) 201-3344 | 14 Oak St | 62704 |
+| 3 | María González | maria.gonzalez@example.com | 5552013344 | 14 Oak St. | 62704 |
+| 4 | James O'Neil | jim.oneil@example.com | 555-883-1200 | 902 Pine Avenue | 84065 |
+| 5 | Jim O'Neill | jim.oneil@example.com | 555.883.1200 | 902 Pine Ave | 84065 |
+| 8 | Thomas Becker | tbecker@example.com | 555-667-0192 | 77 Elm Court | 97024 |
+| 12 | Thomas Baker | thomas.baker@example.com | 555-120-4455 | 41 Walnut Way | 97024 |
+
+GoldenMatch puts rows 1-3 together as one person and rows 4-5 as another. Thomas Becker and Thomas Baker share a zip code and stay separate. Each group becomes one golden record, built from the best value of each field, and the run writes them to `<timestamp>_golden.csv`.
+
+From Python:
+
+```python
+import goldenmatch as gm
+
+result = gm.dedupe("customers.csv")
+print(result)       # DedupeResult(records=12, clusters=4, match_rate=75.0%)
+
+result.golden       # one merged record per duplicate group
+result.unique       # the records that had no duplicate
+result.clusters     # which input rows belong together
+result.config       # the matching config it chose
+```
+
+Already have the data in memory? `gm.dedupe_df(table)` takes a pyarrow Table or a polars DataFrame.
+
+## What it chose, and how to change it
+
+Nothing here is a black box. On the file above, auto-config matched exactly on `email` and `phone` and fuzzily on `name` and `address`, and only compared records that share a `zip`. `result.config` holds that decision:
+
+- **Reuse it** on new data: `gm.dedupe("next_month.csv", config=result.config)`.
+- **Take over** with your own rules: `gm.dedupe("customers.csv", exact=["email"], fuzzy={"name": 0.85})`, or a YAML config. See [configuration](https://docs.bensevern.dev/docs/goldenmatch/configuration).
+
+## Beyond one file
+
+Your customer data lives in a CRM, a billing system, and three spreadsheets nobody owns. Some records are duplicates. Some are the same company spelled four different ways. Nobody can answer *how many customers do we actually have*, and every dashboard built on top inherits the doubt.
+
+**Splink-beating entity resolution, Arrow-native and Rust-fast with zero tuning, feeding a durable identity layer so messy records from every source become stable golden entities with whole-record, Customer-360 provenance.**
+
+Zero-config matching that **beats expert-tuned Splink head-to-head on messy customer records**, in an **Arrow-native, Rust-authoritative** engine verified from a laptop CSV to a **250M-row dedupe in 11.2 minutes**. The identities it produces live in a **transaction-native control plane** carrying stable `entity_id`s, per-field provenance, merge/split, and a tamper-evident audit log, all one call away as a Customer 360. It even **owns its primitives**: byte-identical, faster-than-`rapidfuzz` / `jellyfish` / FAISS Rust kernels, not rented dependencies.
+
+**Python · TypeScript · SQL, at 4-decimal parity · native in Postgres + DuckDB · edge WASM · 70+ MCP tools · beats hand-tuned Splink · 250M rows in 11.2 min**
+
+[![GoldenMatch web workbench: pair drilldown with NL prose](packages/python/goldenmatch/docs/screenshots/web/web-inspector.png)](https://github.com/benseverndev-oss/goldenmatch/wiki/Web-UI)
+
+<p align="center"><sub><em>Pair drilldown in the web workbench: cluster members, field-level diff, and a one-line NL explanation per pair. <code>pip install goldenmatch[web]</code> then <code>goldenmatch serve-ui &lt;project&gt;</code>. <a href="https://github.com/benseverndev-oss/goldenmatch/wiki/Web-UI">More screenshots →</a></em></sub></p>
 
 ---
 
@@ -283,8 +335,8 @@ pip install goldenmatch && goldenmatch dedupe customers.csv
 import goldenmatch as gm
 
 result = gm.dedupe("customers.csv")               # zero-config
-print(result)                                     # DedupeResult(records=5000, clusters=847, match_rate=12.0%)
-result.golden.write_csv("deduped.csv")
+print(result)                                     # DedupeResult(records=12, clusters=4, match_rate=75.0%)
+result.to_csv("golden.csv")                       # one merged record per duplicate group
 
 result = gm.dedupe("customers.csv",               # or be explicit
     exact=["email"], fuzzy={"name": 0.85, "zip": 0.95}, blocking=["zip"], threshold=0.85)
