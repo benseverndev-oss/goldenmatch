@@ -59,6 +59,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   normalisation. The distributed path checks only a sample, where uniqueness cannot tell a
   row key from a real identifier, so it is unchanged. The CLI hid this by accident: the same
   penalty raised a `TypeError` on an integer `id` and was skipped.
+- **A first run no longer prints the controller's internal timings.** Every zero-config
+  `dedupe_df` and `goldenmatch dedupe` printed a dozen `[controller.run n_rows=...]` stage
+  timings to stdout, left over from hunting a 5M-row hang. They now go to the
+  `goldenmatch.core.autoconfig_controller` logger at debug level. The CLI also stopped
+  announcing "Launching TUI for review..." on runs that do not launch it; the TUI opens
+  only with `--tui`.
 - **A planner-chosen `backend="bucket"` no longer sends a Fellegi-Sunter matchkey
   onto a blocking plan the bucket scorer cannot express.** The execution planner
   writes `backend="bucket"` onto zero-config configs, and `_fs_use_bucket_route`

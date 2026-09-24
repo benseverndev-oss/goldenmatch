@@ -208,7 +208,7 @@ def dedupe_cmd(
                 _ctrl_committed_config = cfg
                 _used_autoconfig = True
                 if not quiet:
-                    console.print("[green]Auto-config complete. Launching TUI for review...[/green]")
+                    console.print("[green]Auto-config complete.[/green]")
             except Exception as exc:
                 err_console.print(f"[red]Auto-config error:[/red] {exc}")
                 raise typer.Exit(code=1)
