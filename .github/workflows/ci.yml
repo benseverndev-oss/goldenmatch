@@ -4716,7 +4716,12 @@ jobs:
         with:
           node-version: 22
       - name: Install Mintlify CLI
-        run: npm i -g mint
+        # Pinned. mint 4.2.931 (published 2026-09-24 22:33 UTC) depends on
+        # @mintlify/cli@4.0.1534, which pulls in @mintlify/auth-edge@0.0.51 --
+        # a package that is not on npm in any version -- so an unpinned install
+        # 404s and fails every docs PR. 4.2.930 installs cleanly. Bump
+        # deliberately once a newer release resolves.
+        run: npm i -g mint@4.2.930
       - name: Validate docs build (strict; MDX/JSX + frontmatter + docs.json)
         run: mint validate --disable-openapi
       - name: Broken internal links + anchors
