@@ -1944,6 +1944,7 @@ class AutoConfigController:
         # and the controller sample is <=20K, so this is cluster-equivalent for
         # the sample profile. A polars / ray sample is untouched (byte-identical).
         config = self._maybe_bucket_route_arrow(sample, config)
+        config = _silence_quality_announcement(config)
         if reference is None:
             _res = run_dedupe_df(sample, config=config, _prep_store=_prep_store)
         else:
@@ -2465,3 +2466,26 @@ class AutoConfigController:
             )
         except Exception as exc:
             logger.warning("auto-config: failed to record run to memory: %s", exc)
+
+
+def _silence_quality_announcement(config: GoldenMatchConfig) -> GoldenMatchConfig:
+    """Return ``config`` with the GoldenCheck scan set to ``silent`` for a sample run.
+
+    Every auto-config iteration runs the pipeline on a sample, and each run's
+    quality scan printed "GoldenCheck: scanning data quality..." -- six times for
+    one ``gm.dedupe`` on a 12-row file (#2997), each describing a sample rather
+    than the user's data. Fixes still apply, so the sample profile is unchanged;
+    only the announcement is dropped. The caller's config is not mutated, so the
+    committed config's real run still announces once. A disabled scan is left
+    disabled.
+    """
+    from goldenmatch.config.schemas import QualityConfig
+
+    quality = config.quality
+    if quality is None:
+        silenced = QualityConfig(mode="silent")
+    elif quality.mode == "announced":
+        silenced = quality.model_copy(update={"mode": "silent"})
+    else:
+        return config
+    return config.model_copy(update={"quality": silenced})

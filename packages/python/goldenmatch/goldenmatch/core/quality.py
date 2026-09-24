@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -413,9 +414,10 @@ def _scan_and_fix(
         print(
             f"GoldenCheck: scanning data quality... "
             f"{len(findings)} issues found, {len(fixes)} auto-fixed "
-            f"({', '.join(sorted(fix_types))})"
+            f"({', '.join(sorted(fix_types))})",
+            file=sys.stderr,
         )
     elif mode == "announced":
-        print("GoldenCheck: scanning data quality... no fixes needed")
+        print("GoldenCheck: scanning data quality... no fixes needed", file=sys.stderr)
 
     return fixed_df, fixes
