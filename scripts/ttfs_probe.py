@@ -5,7 +5,7 @@
 Three (stars, downloads, inbound issues) measure whether anyone ARRIVED. This
 one measures whether the surface area is in their way once they do: how long a
 stranger takes to get from `pip install` to a CORRECT dedupe, on the path the
-README actually advertises (README.md:283).
+README actually advertises (README.md, "Try it").
 
     pip install goldenmatch && goldenmatch dedupe customers.csv
 

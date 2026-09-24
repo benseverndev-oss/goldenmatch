@@ -3,13 +3,9 @@
 
 # GoldenMatch
 
-**Find duplicate records in 30 seconds. No rules to write, no models to train.**
+**Find the rows in your data that are the same person, company or product. No rules to write, no labelled pairs, no model to train.**
 
 *Zero-config entity resolution for Python & TypeScript: with a self-verifying auto-config that tells you when it's unsure.*
-
-**Scales from a CSV on your laptop to 100M+ rows on a Ray cluster, verified: 100,000,000 records deduped recall-complete (correct across any partitioning) in 9.2 min, with a 0.36 GB driver footprint.** ([how →](#scaling-to-100m))
-
-**The resolution stage for knowledge graphs.** ER is the stage GraphRAG does *worst*. [`goldenmatch-kg`](https://github.com/benseverndev-oss/goldenmatch/blob/main/packages/python/goldenmatch-kg/README.md) plugs GoldenMatch into neo4j-graphrag / LlamaIndex / Graphiti; [`goldengraph`](https://github.com/benseverndev-oss/goldenmatch/blob/main/packages/python/goldengraph/README.md) builds a knowledge graph from text with that resolution at its core. Both in early access.
 
 <br>
 
@@ -39,23 +35,6 @@
 
 </div>
 
-[![GoldenMatch web workbench: pair drilldown with NL prose](docs/screenshots/web/web-inspector.png)](#web-ui)
-
-<p align="center"><sub><em>Pair drilldown in the web workbench: cluster members, field-level diff, and a one-line NL explanation per pair. <code>pip install goldenmatch[web]</code> then <code>goldenmatch serve-ui &lt;project&gt;</code>. <a href="#web-ui">More screenshots →</a></em></sub></p>
-
-```bash
-# Python
-pip install goldenmatch && goldenmatch dedupe customers.csv
-
-# TypeScript / Node.js
-npm install goldenmatch
-```
-
-> **Two packages, independent versions.** PyPI `goldenmatch` (2.x) and npm `goldenmatch`
-> (1.x) are the same toolkit on **separate semver lines**: not lockstep. The npm package
-> is an edge-safe subset (no Ray/GPU distributed engine, no web UI); everything else is at
-> core parity. Version map + rationale: [`docs/versioning-policy.md`](docs/versioning-policy.md).
-
 <!-- README-callouts:start  (auto-synced from CHANGELOG.md by scripts/sync_readme_callouts.py; edit the CHANGELOG, not this block) -->
 > **v3.18.1: `gm.dedupe("customers.csv")` works with no config.** The documented zero-config
 file call -- the first Python example in the README -- raised
@@ -75,6 +54,69 @@ and that path still bridged to polars, so `goldenmatch dedupe customers.csv`
 exited 3 on a default install. Verified the way it should have been the first
 time -- `pip install` into a clean polars-free venv, then the documented command.
 <!-- README-callouts:end -->
+
+---
+
+## Try it
+
+```bash
+pip install goldenmatch
+goldenmatch dedupe customers.csv
+```
+
+Take a `customers.csv` where the same people were entered more than once:
+
+| id | name | email | phone | address | zip |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Maria Gonzalez | maria.gonzalez@example.com | 555-201-3344 | 14 Oak Street | 62704 |
+| 2 | Maria Gonzales | mgonzalez@example.com | (555) 201-3344 | 14 Oak St | 62704 |
+| 3 | María González | maria.gonzalez@example.com | 5552013344 | 14 Oak St. | 62704 |
+| 4 | James O'Neil | jim.oneil@example.com | 555-883-1200 | 902 Pine Avenue | 84065 |
+| 5 | Jim O'Neill | jim.oneil@example.com | 555.883.1200 | 902 Pine Ave | 84065 |
+| 8 | Thomas Becker | tbecker@example.com | 555-667-0192 | 77 Elm Court | 97024 |
+| 12 | Thomas Baker | thomas.baker@example.com | 555-120-4455 | 41 Walnut Way | 97024 |
+
+GoldenMatch puts rows 1-3 together as one person and rows 4-5 as another. Thomas Becker and Thomas Baker share a zip code and stay separate. Each group becomes one golden record, built from the best value of each field, and the run writes them to `<timestamp>_golden.csv`.
+
+From Python:
+
+```python
+import goldenmatch as gm
+
+result = gm.dedupe("customers.csv")
+print(result)       # DedupeResult(records=12, clusters=4, match_rate=75.0%)
+
+result.golden       # one merged record per duplicate group
+result.unique       # the records that had no duplicate
+result.clusters     # which input rows belong together
+result.config       # the matching config it chose
+```
+
+Already have the data in memory? `gm.dedupe_df(table)` takes a pyarrow Table or a polars DataFrame.
+
+## What it chose, and how to change it
+
+Nothing here is a black box. On the file above, auto-config matched exactly on `email` and `phone` and fuzzily on `name` and `address`, and only compared records that share a `zip`. `result.config` holds that decision:
+
+- **Reuse it** on new data: `gm.dedupe("next_month.csv", config=result.config)`.
+- **Take over** with your own rules: `gm.dedupe("customers.csv", exact=["email"], fuzzy={"name": 0.85})`, or a YAML config. See [configuration](https://docs.bensevern.dev/docs/goldenmatch/configuration).
+
+## Beyond one file
+
+**Scales from a CSV on your laptop to 100M+ rows on a Ray cluster, verified: 100,000,000 records deduped recall-complete (correct across any partitioning) in 9.2 min, with a 0.36 GB driver footprint.** ([how →](#scaling-to-100m))
+
+**The resolution stage for knowledge graphs.** ER is the stage GraphRAG does *worst*. [`goldenmatch-kg`](https://github.com/benseverndev-oss/goldenmatch/blob/main/packages/python/goldenmatch-kg/README.md) plugs GoldenMatch into neo4j-graphrag / LlamaIndex / Graphiti; [`goldengraph`](https://github.com/benseverndev-oss/goldenmatch/blob/main/packages/python/goldengraph/README.md) builds a knowledge graph from text with that resolution at its core. Both in early access.
+
+TypeScript / Node.js: `npm install goldenmatch`.
+
+> **Two packages, independent versions.** PyPI `goldenmatch` (3.x) and npm `goldenmatch`
+> (1.x) are the same toolkit on **separate semver lines**: not lockstep. The npm package
+> is an edge-safe subset (no Ray/GPU distributed engine, no web UI); everything else is at
+> core parity. Version map + rationale: [`docs/versioning-policy.md`](docs/versioning-policy.md).
+
+[![GoldenMatch web workbench: pair drilldown with NL prose](docs/screenshots/web/web-inspector.png)](#web-ui)
+
+<p align="center"><sub><em>Pair drilldown in the web workbench: cluster members, field-level diff, and a one-line NL explanation per pair. <code>pip install goldenmatch[web]</code> then <code>goldenmatch serve-ui &lt;project&gt;</code>. <a href="#web-ui">More screenshots →</a></em></sub></p>
 
 ---
 
