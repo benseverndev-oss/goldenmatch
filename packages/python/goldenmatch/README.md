@@ -76,7 +76,7 @@ Take a `customers.csv` where the same people were entered more than once:
 | 8 | Thomas Becker | tbecker@example.com | 555-667-0192 | 77 Elm Court | 97024 |
 | 12 | Thomas Baker | thomas.baker@example.com | 555-120-4455 | 41 Walnut Way | 97024 |
 
-GoldenMatch puts rows 1-3 together as one person and rows 4-5 as another. Thomas Becker and Thomas Baker share a zip code and stay separate. Each group becomes one golden record, built from the best value of each field, and the run writes them to `<timestamp>_golden.csv`.
+GoldenMatch puts rows 1-3 together as one person and rows 4-5 as another. Thomas Becker and Thomas Baker share a zip code and stay separate. Each group becomes one golden record, built from the best value of each field. The run writes `<timestamp>_deduplicated.csv`, one row per person (the four golden records plus the three people who had no duplicate), and `<timestamp>_golden.csv` with the merged records alone.
 
 From Python:
 
@@ -86,6 +86,7 @@ import goldenmatch as gm
 result = gm.dedupe("customers.csv")
 print(result)       # DedupeResult(records=12, clusters=4, match_rate=75.0%)
 
+result.deduplicated # one row per person: 7 here
 result.golden       # one merged record per duplicate group
 result.unique       # the records that had no duplicate
 result.clusters     # which input rows belong together
