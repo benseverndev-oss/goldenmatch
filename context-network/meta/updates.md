@@ -2,6 +2,17 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-09-25 -- goldenmatch 3.21.0: no RED on correct small runs; LLM only with llm_auto
+- #2988: two small-data controller artifacts made a correct 12-record run read RED -- a
+  small-frame `cluster_giant` bar (now also needs 10 members) and a scoring profile blind
+  to exact-matchkey matches (`ComplexityProfile.scoring_health()` now defers to a
+  multi-member cluster; the scoring profile and the rules reading it are unchanged, per
+  #2673). quality_gate at or above baseline on every dataset.
+- #3014: `_maybe_decorate_with_llm_scorer` enabled paid LLM scoring on an API key alone; it
+  now needs `llm_auto=True`. DQbench unaffected (its adapter sets the LLM config itself).
+- Coverage of the controller render paths had depended on the RED artifact; now tested
+  on purpose (`test_controller_render_iterated.py`).
+
 ## 2026-09-25 -- goldenmatch 3.20.0: integer ID columns, and counts that say what they count
 - Reproducing #2990 found a worse bug: a digits-only phone/account column (int64) crashed
   zero-config blocking in `filter_valid_key` (#3011). NE on int columns now scores too.
