@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.19.0] - 2026-09-24
+
+<!-- README-callout
+**One row per person, and clean result tables.** A bare `goldenmatch dedupe customers.csv`
+now also writes `<run>_deduplicated.csv` -- the golden records plus the records that had no
+duplicate, one row per real-world entity -- and `result.deduplicated` returns the same.
+Golden records alone were only the people who had duplicates. Result tables no longer
+leak the pipeline's working columns, and the GoldenCheck scan announces once, on stderr.
+-->
+
 ### Added
 
 - **A deduplicated output: one row per real-world entity.** Golden records hold only the
