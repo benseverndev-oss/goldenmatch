@@ -353,6 +353,14 @@ class BlockingProfile:
     # richness). Populated only by the fast static measurement path (blocker.py).
     chao1_f1: int | None = None  # blocks with exactly 1 sampled row (singletons)
     chao1_f2: int | None = None  # blocks with exactly 2 sampled rows (doubletons)
+    #: False when no blocker emitted a profile for the run -- only the classic
+    #: static blocker (blocker.py) emits one, so the bucket / planner routes
+    #: produced none and the controller substituted an all-zero default, which
+    #: `red_reason` read as `blocking_no_blocks`. On the CLI's full-data finalize
+    #: that turned a GREEN run's panel RED (#2988 follow-up). An unmeasured
+    #: profile has no RED reason: unknown is not a pathology. True by default,
+    #: so every real emission and every existing default keeps its verdict.
+    measured: bool = True
 
     @property
     def estimated_pair_count(self) -> int:
@@ -453,6 +461,8 @@ class BlockingProfile:
         """See `ClusterProfile.red_reason`. `n_rows` is accepted for signature
         stability with the `health` it backs; the skew bar is relative to
         `n_blocks`, not to row count."""
+        if not self.measured:
+            return None
         if self.n_blocks == 0:
             return "blocking_no_blocks"
         skew_bar = max(_LARGEST_BLOCK_PAIR_SHARE_RED,
@@ -466,6 +476,10 @@ class BlockingProfile:
     def health(self, n_rows: int) -> HealthVerdict:
         # `n_rows` is retained for signature stability with ClusterProfile.health
         # and the existing call sites; the skew rule below no longer needs it.
+        if not self.measured:
+            # Nothing was measured, so there is nothing to grade -- and the
+            # YELLOW checks below divide by `n_blocks`, which is 0 here.
+            return HealthVerdict.GREEN
         if self.red_reason(n_rows) is not None:
             return HealthVerdict.RED
         # Skew is WORK CONCENTRATION, not a size percentile. The previous rule

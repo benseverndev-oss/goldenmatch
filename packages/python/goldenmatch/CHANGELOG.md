@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+
+- **The CLI's controller panel no longer says `health · red` on a GREEN run.** `goldenmatch
+  dedupe` re-runs the committed config on the full data to profile it, and on the bucket /
+  planner routes no blocker emits a blocking profile -- only the classic static blocker does.
+  The controller substituted an all-zero profile, which read as `blocking_no_blocks`, so the
+  panel showed `health · red` next to `stop · green (iteration produced a GREEN profile)`.
+  `BlockingProfile` now records `measured`, and a profile nobody emitted has no verdict
+  instead of a RED one. The Python API skips that full-data pass and was not affected.
+
 ## [3.21.0] - 2026-09-25
 
 <!-- README-callout
