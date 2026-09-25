@@ -15,7 +15,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from goldenmatch._polars_lazy import pl
 
@@ -979,9 +979,9 @@ def dedupe_df(
         _lint_findings = _run_config_lint(df, config)
         from goldenmatch.core._native_loader import native_dispatch_report
         _native_baseline = native_dispatch_report()
-        config = _with_keep_original_values(config, keep_original_values)
         result = run_dedupe_df(
-            df, config, source_name=source_name,
+            df, _with_keep_original_values(config, keep_original_values),
+            source_name=source_name,
             auto_config=False,
         )
     finally:
@@ -1695,13 +1695,18 @@ def evaluate(
 # ── Internal helpers ──
 
 
-def _with_keep_original_values(cfg: Any, keep_original_values: bool | None) -> Any:
+_Cfg = TypeVar("_Cfg")
+
+
+def _with_keep_original_values(cfg: _Cfg, keep_original_values: bool | None) -> _Cfg:
     """``cfg`` with ``output.keep_original_values`` set, without mutating the
     caller's config object (#3003). ``None`` leaves the config as it is."""
     if keep_original_values is None or cfg is None or not hasattr(cfg, "output"):
         return cfg
-    return cfg.model_copy(update={
-        "output": cfg.output.model_copy(update={"keep_original_values": keep_original_values})
+    return cfg.model_copy(update={  # pyright: ignore[reportAttributeAccessIssue]
+        "output": cfg.output.model_copy(  # pyright: ignore[reportAttributeAccessIssue]
+            update={"keep_original_values": keep_original_values}
+        )
     })
 
 
