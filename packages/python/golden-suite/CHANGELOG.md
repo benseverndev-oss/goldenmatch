@@ -4,6 +4,15 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.5.7] - 2026-09-25
+
+### Changed
+
+- **`goldenmatch` floor raised to `>=3.20.0`.** 3.19.0 crashed zero-config on any file whose
+  phone or account column is plain digits (read as int64) with `ArrowNotImplementedError` in
+  auto-config's blocking; 3.20.0 runs it, scores negative evidence on such columns instead of
+  silently disabling it, and adds `result.total_entities`.
+
 ## [0.5.6] - 2026-09-24
 
 ### Changed
