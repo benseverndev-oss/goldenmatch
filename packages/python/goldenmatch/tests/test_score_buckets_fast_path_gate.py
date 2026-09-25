@@ -255,12 +255,15 @@ class TestPerPairPythonPerfGuard:
         )
         assert result is not None
 
-    def test_tf_name_field_with_negative_evidence_declines(self):
-        # NE takes the per-pair Python branch, which would score the tf field in
-        # Python too.
+    def test_tf_name_field_with_python_only_negative_evidence_declines(self):
+        # The kernel applies NE only for score_one's base scorers; any other NE
+        # scorer takes the per-pair Python branch, which would score the tf field
+        # in Python too.
         from goldenmatch.core.matchkey import _xform_sig
 
-        ne = NegativeEvidenceField(field="alias", scorer="exact", threshold=0.5, penalty=0.3)
+        ne = NegativeEvidenceField(
+            field="alias", scorer="soundex_match", threshold=0.5, penalty=0.3
+        )
         mk, df = self._tf_matchkey(negative_evidence=[ne])
         df = df.with_columns(pl.lit("x").alias(_xform_sig(ne)))
         result = _resolve_fast_path(
