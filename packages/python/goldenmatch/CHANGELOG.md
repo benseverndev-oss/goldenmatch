@@ -8,6 +8,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Fixed
 
+- **Negative evidence on a numeric identifier compares it exactly.** Auto-config gave an
+  unrecognised identifier column the fallback `ensemble` scorer, which compares text, so
+  account numbers `1003` and `1004` (3 of 4 characters shared) read as agreeing and the
+  penalty never fired. A column whose values are whole numbers or digit strings now gets
+  `exact`; text and fractional columns keep `ensemble`. (#3012)
 - **The CLI's controller panel no longer says `health · red` on a GREEN run.** `goldenmatch
   dedupe` re-runs the committed config on the full data to profile it, and on the bucket /
   planner routes no blocker emits a blocking profile -- only the classic static blocker does.

@@ -83,6 +83,32 @@ def _is_row_key(cardinality_ratio: float, transforms: list[str], scorer: str) ->
     return cardinality_ratio >= 1.0 and not transforms and scorer == "ensemble"
 
 
+_NUMERIC_ID_SAMPLE = 1000
+
+
+def _looks_like_numeric_id(frame: object, col: str) -> bool:
+    """True when the column's values are whole numbers or digit strings.
+
+    Checked on the head of the column only, so it stays O(1) at scale. Floats
+    are excluded: a fractional column is an amount or a measurement, not an id.
+    """
+    try:
+        values = frame.slice(0, _NUMERIC_ID_SAMPLE).column(col).to_list()  # type: ignore[attr-defined]
+    except Exception:
+        return False
+    seen = False
+    for v in values:
+        if v is None:
+            continue
+        if isinstance(v, bool):
+            return False
+        if isinstance(v, int) or (isinstance(v, str) and v.strip().isdigit()):
+            seen = True
+            continue
+        return False
+    return seen
+
+
 def _is_in_matchkey_fields(col: str, mk: MatchkeyConfig) -> bool:
     """Return True if col appears in the positive fields of this matchkey."""
     return any(f.field == col for f in mk.fields)
@@ -233,6 +259,12 @@ def promote_negative_evidence(
                     col, mk.name,
                 )
                 continue
+            if scorer == "ensemble" and not transforms and _looks_like_numeric_id(_f, col):
+                # #3012: an identifier either matches or it does not. The
+                # fallback `ensemble` scorer compared numeric ids as text, so
+                # "1003" vs "1004" (3 of 4 characters shared) cleared the NE
+                # threshold and two different account numbers never fired.
+                scorer = "exact"
 
             # FD-admitted fields scale the penalty by FD confidence (capped at the
             # default); name-admitted fields keep the default penalty.
