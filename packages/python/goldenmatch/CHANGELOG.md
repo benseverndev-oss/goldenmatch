@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.21.0] - 2026-09-25
+
+<!-- README-callout
+**No false alarms on small files, and no LLM calls you didn't ask for.** A correct run on
+a small file no longer logs RED "output may be low-precision", and auto-config now turns
+on the (paid) LLM scorer only when you pass `llm_auto=True` -- it used to do so whenever an
+`OPENAI_API_KEY` or `ANTHROPIC_API_KEY` happened to be set. If you relied on that, pass
+`llm_auto=True` or set `llm_scorer` in your config.
+-->
+
 ### Changed
 
 - **Auto-config enables the LLM scorer only when you pass `llm_auto=True`.** It used to turn

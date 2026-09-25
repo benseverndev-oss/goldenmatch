@@ -39,6 +39,12 @@ Zero-config entity resolution for Python. Point it at a CSV or a table: it choos
 </div>
 
 <!-- README-callouts:start  (auto-synced from packages/python/goldenmatch/CHANGELOG.md by scripts/sync_readme_callouts.py; edit the CHANGELOG, not this block) -->
+> **v3.21.0: No false alarms on small files, and no LLM calls you didn't ask for.** A correct run on
+a small file no longer logs RED "output may be low-precision", and auto-config now turns
+on the (paid) LLM scorer only when you pass `llm_auto=True` -- it used to do so whenever an
+`OPENAI_API_KEY` or `ANTHROPIC_API_KEY` happened to be set. If you relied on that, pass
+`llm_auto=True` or set `llm_scorer` in your config.
+>
 > **v3.20.0: Integer ID columns no longer crash zero-config.** A CSV whose phone or account column is
 plain digits (read as int64) made `gm.dedupe(path)` and `goldenmatch dedupe` die with
 `ArrowNotImplementedError` in auto-config's blocking; it now runs, and negative evidence
@@ -51,11 +57,6 @@ now also writes `<run>_deduplicated.csv` -- the golden records plus the records 
 duplicate, one row per real-world entity -- and `result.deduplicated` returns the same.
 Golden records alone were only the people who had duplicates. Result tables no longer
 leak the pipeline's working columns, and the GoldenCheck scan announces once, on stderr.
->
-> **v3.18.1: `gm.dedupe("customers.csv")` works with no config.** The documented zero-config
-file call -- the first Python example in the README -- raised
-`KeyError: 'Field "__placeholder__" does not exist in schema'` on 3.18.0. It now
-auto-configures the files the way `goldenmatch dedupe customers.csv` does.
 <!-- README-callouts:end -->
 
 ---
