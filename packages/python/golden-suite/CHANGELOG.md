@@ -4,6 +4,14 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.5.9] - 2026-09-25
+
+### Changed
+
+- **`goldenmatch` floor raised to `>=3.21.1`.** Negative evidence on a numeric identifier now
+  compares it exactly (`1003` vs `1004` no longer reads as agreement), and the CLI's controller
+  panel no longer shows `health · red` on a GREEN run.
+
 ## [0.5.8] - 2026-09-25
 
 ### Changed
