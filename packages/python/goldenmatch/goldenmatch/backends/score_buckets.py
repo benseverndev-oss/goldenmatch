@@ -1027,20 +1027,70 @@ def _resolve_ne_specs(
     return out
 
 
+# NE scorers the weighted kernel applies itself: score_one's base ids, present
+# in every wheel, so no capability probe per scorer.
+_NATIVE_NE_SCORER_IDS: dict[str, int] = {
+    "jaro_winkler": 0, "levenshtein": 1, "token_sort": 2, "exact": 3,
+}
+
+
+def _is_string_column(frame: Any, col: str) -> bool:
+    """The kernel reads Utf8/LargeUtf8 only; any other dtype keeps Python NE."""
+    from goldenmatch.core.frame import is_polars_dataframe
+
+    if is_polars_dataframe(frame):
+        return frame.schema[col] == pl.Utf8
+    import pyarrow as pa
+
+    t = frame.schema.field(col).type
+    return pa.types.is_string(t) or pa.types.is_large_string(t)
+
+
+def _native_ne_specs(
+    mk: MatchkeyConfig, prepared_df: Any
+) -> list[tuple[str, int, float, float]] | None:
+    """``_resolve_ne_specs`` for the native kernel, as (xform_col, scorer_id,
+    threshold, penalty) in the same order; ``[]`` for no NE. None when an entry
+    has no kernel id or the wheel can't apply NE (``NATIVE_SUPPORTS_WEIGHTED_NE``),
+    so the matchkey stays on the per-pair Python loop."""
+    from goldenmatch.core.frame import to_frame as _tf_cols
+    from goldenmatch.core.matchkey import _xform_sig
+
+    out: list[tuple[str, int, float, float]] = []
+    for ne in getattr(mk, "negative_evidence", None) or []:
+        scorer = getattr(ne, "scorer", None)
+        # Same skips as _resolve_ne_specs: those entries score no penalty.
+        if scorer is None or scorer not in _SCORE_FIELD_DIRECT_SCORERS:
+            continue
+        if _resolve_score_pair_callable(scorer) is None:
+            continue
+        xform_col = _xform_sig(ne)
+        if xform_col not in _tf_cols(prepared_df).columns:
+            continue
+        sid = _NATIVE_NE_SCORER_IDS.get(scorer)
+        if sid is None or not _is_string_column(prepared_df, xform_col):
+            return None
+        out.append((xform_col, sid, float(ne.threshold), float(ne.penalty)))
+    if out:
+        mod = native_module()
+        if mod is None or not hasattr(mod, "NATIVE_SUPPORTS_WEIGHTED_NE"):
+            return None
+    return out
+
+
 def _name_tf_native_route(mk: MatchkeyConfig, prepared_df: Any) -> bool:
     """Whether a ``name_freq_weighted_jw`` field carrying a per-dataset
     ``tf_freqs`` table (#1207) will be scored by the native bucket kernel: the
     loaded wheel takes ``name_tf=`` handles (``NATIVE_SUPPORTS_NAME_TF_BUCKET``)
-    and the matchkey takes the native route at all, which negative evidence
-    rules out (the NE branch scores per pair in Python). Otherwise the fast path
-    would score the field per pair in Python, the 19x-slow shape the perf guard
-    declines."""
+    and the kernel can apply the matchkey's negative evidence. Otherwise the
+    fast path would score the field per pair in Python, the 19x-slow shape the
+    perf guard declines."""
     if not native_enabled("block_scoring"):
         return False
     mod = native_module()
     if mod is None or not hasattr(mod, "NATIVE_SUPPORTS_NAME_TF_BUCKET"):
         return False
-    return not _resolve_ne_specs(mk, prepared_df)
+    return _native_ne_specs(mk, prepared_df) is not None
 
 
 def _resolve_fast_path(
@@ -1747,18 +1797,19 @@ def score_buckets(
 
     # Native fast-path eligibility resolved ONCE: gated on, and every field's
     # scorer implemented by the native kernel. None -> Python per-pair loop.
-    # When NE has resolvable entries, force the Python path -- the native
-    # kernel emits pairs filtered against `threshold` BEFORE NE penalty is
-    # applied, so we'd have to re-emit + re-threshold downstream. The Python
-    # path handles NE math inline at the same per-pair cost. Returning to
-    # native-with-NE would mean teaching the kernel to emit pre-penalty
-    # candidate pairs (~2x emit volume) -- not worth it until measurement
-    # demands it.
+    # Negative evidence rides into the kernel (`ne_*` kwargs, which apply the
+    # penalty before the threshold test) when every NE scorer has a kernel id
+    # and the wheel supports it; otherwise NE keeps the per-pair Python loop.
+    # #3024: zero-config promotes NE on person data, so the old "NE -> Python"
+    # rule sent every such dedupe down the per-pair or per-block paths.
     native_scorer_ids: list[int] | None = None
     native_name_tf: list[Any] | None = None
+    native_ne: list[tuple[str, int, float, float]] | None = None
     if fast_path_specs is not None and native_enabled("block_scoring"):
         _, _, _field_specs, _ne_specs = fast_path_specs
-        if not _ne_specs:
+        # #3024: the kernel applies NE itself when every entry has a kernel id.
+        native_ne = _native_ne_specs(mk, prepared_df) if _ne_specs else []
+        if native_ne is not None:
             ids = [_NATIVE_SCORER_IDS.get(spec[3]) for spec in _field_specs]
             # Wheel-skew guard: the `date` scorer (id 4) exists only in kernels
             # that also expose `date_similarity`. A stale published wheel would
@@ -2039,6 +2090,9 @@ def score_buckets(
                     native_sorted_df[col].to_arrow()
                     for col, _w, _fn, _name in field_specs
                 ]
+                ne_arrays_arrow = [
+                    native_sorted_df[col].to_arrow() for col, _sid, _t, _p in native_ne or []
+                ]
             else:  # pa.Table lane: already arrow -- combine chunks for the FFI
                 import pyarrow as _pa
                 import pyarrow.compute as _pc
@@ -2050,6 +2104,19 @@ def score_buckets(
                     native_sorted_df.column(col).combine_chunks()
                     for col, _w, _fn, _name in field_specs
                 ]
+                ne_arrays_arrow = [
+                    native_sorted_df.column(col).combine_chunks()
+                    for col, _sid, _t, _p in native_ne or []
+                ]
+            if ne_arrays_arrow:
+                _ne_kwargs: dict[str, Any] = {
+                    "ne_arrays": ne_arrays_arrow,
+                    "ne_scorer_ids": [sid for _c, sid, _t, _p in native_ne or []],
+                    "ne_thresholds": [t for _c, _sid, t, _p in native_ne or []],
+                    "ne_penalties": [p for _c, _sid, _t, p in native_ne or []],
+                }
+            else:
+                _ne_kwargs = {}
             size_list = kept_size_list
             _tk0 = time.perf_counter() if _bucket_debug else 0.0
             # Track 1 Fix B: prefer the prebuilt exclude handle (closed-over
@@ -2065,6 +2132,7 @@ def score_buckets(
                     native_scorer_ids, weights, total_weight, threshold,
                     exclude_set=native_exclude_handle,
                     **_name_tf_kwargs,
+                    **_ne_kwargs,
                 )
             else:
                 # Legacy/stale native wheel (pre-#552: no build_exclude_set, so
@@ -2086,6 +2154,7 @@ def score_buckets(
                     native_scorer_ids, weights, total_weight, threshold,
                     [],
                     **_name_tf_kwargs,
+                    **_ne_kwargs,
                 )
                 if frozen_exclude:
                     pairs = [

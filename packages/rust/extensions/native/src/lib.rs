@@ -100,6 +100,11 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // of declining the fast path. Absent on older wheels, which keep the
     // per-block matrix path for a tf-carrying field.
     m.add("NATIVE_SUPPORTS_NAME_TF_BUCKET", true)?;
+    // Wheel-skew capability flag: `score_block_pairs_arrow` applies negative
+    // evidence itself (`ne_arrays` / `ne_scorer_ids` / `ne_thresholds` /
+    // `ne_penalties`), so a weighted matchkey with NE keeps the native route
+    // instead of the per-pair Python loop. Older wheels lack it.
+    m.add("NATIVE_SUPPORTS_WEIGHTED_NE", true)?;
     // Wheel-skew capability flag: the FUSED FS kernel (`match_fused_fs`) now scores
     // each field through fs-core's `field_similarity` (the SAME dispatch the classic
     // block scorer uses), so scorer ids 4/5 (name_freq_weighted / given_name_aliased)

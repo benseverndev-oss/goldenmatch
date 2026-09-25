@@ -934,6 +934,7 @@ impl StrCol {
 #[pyo3(signature = (
     row_ids, field_arrays, block_sizes, scorer_ids, weights,
     total_weight, threshold, exclude=None, exclude_set=None, name_tf=None,
+    ne_arrays=None, ne_scorer_ids=None, ne_thresholds=None, ne_penalties=None,
 ))]
 pub fn score_block_pairs_arrow(
     py: Python<'_>,
@@ -947,6 +948,10 @@ pub fn score_block_pairs_arrow(
     exclude: Option<Vec<(i64, i64)>>,
     exclude_set: Option<PyRef<'_, ExcludeSet>>,
     name_tf: Option<Vec<Option<PyRef<'_, NameTfTable>>>>,
+    ne_arrays: Option<Vec<PyArrowType<ArrayData>>>,
+    ne_scorer_ids: Option<Vec<u8>>,
+    ne_thresholds: Option<Vec<f64>>,
+    ne_penalties: Option<Vec<f64>>,
 ) -> PyResult<Vec<(i64, i64, f64)>> {
     // #weighted-null: unused -- scores renormalize by weight_sum. Param KEPT so
     // the #[pyfunction] signature (and any published wheel) is unchanged.
@@ -1021,6 +1026,35 @@ pub fn score_block_pairs_arrow(
         }
         None => vec![None; n_fields],
     };
+    // Negative evidence (#3024), mirroring the fast path's per-pair NE math in
+    // `score_buckets._score_one_bucket_fast`: for each NE field where both values
+    // are present and the similarity falls below its threshold, add its penalty;
+    // the score becomes max(0, score - penalty) BEFORE the threshold test.
+    let ne_cols: Vec<StrCol> = ne_arrays
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| StrCol::from_data(p.0))
+        .collect::<PyResult<_>>()?;
+    let ne_ids = ne_scorer_ids.unwrap_or_default();
+    let ne_thr = ne_thresholds.unwrap_or_default();
+    let ne_pen = ne_penalties.unwrap_or_default();
+    let n_ne = ne_cols.len();
+    if ne_ids.len() != n_ne || ne_thr.len() != n_ne || ne_pen.len() != n_ne {
+        return Err(PyValueError::new_err(
+            "score_block_pairs_arrow: ne_arrays / ne_scorer_ids / ne_thresholds /              ne_penalties must have equal lengths",
+        ));
+    }
+    for (k, col) in ne_cols.iter().enumerate() {
+        let col_len = match col {
+            StrCol::Utf8(a) => a.len(),
+            StrCol::Large(a) => a.len(),
+        };
+        if col_len != n_rows {
+            return Err(PyValueError::new_err(format!(
+                "score_block_pairs_arrow: NE field {k} length {col_len} != row count {n_rows}"
+            )));
+        }
+    }
 
     // Per-block scorer, shared by the sequential and rayon paths so the two can
     // never diverge. Borrows only Sync data (the arrow arrays, the exclude set,
@@ -1050,7 +1084,21 @@ pub fn score_block_pairs_arrow(
                     }
                     if weight_sum > 0.0 {
                         // #weighted-null: renormalize by OBSERVED weight (see above).
-                        let combined = score_sum / weight_sum;
+                        let mut combined = score_sum / weight_sum;
+                        if n_ne > 0 {
+                            let mut penalty = 0.0_f64;
+                            for k in 0..n_ne {
+                                if let (Some(a), Some(b)) = (ne_cols[k].get(i), ne_cols[k].get(j))
+                                {
+                                    if score_one(ne_ids[k], a, b) < ne_thr[k] {
+                                        penalty += ne_pen[k];
+                                    }
+                                }
+                            }
+                            if penalty > 0.0 {
+                                combined = (combined - penalty).max(0.0);
+                            }
+                        }
                         if combined >= threshold {
                             local.push((pair_key.0, pair_key.1, combined));
                         }
