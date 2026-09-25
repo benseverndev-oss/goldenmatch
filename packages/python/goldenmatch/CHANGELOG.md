@@ -6,6 +6,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+
+- **Zero-config no longer crashes on an integer identifier column.** A CSV whose phone
+  column is plain digits reads as int64, and auto-config's strong-id blocking pass measured
+  it through `filter_valid_key`, which ran a UTF-8 trim on it: `gm.dedupe(path)` and
+  `goldenmatch dedupe` both died with `ArrowNotImplementedError: Function
+  'utf8_trim_whitespace' has no kernel matching input types (int64)`. Non-string keys are
+  now checked through their string form, which is what the blocker compares (an integer
+  never matches a missing-value sentinel; a float NaN reads `nan` and drops), on both the
+  Arrow and Polars frames.
+- **Negative evidence on an integer column scores instead of disabling itself.** NE read raw
+  row values, so an int64 field (say `account_id`) reached a string scorer, raised
+  `TypeError`, and the entry was switched off for the rest of the process -- silently
+  skipping a penalty the committed config asks for. NE values are compared as strings, like
+  positive fields. (#2990)
+
 ## [3.19.0] - 2026-09-24
 
 <!-- README-callout

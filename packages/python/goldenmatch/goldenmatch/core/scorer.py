@@ -37,6 +37,21 @@ logger = logging.getLogger(__name__)
 # subsequent failures for the same key are silent and short-circuit before
 # re-invoking the failing scorer at all.
 _NE_BROKEN: set[tuple[str, str]] = set()
+
+
+def _ne_value(value: object) -> str | None:
+    """A negative-evidence field value as the string scorers expect it (#2990).
+
+    NE reads raw row values, so an integer column (an ``account_id`` read from
+    a CSV as int64) reached ``ensemble``/``jaro_winkler`` as an int, raised
+    ``TypeError``, and the NE entry was disabled for the rest of the process --
+    silently letting pairs through that the committed config says to penalise.
+    Positive fields are compared as strings; NE now is too. ``None`` stays
+    ``None`` (a missing value is "can't score", not a disagreement).
+    """
+    if value is None or isinstance(value, str):
+        return value
+    return str(value)
 # `_NE_BROKEN` is mutated from the ThreadPoolExecutor block-scoring workers
 # (`score_blocks_parallel` / `_columnar`). The GIL keeps the set itself
 # consistent, but it is a PROCESS global: without a reset, a transient or
@@ -740,8 +755,8 @@ def _apply_negative_evidence(matchkey: MatchkeyConfig, pair: dict) -> float:
             continue
         try:
             val_a, val_b = pair[ne.field]
-            val_a = apply_transforms(val_a, ne.transforms)
-            val_b = apply_transforms(val_b, ne.transforms)
+            val_a = apply_transforms(_ne_value(val_a), ne.transforms)
+            val_b = apply_transforms(_ne_value(val_b), ne.transforms)
             sim = score_field(val_a, val_b, ne.scorer)
         except (ValueError, KeyError) as exc:
             with _NE_BROKEN_LOCK:
@@ -815,8 +830,8 @@ def _apply_negative_evidence_batch(
                 if ne.field not in pair:
                     continue
                 val_a, val_b = pair[ne.field]
-                val_a = apply_transforms(val_a, ne.transforms)
-                val_b = apply_transforms(val_b, ne.transforms)
+                val_a = apply_transforms(_ne_value(val_a), ne.transforms)
+                val_b = apply_transforms(_ne_value(val_b), ne.transforms)
                 if val_a is None or val_b is None:
                     continue
                 idxs.append(i)

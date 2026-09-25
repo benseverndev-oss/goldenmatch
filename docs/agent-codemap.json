@@ -4757,6 +4757,7 @@
             "_jaccard_score_single",
             "_native_field_matrix",
             "_native_field_pairwise",
+            "_ne_value",
             "_norm_phash_hex",
             "_numeric_diff_similarity_py",
             "_pad_to_equal_length",
