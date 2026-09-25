@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.21.1] - 2026-09-25
+
 ### Fixed
 
 - **Negative evidence on a numeric identifier compares it exactly.** Auto-config gave an
