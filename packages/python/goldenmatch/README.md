@@ -36,6 +36,12 @@
 </div>
 
 <!-- README-callouts:start  (auto-synced from CHANGELOG.md by scripts/sync_readme_callouts.py; edit the CHANGELOG, not this block) -->
+> **v3.22.0: Zero-config person dedupe is 18-30x faster, and your records come back as you entered
+them.** 250k rows went from 520 s to 18 s with identical clusters (upgrade pulls
+`goldenmatch-native` 0.2.3). The unique, duplicate and deduplicated tables now carry your
+original values instead of standardized ones; `keep_original_values=False` or
+`--standardized-values` restores the old output.
+>
 > **v3.21.0: No false alarms on small files, and no LLM calls you didn't ask for.** A correct run on
 a small file no longer logs RED "output may be low-precision", and auto-config now turns
 on the (paid) LLM scorer only when you pass `llm_auto=True` -- it used to do so whenever an
@@ -48,12 +54,6 @@ plain digits (read as int64) made `gm.dedupe(path)` and `goldenmatch dedupe` die
 on such a column scores instead of silently switching itself off. The CLI summary now says
 what it counts -- `12 records -> 7 entities (4 duplicate groups)` -- and
 `result.total_entities` matches it.
->
-> **v3.19.0: One row per person, and clean result tables.** A bare `goldenmatch dedupe customers.csv`
-now also writes `<run>_deduplicated.csv` -- the golden records plus the records that had no
-duplicate, one row per real-world entity -- and `result.deduplicated` returns the same.
-Golden records alone were only the people who had duplicates. Result tables no longer
-leak the pipeline's working columns, and the GoldenCheck scan announces once, on stderr.
 <!-- README-callouts:end -->
 
 ---
