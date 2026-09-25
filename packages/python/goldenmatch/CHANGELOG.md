@@ -6,6 +6,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+
+- **`DedupeResult.total_entities`: distinct real-world entities** (duplicate groups plus
+  unmatched records), equal to `len(result.clusters)` and to the rows of
+  `result.deduplicated`. (#2989)
+
+### Changed
+
+- **The CLI summary says what it counts.** `goldenmatch dedupe` printed "N clusters found",
+  counting every entity including singletons, while `DedupeResult.total_clusters` counts only
+  duplicate groups -- so one 12-record run read 7 in the terminal and 4 in Python. It now
+  prints `Dedupe complete. 12 records -> 7 entities (4 duplicate groups).` on one line at any
+  terminal width. `total_clusters` keeps its meaning (duplicate groups) and is documented as
+  such. (#2989)
+
 ### Fixed
 
 - **Zero-config no longer crashes on an integer identifier column.** A CSV whose phone

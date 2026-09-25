@@ -452,7 +452,16 @@ class DedupeResult:
 
     @property
     def total_clusters(self) -> int:
+        """Duplicate groups: clusters with two or more records. See ``total_entities``."""
         return self.stats.get("total_clusters", 0)
+
+    @property
+    def total_entities(self) -> int:
+        """Distinct real-world entities: duplicate groups plus unmatched records.
+
+        Equals ``len(result.clusters)`` and the rows of ``result.deduplicated``.
+        """
+        return self.stats.get("total_entities", 0)
 
     def __repr__(self) -> str:
         return (
@@ -465,7 +474,8 @@ class DedupeResult:
         """Rich HTML display for Jupyter notebooks."""
         rows = [
             ("Total Records", str(self.total_records)),
-            ("Clusters", str(self.total_clusters)),
+            ("Entities", str(self.total_entities)),
+            ("Duplicate groups", str(self.total_clusters)),
             ("Match Rate", f"{self.match_rate:.1%}"),
             ("Duplicates", str(_frame_height(self.dupes)) if self.dupes is not None else "0"),
             ("Unique", str(_frame_height(self.unique)) if self.unique is not None else "0"),
@@ -1850,6 +1860,10 @@ def _extract_stats(result: dict) -> dict:
     stats = {
         "total_records": total_records,
         "total_clusters": total_clusters,
+        # #2989: every unmatched record is one entity, every duplicate group one
+        # more. `total_clusters` counts only the groups, which is why it read 4
+        # where the CLI said 7 on the same 12-record run.
+        "total_entities": total_records - matched_records + total_clusters,
         "matched_records": matched_records,
         "match_rate": match_rate,
     }
