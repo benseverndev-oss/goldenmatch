@@ -100,6 +100,7 @@
             "_to_result_table",
             "_user_table",
             "_warn_on_implausible_fallback_match_rate",
+            "_with_keep_original_values",
             "add_correction",
             "dedupe",
             "dedupe_df",
@@ -4013,7 +4014,9 @@
             "_as_arrow",
             "_concat_aligned",
             "_without",
+            "capture_original_input",
             "deduplicated_table",
+            "restore_original_values",
             "strip_pipeline_internals"
           ]
         },

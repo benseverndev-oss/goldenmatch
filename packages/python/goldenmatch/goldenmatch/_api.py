@@ -166,12 +166,14 @@ def _to_result_table(obj: Any) -> Any:
     return obj.to_arrow()
 
 
-def _user_table(obj: Any) -> Any:
+def _user_table(obj: Any, originals: Any = None) -> Any:
     """A pipeline result frame as the user sees it: a pa.Table without the
-    pipeline's working columns (#2991). See ``core/output_tables``."""
-    from goldenmatch.core.output_tables import strip_pipeline_internals
+    pipeline's working columns (#2991), and -- for input records, when the run
+    kept them -- with the values as entered rather than standardized (#3003).
+    See ``core/output_tables``."""
+    from goldenmatch.core.output_tables import restore_original_values, strip_pipeline_internals
 
-    return strip_pipeline_internals(_to_result_table(obj))
+    return strip_pipeline_internals(restore_original_values(_to_result_table(obj), originals))
 
 
 def _frame_height(obj: Any) -> int:
@@ -623,6 +625,7 @@ def dedupe(
     threshold: float | None = None,
     llm_scorer: bool = False,
     backend: str | None = None,
+    keep_original_values: bool | None = None,
 ) -> DedupeResult:
     """Deduplicate one or more files.
 
@@ -635,6 +638,9 @@ def dedupe(
         threshold: Override fuzzy match threshold for all fields.
         llm_scorer: Enable LLM scoring for borderline pairs (requires OPENAI_API_KEY).
         backend: Processing backend: None (default Polars), "ray", "duckdb".
+        keep_original_values: Return ``unique`` / ``dupes`` / ``deduplicated``
+            records with the values as entered instead of standardized. ``None``
+            (default) keeps them for input up to ``ORIGINAL_VALUES_MAX_ROWS`` rows.
 
     Returns:
         DedupeResult with golden records, clusters, dupes, unique, and stats.
@@ -658,6 +664,7 @@ def dedupe(
     cfg = _file_dedupe_config(
         file_specs, config, exact, fuzzy, blocking, threshold, llm_scorer, backend
     )
+    cfg = _with_keep_original_values(cfg, keep_original_values)
 
     # Run pipeline
     result = run_dedupe(file_specs, cfg)
@@ -666,8 +673,8 @@ def dedupe(
     return DedupeResult(
         golden=_user_table(result.get("golden")),
         clusters=result.get("clusters", {}),
-        dupes=_user_table(result.get("dupes")),
-        unique=_user_table(result.get("unique")),
+        dupes=_user_table(result.get("dupes"), result.get("original_input")),
+        unique=_user_table(result.get("unique"), result.get("original_input")),
         stats=_extract_stats(result),
         # #2417: `scored_pairs` is None on the B2c FS path; the Arrow table
         # is the backing and the property materializes on first read.
@@ -695,6 +702,7 @@ def dedupe_to_parquet(
     blocking: list[str] | None = None,
     threshold: float | None = None,
     backend: str | None = None,
+    keep_original_values: bool | None = None,
 ) -> dict:
     """Deduplicate one or more files, writing unique/dupes/golden to parquet in
     ``out_dir`` and returning the paths + counts (never in-memory frames).
@@ -729,6 +737,7 @@ def dedupe_to_parquet(
     cfg = _file_dedupe_config(
         file_specs, config, exact, fuzzy, blocking, threshold, False, backend
     )
+    cfg = _with_keep_original_values(cfg, keep_original_values)
     result = run_dedupe(file_specs, cfg, output_dir=out_dir)
 
     if result.get("streaming"):
@@ -743,8 +752,8 @@ def dedupe_to_parquet(
     unique_path = _os.path.join(out_dir, "unique.parquet")
     dupes_path = _os.path.join(out_dir, "dupes.parquet")
     golden_path = _os.path.join(out_dir, "golden.parquet")
-    unique = _user_table(result.get("unique"))
-    dupes = _user_table(result.get("dupes"))
+    unique = _user_table(result.get("unique"), result.get("original_input"))
+    dupes = _user_table(result.get("dupes"), result.get("original_input"))
     golden = _user_table(result.get("golden"))
     unique_count = _frame_write_parquet(unique, unique_path) if unique is not None else 0
     dupes_count = _frame_write_parquet(dupes, dupes_path) if dupes is not None else 0
@@ -796,6 +805,7 @@ def dedupe_df(
     suggest: bool = False,
     heal: bool = False,
     auto_refit: bool | str = False,
+    keep_original_values: bool | None = None,
 ) -> DedupeResult:
     """Deduplicate a Polars DataFrame directly (no file I/O).
 
@@ -969,6 +979,7 @@ def dedupe_df(
         _lint_findings = _run_config_lint(df, config)
         from goldenmatch.core._native_loader import native_dispatch_report
         _native_baseline = native_dispatch_report()
+        config = _with_keep_original_values(config, keep_original_values)
         result = run_dedupe_df(
             df, config, source_name=source_name,
             auto_config=False,
@@ -1032,8 +1043,8 @@ def dedupe_df(
     dedupe_result = DedupeResult(
         golden=_user_table(result.get("golden")),
         clusters=result.get("clusters", {}),
-        dupes=_user_table(result.get("dupes")),
-        unique=_user_table(result.get("unique")),
+        dupes=_user_table(result.get("dupes"), result.get("original_input")),
+        unique=_user_table(result.get("unique"), result.get("original_input")),
         stats=_extract_stats(result),
         # #2417: `scored_pairs` is None on the B2c FS path; the Arrow table
         # is the backing and the property materializes on first read.
@@ -1682,6 +1693,16 @@ def evaluate(
 
 
 # ── Internal helpers ──
+
+
+def _with_keep_original_values(cfg: Any, keep_original_values: bool | None) -> Any:
+    """``cfg`` with ``output.keep_original_values`` set, without mutating the
+    caller's config object (#3003). ``None`` leaves the config as it is."""
+    if keep_original_values is None or cfg is None or not hasattr(cfg, "output"):
+        return cfg
+    return cfg.model_copy(update={
+        "output": cfg.output.model_copy(update={"keep_original_values": keep_original_values})
+    })
 
 
 def _file_dedupe_config(

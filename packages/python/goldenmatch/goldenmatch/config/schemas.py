@@ -1874,6 +1874,16 @@ class OutputConfig(BaseModel):
         default=False,
         description="Adds per-field golden-record provenance (winning value plus source row id) to the lineage sidecar.",
     )
+    # #3003: `unique` / `dupes` / `deduplicated` carry the values the user
+    # entered, not the standardized ones, when this is on. None = decide by
+    # size: always for an in-memory `dedupe_df` (the caller already holds the
+    # table), and for file input up to `ORIGINAL_VALUES_MAX_ROWS` rows, since
+    # keeping the pre-standardization input costs memory for every column
+    # standardization rewrites. True/False force either way.
+    keep_original_values: bool | None = Field(
+        default=None,
+        description="Return unique/duplicate/deduplicated records with the values as entered rather than standardized; unset decides by input size.",
+    )
 
 
 # ── LLM Budget / Scorer Config ────────────────────────────────────────────
