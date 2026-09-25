@@ -107,3 +107,58 @@ def _concat_aligned(first: Any, second: Any) -> Any:
         cols_a.append(a if a is not None else pa.nulls(first.num_rows, typ))
         cols_b.append(b if b is not None else pa.nulls(second.num_rows, typ))
     return pa.concat_tables([pa.table(cols_a, names=names), pa.table(cols_b, names=names)])
+
+
+#: File input up to this many rows keeps the pre-standardization values by
+#: default (#3003). Above it, `keep_original_values=True` opts in. Measured with
+#: `scripts/bench_original_values_rss.py` on synthetic person data, fresh process
+#: per arm: peak RSS +70 MB (+5.9%) at 250k rows and +0.9 MB at 1M, wall time
+#: unchanged. 1M is the largest size measured, not a cliff: raise it with a
+#: measurement above it.
+ORIGINAL_VALUES_MAX_ROWS = 1_000_000
+
+
+def capture_original_input(table: Any, setting: bool | None, *, in_memory: bool) -> Any:
+    """The user's columns plus ``__row_id__``, as entered, or ``None``.
+
+    Call right after ingest assigns row ids and BEFORE quality fixes,
+    transforms or standardization rewrite values in place. Arrow buffers are
+    immutable, so this reference costs memory only for the columns those
+    stages later rewrite.
+
+    ``setting`` is ``OutputConfig.keep_original_values``: True/False force it;
+    None keeps originals for in-memory input (the caller already holds the
+    table) and for file input up to ``ORIGINAL_VALUES_MAX_ROWS`` rows.
+    """
+    if setting is False or table is None:
+        return None
+    arrow = _as_arrow(table)
+    if arrow is None or "__row_id__" not in arrow.column_names:
+        return None
+    if setting is None and not in_memory and arrow.num_rows > ORIGINAL_VALUES_MAX_ROWS:
+        return None
+    keep = [c for c in arrow.column_names if not c.startswith("__")] + ["__row_id__"]
+    return arrow.select(keep)
+
+
+def restore_original_values(table: Any, originals: Any) -> Any:
+    """Put the as-entered value back into every user column of ``table``.
+
+    Rows are matched on ``__row_id__``; columns the originals do not carry
+    (``__cluster_id__``, ``__source__``, anything derived) are left as they are.
+    Returns ``table`` unchanged when there is nothing to restore.
+    """
+    import pyarrow.compute as pc
+
+    table = _as_arrow(table)
+    if table is None or originals is None or table.num_rows == 0:
+        return table
+    if "__row_id__" not in table.column_names:
+        return table
+    idx = pc.index_in(table.column("__row_id__"), value_set=originals.column("__row_id__"))
+    for name in originals.column_names:
+        if name == "__row_id__" or name not in table.column_names:
+            continue
+        pos = table.column_names.index(name)
+        table = table.set_column(pos, name, originals.column(name).take(idx))
+    return table

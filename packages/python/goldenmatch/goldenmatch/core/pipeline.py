@@ -22,7 +22,12 @@ from goldenmatch.core.block_analyzer import analyze_blocking
 from goldenmatch.core.blocker import build_blocks
 from goldenmatch.core.ingest import apply_column_map, load_file, validate_columns
 from goldenmatch.core.matchkey import compute_matchkeys, precompute_matchkey_transforms
-from goldenmatch.core.output_tables import deduplicated_table, strip_pipeline_internals
+from goldenmatch.core.output_tables import (
+    capture_original_input,
+    deduplicated_table,
+    restore_original_values,
+    strip_pipeline_internals,
+)
 from goldenmatch.core.scorer import (
     find_exact_matches,
     rerank_top_pairs,
@@ -2165,8 +2170,14 @@ def run_dedupe(
     from goldenmatch.core.frame import concat_frames as _concat_frames
 
     _eager_done: frozenset[str] = frozenset()
+    _keep_originals = getattr(config.output, "keep_original_values", None)
+    _original_input = None
     if frames and all(isinstance(f, _AF) for f in frames):
         _combined = _concat_frames(frames)
+        # #3003: before anything rewrites values in place.
+        _original_input = capture_original_input(
+            _combined.native, _keep_originals, in_memory=False
+        )
         # W5b-2: run standardize + exact matchkeys EAGERLY on the arrow frame
         # when nothing polars-bound sits between them (domain extraction and
         # semantic blocking both inject columns between the two stages --
@@ -2244,7 +2255,7 @@ def run_dedupe(
                 config, matchkeys, writes_outputs=_writes_outputs
             )
         ):
-            return _run_dedupe_pipeline(
+            _res = _run_dedupe_pipeline(
                 _combined, config, matchkeys,
                 output_golden, output_clusters,
                 output_dupes, output_unique, output_report,
@@ -2252,21 +2263,28 @@ def run_dedupe(
                 output_dir=output_dir,
                 output_deduplicated=output_deduplicated,
                 _eager_stages_done=_eager_done,
+                _original_input=_original_input,
             )
+            _res["original_input"] = _original_input
+            return _res
         # W5b-1 shim (single, post-eager-stages): everything below is still
         # polars-lazy; removal point is W5b-3 (prep-block integrations).
         combined_df = cast("pl.DataFrame", pl.from_arrow(_combined.native))
     else:
         combined_df = pl.concat([f.collect() for f in frames])
+        _original_input = capture_original_input(
+            combined_df, _keep_originals, in_memory=False
+        )
     combined_lf = combined_df.lazy()
 
-    return _run_dedupe_pipeline(
+    _res = _run_dedupe_pipeline(
         combined_lf, config, matchkeys,
         output_golden, output_clusters,
         output_dupes, output_unique, output_report,
         across_files_only, llm_retrain, llm_provider, llm_max_labels,
         output_dir=output_dir,
         output_deduplicated=output_deduplicated,
+        _original_input=_original_input,
         # Seed the prep cache with (id, height) like the dedupe_df path. The
         # bare ``id(combined_lf)`` default is unsafe here: ``combined_lf`` is a
         # fresh object that's GC-eligible the moment this call returns, so
@@ -2279,6 +2297,8 @@ def run_dedupe(
         _prep_cache_seed=(id(combined_lf), combined_df.height),
         _eager_stages_done=_eager_done,
     )
+    _res["original_input"] = _original_input
+    return _res
 
 
 def _as_polars_df(obj: Any) -> pl.DataFrame:
@@ -3209,6 +3229,7 @@ def _run_dedupe_pipeline(
     output_dir: str | None = None,
     output_deduplicated: bool = False,
     _eager_stages_done: frozenset[str] = frozenset(),
+    _original_input: Any = None,
     _prep_cache_seed: tuple[int, int] | int | None = None,
     _prep_store: PreparedRecordStore | None = None,
     _em_results: dict | None = None,
@@ -5183,16 +5204,24 @@ def _run_dedupe_pipeline(
             write_output(clusters_out, directory, run_name, "clusters", fmt)
 
     if output_dupes and len(dupes_df) > 0:
-        write_output(strip_pipeline_internals(dupes_df), directory, run_name, "dupes", fmt)
+        write_output(
+            strip_pipeline_internals(restore_original_values(dupes_df, _original_input)),
+            directory, run_name, "dupes", fmt,
+        )
 
     if output_unique and len(unique_df) > 0:
-        write_output(strip_pipeline_internals(unique_df), directory, run_name, "unique", fmt)
+        write_output(
+            strip_pipeline_internals(restore_original_values(unique_df, _original_input)),
+            directory, run_name, "unique", fmt,
+        )
 
     if output_deduplicated:
         # One row per entity (#2991): golden records alone are only the entities
         # that had duplicates. Written here, beside the other outputs, so the
         # output directory and run name are resolved in exactly one place.
-        _dedup = deduplicated_table(golden_df, unique_df, _clusters_dict())
+        _dedup = deduplicated_table(
+            golden_df, restore_original_values(unique_df, _original_input), _clusters_dict()
+        )
         if _dedup is not None and _dedup.num_rows:
             write_output(_dedup, directory, run_name, "deduplicated", fmt)
 
@@ -5505,6 +5534,12 @@ def run_dedupe_df(
             )
     frame = frame.with_literal_column("__source__", source_name)
     frame = frame.ensure_row_ids(offset=0)
+    # #3003: the caller already holds this table, so the originals are free.
+    _original_input = capture_original_input(
+        frame.native,
+        getattr(config.output, "keep_original_values", None) if config is not None else None,
+        in_memory=True,
+    )
 
     # Evict the classic-lazy polars path for the flows the arrow Frame lane fully
     # supports: a polars input is converted to an arrow seam Frame so it runs the
@@ -5551,14 +5586,17 @@ def run_dedupe_df(
             _prep_store_ctx = _PRS(cleanup=not persist)
         own_store = True
     try:
-        return _run_dedupe_pipeline(combined_lf, config, matchkeys,
+        _res = _run_dedupe_pipeline(combined_lf, config, matchkeys,
                                     output_golden, output_clusters,
                                     output_dupes, output_unique, output_report,
                                     auto_config=auto_config,
                                     auto_config_llm_provider=auto_config_llm_provider,
                                     _prep_cache_seed=cache_seed,
                                     _prep_store=_prep_store_ctx,
-                                    _em_results=_em_results)
+                                    _em_results=_em_results,
+                                    _original_input=_original_input)
+        _res["original_input"] = _original_input
+        return _res
     finally:
         if own_store and _prep_store_ctx is not None:
             _prep_store_ctx.close()

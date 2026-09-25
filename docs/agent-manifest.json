@@ -40,7 +40,7 @@
               "name": "output",
               "type": "OutputConfig",
               "required": false,
-              "default": "OutputConfig(path=None, format=None, directory=None, run_name=None, lineage_provenance=False)",
+              "default": "OutputConfig(path=None, format=None, directory=None, run_name=None, lineage_provenance=False, keep_original_values=None)",
               "nested": [
                 "OutputConfig"
               ],
@@ -360,6 +360,13 @@
               "required": false,
               "default": "False",
               "description": "Adds per-field golden-record provenance (winning value plus source row id) to the lineage sidecar."
+            },
+            {
+              "name": "keep_original_values",
+              "type": "bool | None",
+              "required": false,
+              "default": "None",
+              "description": "Return unique/duplicate/deduplicated records with the values as entered rather than standardized; unset decides by input size."
             }
           ]
         },
@@ -2694,6 +2701,13 @@
               "required": false,
               "default": "False",
               "help": "Output golden records"
+            },
+            {
+              "name": "--original-values",
+              "type": "boolean",
+              "required": false,
+              "default": "None",
+              "help": "Write unique/duplicate/deduplicated records with the values as entered, or as standardized. Unset: as entered up to 1,000,000 input rows."
             },
             {
               "name": "--output-deduplicated",

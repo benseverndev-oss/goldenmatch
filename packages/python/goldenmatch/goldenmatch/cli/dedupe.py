@@ -80,6 +80,11 @@ def dedupe_cmd(
     preview_size: int = typer.Option(10000, "--preview-size", help="Number of records for preview sample"),
     preview_random: bool = typer.Option(False, "--preview-random", help="Deprecated no-op: accepted for back-compat but not applied (preview uses the first N)."),
     output_golden: bool = typer.Option(False, "--output-golden", help="Output golden records"),
+    original_values: bool | None = typer.Option(
+        None,
+        "--original-values/--standardized-values",
+        help="Write unique/duplicate/deduplicated records with the values as entered, or as standardized. Unset: as entered up to 1,000,000 input rows.",
+    ),
     output_deduplicated: bool = typer.Option(False, "--output-deduplicated", help="Output the deduplicated list: one row per entity (golden records + unique records)"),
     output_clusters: bool = typer.Option(False, "--output-clusters", help="Output cluster info"),
     output_dupes: bool = typer.Option(False, "--output-dupes", help="Output duplicate records"),
@@ -275,6 +280,8 @@ def dedupe_cmd(
         cfg.output.format = format
     if run_name:
         cfg.output.run_name = run_name
+    if original_values is not None:
+        cfg.output.keep_original_values = original_values
 
     if output_all:
         output_golden = True

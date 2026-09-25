@@ -178,6 +178,7 @@ Every config object in the pydantic tree(s), generated from the package schema. 
 | `directory` | str \| None | `None` | Directory the run's output artifacts are written into. |
 | `run_name` | str \| None | `None` | Name identifying this run, used to key output subdirectories and lineage. |
 | `lineage_provenance` | bool | `False` | Adds per-field golden-record provenance (winning value plus source row id) to the lineage sidecar. |
+| `keep_original_values` | bool \| None | `None` | Return unique/duplicate/deduplicated records with the values as entered rather than standardized; unset decides by input size. |
 
 ### `MatchSettingsConfig`
 
@@ -663,6 +664,7 @@ Every command and its options/arguments, generated from the Typer app. `choice`-
 | `dedupe` | `--preview-size` | integer | `10000` | Number of records for preview sample |
 | `dedupe` | `--preview-random` | boolean | `False` | Deprecated no-op: accepted for back-compat but not applied (preview uses the first N). |
 | `dedupe` | `--output-golden` | boolean | `False` | Output golden records |
+| `dedupe` | `--original-values` | boolean | `None` | Write unique/duplicate/deduplicated records with the values as entered, or as standardized. Unset: as entered up to 1,000,000 input rows. |
 | `dedupe` | `--output-deduplicated` | boolean | `False` | Output the deduplicated list: one row per entity (golden records + unique records) |
 | `dedupe` | `--output-clusters` | boolean | `False` | Output cluster info |
 | `dedupe` | `--output-dupes` | boolean | `False` | Output duplicate records |
