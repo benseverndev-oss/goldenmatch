@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 _NE_BROKEN: set[tuple[str, str]] = set()
 
 
-def _ne_value(value: object) -> object:
+def _ne_value(value: object) -> str | None:
     """A negative-evidence field value as the string scorers expect it (#2990).
 
     NE reads raw row values, so an integer column (an ``account_id`` read from
