@@ -203,10 +203,11 @@ class TestPerPairPythonPerfGuard:
     UPDATE (name-scorer bucket kernel): `name_freq_weighted_jw` /
     `given_name_aliased_jw` are now native bucket ids 15/16, so a name matchkey
     ENGAGES the native fast path when the kernel is capable + the tables install.
-    The guard now only bites for a name field that CANNOT go native --
-    `name_freq_weighted_jw` carrying a per-dataset `tf_freqs` table (fs-core ports
-    only the static-census branch), which declines deterministically regardless of
-    native availability.
+    UPDATE (#3024): the kernel scores the per-dataset `tf_freqs` branch too
+    (`name_tf=` handles, `NATIVE_SUPPORTS_NAME_TF_BUCKET`), so a tf-carrying
+    `name_freq_weighted_jw` field declines only when that route is unavailable: an
+    older wheel, native off, or negative evidence (whose branch scores per pair in
+    Python).
     """
 
     def _prepared_df_for(self, *fields: MatchkeyField) -> pl.DataFrame:
@@ -216,23 +217,59 @@ class TestPerPairPythonPerfGuard:
             cols[_xform_sig(f)] = ["alice", "alicia", "bob"]
         return pl.DataFrame(cols)
 
-    def test_declines_when_tf_name_field_forces_per_pair_python(self):
-        # A name_freq_weighted_jw field carrying a per-dataset tf_freqs table can't
-        # go native (fs-core ports only the static-census branch), so it forces the
-        # per-pair Python loop -> the guard must decline to find_fuzzy_matches. This
-        # is env-independent (holds whether or not the native kernel is built).
+    def _tf_matchkey(self, **kw):
         f1 = MatchkeyField(field="name", scorer="name_freq_weighted_jw", weight=1.0)
         f1.tf_freqs = {"alice": 0.9, "alicia": 0.05, "bob": 0.05}
         f2 = MatchkeyField(field="alias", scorer="jaro_winkler", weight=1.0)
-        mk = MatchkeyConfig(name="names", type="weighted", threshold=0.7, fields=[f1, f2])
+        mk = MatchkeyConfig(name="names", type="weighted", threshold=0.7, fields=[f1, f2], **kw)
+        return mk, self._prepared_df_for(f1, f2)
+
+    def test_declines_tf_name_field_without_the_native_tf_route(self, monkeypatch):
+        # A wheel without the tf route would score the field per pair in Python
+        # -> the guard must decline to find_fuzzy_matches.
+        import goldenmatch.backends.score_buckets as sb
+
+        monkeypatch.setattr(sb, "_name_tf_native_route", lambda mk, df: False)
+        mk, df = self._tf_matchkey()
         result = _resolve_fast_path(
-            mk, self._prepared_df_for(f1, f2),
-            across_files_only=False, source_lookup=None, target_ids=None,
+            mk, df, across_files_only=False, source_lookup=None, target_ids=None,
         )
         assert result is None, (
-            "a name_freq_weighted_jw field with a tf_freqs table cannot go native "
-            "(no tf branch in fs-core) -> must decline the fast path (perf guard)"
+            "a tf-carrying name_freq_weighted_jw field with no native tf route "
+            "must decline the fast path (perf guard)"
         )
+
+    def test_tf_name_field_engages_on_a_capable_wheel(self):
+        # #3024: zero-config person data sets tf_freqs on the surname field by
+        # default; declining it cost 12x on 50k rows.
+        from goldenmatch.backends.score_buckets import (
+            _ensure_name_tables_installed,
+            _name_tf_native_route,
+        )
+
+        mk, df = self._tf_matchkey()
+        if not (_ensure_name_tables_installed() and _name_tf_native_route(mk, df)):
+            pytest.skip("native name tf bucket route unavailable (pure-Python/stale wheel)")
+        result = _resolve_fast_path(
+            mk, df, across_files_only=False, source_lookup=None, target_ids=None,
+        )
+        assert result is not None
+
+    def test_tf_name_field_with_python_only_negative_evidence_declines(self):
+        # The kernel applies NE only for score_one's base scorers; any other NE
+        # scorer takes the per-pair Python branch, which would score the tf field
+        # in Python too.
+        from goldenmatch.core.matchkey import _xform_sig
+
+        ne = NegativeEvidenceField(
+            field="alias", scorer="soundex_match", threshold=0.5, penalty=0.3
+        )
+        mk, df = self._tf_matchkey(negative_evidence=[ne])
+        df = df.with_columns(pl.lit("x").alias(_xform_sig(ne)))
+        result = _resolve_fast_path(
+            mk, df, across_files_only=False, source_lookup=None, target_ids=None,
+        )
+        assert result is None
 
     def test_name_scorers_engage_when_native_available(self):
         # Without a tf table, name_freq_weighted_jw / given_name_aliased_jw are

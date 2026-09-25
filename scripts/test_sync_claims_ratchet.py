@@ -52,7 +52,7 @@ COVERAGE_DB = REPO / ".coverage"
 # exactly the claims coverage-rescue would remove.
 KNOWN_ACTIONABLE: set[tuple[str, str, int]] = {
     ("backends/score_buckets.py", "_ensure_legal_forms_installed", 530),
-    ("backends/score_buckets.py", "score_buckets", 1395),
+    ("backends/score_buckets.py", "score_buckets", 1464),
     # False bare-word match: "row" resolved from prose describing "the
     # per-row path", not a declared symbol the claim actually names -- a
     # claims.py target-resolution limitation, not a real gap. Same shape

@@ -1499,7 +1499,7 @@ dev = [
 
 [[package]]
 name = "goldenmatch-native"
-version = "0.2.2"
+version = "0.2.3"
 source = { directory = "packages/rust/extensions/native" }
 
 [[package]]

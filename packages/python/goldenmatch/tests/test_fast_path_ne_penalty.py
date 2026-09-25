@@ -7,9 +7,10 @@ applies `combined = max(0, combined - sum(penalties))` inline.
 
 Formula source: core/scorer.py `_apply_negative_evidence`. Same semantics.
 
-Native kernel: skipped when ne_specs is non-empty -- it threshold-filters
-inside the kernel pre-penalty, so we'd need to teach it to emit pre-penalty
-candidates (~2x emit volume) to keep using it. Not yet justified.
+Native kernel (#3024): `score_block_pairs_arrow` applies the same penalty before
+its threshold test (`ne_*` kwargs, `NATIVE_SUPPORTS_WEIGHTED_NE`) when every NE
+scorer is a base `score_one` id; otherwise NE keeps the per-pair Python loop.
+`test_native_ne_equals_python_ne` holds the two routes to the same output.
 """
 from __future__ import annotations
 
@@ -177,3 +178,53 @@ class TestParityWithSlowPath:
             assert pytest.approx(fs, abs=0.01) == ss, (
                 f"score mismatch at ({fa},{fb}): fast={fs} slow={ss}"
             )
+
+
+def test_native_ne_equals_python_ne(monkeypatch):
+    """#3024: NE applied in the kernel == NE applied by the per-pair Python loop,
+    on data where the penalty decides pairs (a shared name with a different
+    phone drops; a typo'd name with a matching email survives)."""
+    import random
+
+    import goldenmatch.backends.score_buckets as sb
+    from goldenmatch.core._native_loader import native_enabled, native_module
+
+    mod = native_module()
+    if not native_enabled("block_scoring") or not hasattr(mod, "NATIVE_SUPPORTS_WEIGHTED_NE"):
+        pytest.skip("native weighted NE unavailable (pure-Python/stale wheel)")
+    rng = random.Random(7)
+    names = ["alice smith", "alise smith", "bob jones", "bobby jones", "carol white"]
+    rows = []
+    for i in range(120):
+        n = rng.choice(names)
+        rows.append({
+            "__row_id__": i,
+            "name": n,
+            "zip": str(rng.randint(1, 6)),
+            "phone": rng.choice(["5551234", "5551234", "9990000", None]),
+            "email": rng.choice([n.replace(" ", ".") + "@x.com", "other@y.com", None]),
+        })
+    ne = [
+        NegativeEvidenceField(field="phone", scorer="exact", threshold=1.0, penalty=0.3),
+        NegativeEvidenceField(field="email", scorer="jaro_winkler", threshold=0.85, penalty=0.2),
+    ]
+    mk = MatchkeyConfig(
+        name="t", type="weighted", threshold=0.6,
+        fields=[MatchkeyField(field="name", scorer="jaro_winkler", weight=1.0)],
+        negative_evidence=ne,
+    )
+    df = pl.DataFrame(rows)
+    df = df.with_columns(
+        pl.col("name").alias(_xform_sig(mk.fields[0])),
+        *[pl.col(e.field).alias(_xform_sig(e)) for e in ne],
+    )
+    blocking = BlockingConfig(strategy="static", keys=[BlockingKeyConfig(fields=["zip"])])
+    native_pairs = sorted(score_buckets(df, blocking, mk, matched_pairs=set()))
+    monkeypatch.setattr(sb, "_native_ne_specs", lambda mk, df: None)
+    python_pairs = sorted(score_buckets(df, blocking, mk, matched_pairs=set()))
+    assert [(a, b) for a, b, _ in native_pairs] == [(a, b) for a, b, _ in python_pairs]
+    for (_, _, x), (_, _, y) in zip(native_pairs, python_pairs):
+        assert x == pytest.approx(y, abs=1e-12)
+    # The fixture must exercise the penalty, or the equality proves nothing.
+    no_ne = mk.model_copy(update={"negative_evidence": []})
+    assert len(score_buckets(df, blocking, no_ne, matched_pairs=set())) > len(native_pairs)
