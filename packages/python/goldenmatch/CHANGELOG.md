@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.22.0] - 2026-09-25
+
+<!-- README-callout
+**Zero-config person dedupe is 18-30x faster, and your records come back as you entered
+them.** 250k rows went from 520 s to 18 s with identical clusters (upgrade pulls
+`goldenmatch-native` 0.2.3). The unique, duplicate and deduplicated tables now carry your
+original values instead of standardized ones; `keep_original_values=False` or
+`--standardized-values` restores the old output.
+-->
+
 ### Changed
 
 - **Unique, duplicate and deduplicated records come back with the values you entered.**
@@ -28,7 +38,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   neither, so every block (tens of thousands of 2- to 5-row blocks) was scored one at a time
   in Python while 12 threads queued on the GIL. The kernel now scores both itself, in one
   call per bucket. 50k rows: 72.9 s -> 4.1 s; 250k rows: 519.7 s -> 17.6 s. Peak memory is
-  unchanged and the clusters are identical. Needs `goldenmatch-native` 0.2.3; older wheels keep the previous path. (#3024)
+  unchanged and the clusters are identical. Needs `goldenmatch-native` 0.2.3, now the floor of
+  the default install; older wheels keep the previous path. (#3024)
 
 ## [3.21.1] - 2026-09-25
 

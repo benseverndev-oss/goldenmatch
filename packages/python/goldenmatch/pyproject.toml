@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "goldenmatch"
 
-version = "3.21.1"
+version = "3.22.0"
 description = "Entity resolution toolkit — deduplicate records, match across sources, and maintain golden records"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -52,7 +52,7 @@ dependencies = [
     # dependency so `pip install goldenmatch` auto-installs the abi3 kernel on the
     # platforms where prebuilt wheels exist. Kept ALSO as the `[native]` extra
     # (back-compat alias). The runtime loader degrades to pure-Python when absent.
-    "goldenmatch-native>=0.1.0; sys_platform == 'darwin' or (sys_platform == 'win32' and platform_machine == 'AMD64') or (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64'))",
+    "goldenmatch-native>=0.2.3; sys_platform == 'darwin' or (sys_platform == 'win32' and platform_machine == 'AMD64') or (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64'))",
 ]
 
 [project.urls]
@@ -249,7 +249,7 @@ transform = [
 # paths run unchanged. Kept out of `all` (compiled, platform-specific -- like
 # `ray`/`duckdb`).
 native = [
-    "goldenmatch-native>=0.1.0",
+    "goldenmatch-native>=0.2.3",
 ]
 # Optional Lance-backed base store for out-of-core incremental / match_one
 # candidate retrieval. Spec: docs/superpowers/specs/
