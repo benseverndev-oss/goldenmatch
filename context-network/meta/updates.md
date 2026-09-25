@@ -2,6 +2,16 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-09-25 -- goldenmatch 3.20.0: integer ID columns, and counts that say what they count
+- Reproducing #2990 found a worse bug: a digits-only phone/account column (int64) crashed
+  zero-config blocking in `filter_valid_key` (#3011). NE on int columns now scores too.
+- `goldenmatch dedupe` prints `N records -> E entities (G duplicate groups)`;
+  `DedupeResult.total_entities` added (#3013). Filed #3012 (NE on numeric ids compares as
+  strings) and #3014 (LLM decoration ignores `llm_auto`; a consent/cost decision).
+- #2988 (RED on correct small runs) diagnosed to two controller artifacts (a small-frame
+  `cluster_giant` bar, and a scoring profile blind to exact-matchkey matches); fix held
+  pending #3014, whose latent bug it exposes.
+
 ## 2026-09-24 -- goldenmatch 3.19.0: one row per person, and a mint pin
 - `result.deduplicated` / `--output-deduplicated` (#3004): golden records alone were only the
   entities that had duplicates (4 of 7 people on the README demo). A bare

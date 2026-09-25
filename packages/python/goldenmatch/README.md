@@ -36,6 +36,13 @@
 </div>
 
 <!-- README-callouts:start  (auto-synced from CHANGELOG.md by scripts/sync_readme_callouts.py; edit the CHANGELOG, not this block) -->
+> **v3.20.0: Integer ID columns no longer crash zero-config.** A CSV whose phone or account column is
+plain digits (read as int64) made `gm.dedupe(path)` and `goldenmatch dedupe` die with
+`ArrowNotImplementedError` in auto-config's blocking; it now runs, and negative evidence
+on such a column scores instead of silently switching itself off. The CLI summary now says
+what it counts -- `12 records -> 7 entities (4 duplicate groups)` -- and
+`result.total_entities` matches it.
+>
 > **v3.19.0: One row per person, and clean result tables.** A bare `goldenmatch dedupe customers.csv`
 now also writes `<run>_deduplicated.csv` -- the golden records plus the records that had no
 duplicate, one row per real-world entity -- and `result.deduplicated` returns the same.
@@ -46,13 +53,6 @@ leak the pipeline's working columns, and the GoldenCheck scan announces once, on
 file call -- the first Python example in the README -- raised
 `KeyError: 'Field "__placeholder__" does not exist in schema'` on 3.18.0. It now
 auto-configures the files the way `goldenmatch dedupe customers.csv` does.
->
-> **v3.18.0: Fellegi-Sunter places its link cutoff from the trained model, and zero-config stops
-letting an `id` column veto matches.** The linear link cutoff is now an evidence-bits rule
-routed per matchkey instead of a fixed 0.50 midpoint, with `u` estimated from 50,000 random
-pairs: dblp_acm F1 at the default cutoff went from 0.3758 to 0.8159. Separately, a row key
-such as `id` is no longer promoted to negative evidence, which had cost a 12-record
-zero-config dedupe three of its four duplicate groups.
 <!-- README-callouts:end -->
 
 ---

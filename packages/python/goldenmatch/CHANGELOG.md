@@ -6,6 +6,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.20.0] - 2026-09-25
+
+<!-- README-callout
+**Integer ID columns no longer crash zero-config.** A CSV whose phone or account column is
+plain digits (read as int64) made `gm.dedupe(path)` and `goldenmatch dedupe` die with
+`ArrowNotImplementedError` in auto-config's blocking; it now runs, and negative evidence
+on such a column scores instead of silently switching itself off. The CLI summary now says
+what it counts -- `12 records -> 7 entities (4 duplicate groups)` -- and
+`result.total_entities` matches it.
+-->
+
 ### Added
 
 - **`DedupeResult.total_entities`: distinct real-world entities** (duplicate groups plus
