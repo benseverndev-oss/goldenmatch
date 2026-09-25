@@ -4,6 +4,18 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.5.6] - 2026-09-24
+
+### Changed
+
+- **`goldenmatch` floor raised to `>=3.19.0` and `goldencheck` to `>=3.6.0`.** goldenmatch 3.19.0
+  adds `result.deduplicated` and `--output-deduplicated` -- one row per real-world entity, where
+  golden records alone were only the entities that had duplicates -- and drops pipeline working
+  columns from result tables. goldencheck 3.6.0 stops pyarrow 25's `null_placement`
+  `FutureWarning` on every sort, which a suite install printed on every run, and makes its MCP
+  HTTP server fail closed: over HTTP on a non-loopback host it needs `GOLDENCHECK_MCP_TOKEN`
+  (or `GOLDENCHECK_MCP_ALLOW_PUBLIC=1`). The default stdio transport is unaffected.
+
 ## [0.5.5] - 2026-09-24
 
 ### Changed
