@@ -4,6 +4,16 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.5.8] - 2026-09-25
+
+### Changed
+
+- **`goldenmatch` floor raised to `>=3.21.0`.** Before 3.21.0, auto-config turned on the paid
+  LLM scorer whenever an `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` was set, although `llm_auto`
+  (default `False`) is documented as the opt-in; 3.21.0 requires `llm_auto=True`. The floor
+  moves so a suite install cannot resolve to a version that spends on LLM calls nobody asked
+  for. If you relied on the key alone, pass `llm_auto=True` or set `llm_scorer`.
+
 ## [0.5.7] - 2026-09-25
 
 ### Changed
