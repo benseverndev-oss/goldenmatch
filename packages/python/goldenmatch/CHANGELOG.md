@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Performance
+
+- **Zero-config person dedupe is ~18x faster.** On person data, auto-config commits a weighted
+  matchkey with a data-driven surname scorer (`name_freq_weighted_jw` plus its per-dataset
+  frequency table) and negative evidence on phone. The native bucket kernel could handle
+  neither, so every block (tens of thousands of 2- to 5-row blocks) was scored one at a time
+  in Python while 12 threads queued on the GIL. The kernel now scores both itself, in one
+  call per bucket. 50k rows: 72.9 s -> 4.1 s at the same peak memory, with identical
+  clusters. Needs `goldenmatch-native` 0.2.3; older wheels keep the previous path. (#3024)
+
 ## [3.21.1] - 2026-09-25
 
 ### Fixed
