@@ -6,6 +6,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Changed
+
+- **Auto-config enables the LLM scorer only when you pass `llm_auto=True`.** It used to turn
+  per-pair LLM scoring on whenever an `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` was in the
+  environment and enough scored pairs sat near the threshold -- so a key set for any other
+  reason meant LLM calls, and cost, nobody opted into, although `llm_auto` (default `False`)
+  is documented as that opt-in. **If you relied on the key alone:** pass `llm_auto=True`, or
+  set `llm_scorer` in your config. (#3014)
+
+### Fixed
+
+- **A correct run on a small file no longer reports RED "output may be low-precision".** A
+  12-record file with 4 duplicate groups got exactly the right clusters and still logged
+  "auto-config committed best-effort RED config". Two small-data artifacts: the small-frame
+  `cluster_giant` check (largest cluster over 10% of rows) called any duplicate pair "giant"
+  below 20 rows, and now also needs 10 members; and the scoring profile, emitted only by the
+  fuzzy scorer, read "nothing above threshold" when every match came from an exact matchkey
+  -- that verdict now defers to the cluster profile, which saw the matches. The scoring
+  profile and the rules that read it directly are unchanged. (#2988)
+
 ## [3.20.0] - 2026-09-25
 
 <!-- README-callout
