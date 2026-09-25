@@ -981,7 +981,7 @@ source = { directory = "packages/rust/extensions/analysis-native" }
 
 [[package]]
 name = "goldencheck"
-version = "3.5.0"
+version = "3.6.0"
 source = { editable = "packages/python/goldencheck" }
 dependencies = [
     { name = "goldencheck-types" },

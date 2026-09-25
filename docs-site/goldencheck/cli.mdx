@@ -23,7 +23,7 @@ keywords: ["goldencheck", "cli", "commands", "domains", "config"]
 | `goldencheck serve` | Start the REST API server (`--port 8000`). |
 | `goldencheck scan-db <conn>` | Scan a database table directly. |
 | `goldencheck schedule <files>` | Run scans on a cron schedule (`--interval`, `--webhook`). |
-| `goldencheck mcp-serve` | Start the MCP server (19 tools). |
+| `goldencheck mcp-serve` | Start the MCP server (19 tools). stdio by default; `--transport http` refuses to bind a non-loopback host (the default `0.0.0.0`) unless `GOLDENCHECK_MCP_TOKEN` is set (clients then send `Authorization: Bearer <token>`), or `GOLDENCHECK_MCP_ALLOW_PUBLIC=1` deliberately opens it. Binding `--host 127.0.0.1` needs neither. |
 
 The TypeScript CLI mirrors the core commands under `goldencheck-js` (`scan`, `validate`, `profile`, `health-score`, `baseline`, `fix`, `diff`, `demo`).
 

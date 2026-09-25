@@ -4,6 +4,23 @@ All notable changes to GoldenCheck will be documented in this file.
 
 ## [Unreleased]
 
+## [3.6.0] - 2026-09-24
+
+### Changed
+
+- **Security: the MCP HTTP server fails closed.** `goldencheck mcp-serve --transport http`
+  (and `run_server_http`) now refuses to start on a non-loopback host -- including the default
+  `0.0.0.0` -- unless `GOLDENCHECK_MCP_TOKEN` is set, raising `RuntimeError` instead of serving
+  every tool unauthenticated. **Action required if you run it over HTTP:** set
+  `GOLDENCHECK_MCP_TOKEN` (clients send `Authorization: Bearer <token>`), bind
+  `--host 127.0.0.1` for local use, or set `GOLDENCHECK_MCP_ALLOW_PUBLIC=1` to run an open
+  server deliberately. The default stdio transport is unaffected. (#2696)
+- **Dependency bounds.** `mcp` is capped `<2` and `pydantic` `<3`; `goldencheck-types` now has a
+  floor, `>=0.3.0`. mcp 2.0 renamed `Tool.inputSchema` and kept it only as a construction
+  alias, so code reading the attribute back failed at server startup; pydantic is capped for
+  the same shape of risk across the suite's ~94 models. The `goldencheck-types` floor closes a
+  clean-install resolve to 0.1.0, which lacks names the suite imports. (#2715, #2724, #2907)
+
 ### Fixed
 
 - **Sorting a column no longer emits pyarrow 25's `null_placement` `FutureWarning`.**
