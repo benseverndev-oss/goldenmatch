@@ -69,6 +69,11 @@ class SparsityVerdict:
 
 #: Fraction of the frame above which a single cluster is a collapse, not a merge.
 _GIANT_CLUSTER_FRACTION = 0.1
+#: The small-frame giant test also needs this many members. `0.1 * n_rows` alone
+#: made ANY duplicate pair "giant" below 20 rows -- a 12-row file with one
+#: three-person group read RED (#2988). Only frames under 100 rows are affected:
+#: above that, `0.1 * n_rows` already exceeds this floor.
+_GIANT_CLUSTER_MIN_SIZE = 10
 #: Over-merge bar, as a fraction of the caller's `max_cluster_size`.
 #:
 #: `cluster_size_max` is CENSORED: `build_clusters` splits any cluster above
@@ -665,7 +670,11 @@ class ClusterProfile:
             return "cluster_giant"
         # Retained for SMALL frames, where `0.1 * n_rows` sits below the cap and
         # the test is genuinely reachable. Dead above ~1000 rows, harmless there.
-        if n_rows > 0 and self.cluster_size_max > _GIANT_CLUSTER_FRACTION * n_rows:
+        if (
+            n_rows > 0
+            and self.cluster_size_max > _GIANT_CLUSTER_FRACTION * n_rows
+            and self.cluster_size_max >= _GIANT_CLUSTER_MIN_SIZE
+        ):
             return "cluster_giant"
         if self.transitivity_rate < _MIN_TRANSITIVITY:
             return "cluster_low_transitivity"
@@ -744,9 +753,31 @@ class ComplexityProfile:
             self.domain.health(),
             self.matchkey.health(n_full_rows=self.data.effective_n_rows),
             self.blocking.health(n_rows=self.data.n_rows),
-            self.scoring.health(),
+            self.scoring_health(),
             self.cluster.health(n_rows=self.data.n_rows),
         )
+
+    def scoring_health(self) -> HealthVerdict:
+        """Scoring's verdict, minus the "nothing was admitted" REDs when the
+        cluster profile shows something WAS (#2988).
+
+        The scoring profile is emitted by the fuzzy scorer only, from the pairs
+        that cleared ITS cut; exact-matchkey matches (including the NE
+        score-and-threshold exact route) never reach it. A run whose matches all
+        came from exact identifiers therefore read `scoring_nothing_above_threshold`
+        -- RED, "output may be low-precision" -- while it had clustered records.
+        A multi-member cluster is route-agnostic proof that some matchkey
+        admitted pairs, so those two reasons are overruled by it. The scoring
+        profile itself is unchanged: rules that read it directly keep the
+        inputs they were calibrated on (see #2673 for why that matters).
+        """
+        reason = self.scoring.red_reason()
+        if (
+            reason in ("scoring_no_candidates", "scoring_nothing_above_threshold")
+            and self.cluster.cluster_size_max >= 2
+        ):
+            return HealthVerdict.GREEN
+        return self.scoring.health()
 
     def normalized_signal_vector(self) -> list[float]:
         """L1-distance vector for convergence detection. v1 picks 8 signals."""
