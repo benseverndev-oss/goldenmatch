@@ -88,3 +88,21 @@ def test_cli_default_writes_deduplicated_and_golden(customers, tmp_path):
     assert dedup.exists() and (out_dir / "run_golden.csv").exists()
     with dedup.open(encoding="utf-8") as f:
         assert sum(1 for _ in f) == N_ENTITIES + 1
+
+
+def test_entity_and_group_counts_agree_across_surfaces(customers):
+    """#2989: the API said clusters=4 and the CLI said "7 clusters found" for the
+    same run. Both were right about different things; now each says which."""
+    r = gm.dedupe(str(customers))
+    assert r.total_clusters == 4  # duplicate groups
+    assert r.total_entities == N_ENTITIES == len(r.clusters) == r.deduplicated.num_rows
+
+
+def test_cli_summary_names_what_it_counts(customers, tmp_path):
+    from goldenmatch.cli.main import app
+
+    result = CliRunner().invoke(
+        app, ["dedupe", str(customers), "--output-dir", str(tmp_path / "o"), "--hide-controller"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "12 records -> 7 entities (4 duplicate groups)" in result.output

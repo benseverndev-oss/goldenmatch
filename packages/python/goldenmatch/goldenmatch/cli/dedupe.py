@@ -431,8 +431,18 @@ def dedupe_cmd(
             table.add_row(str(key), str(val))
         console.print(table)
     elif not quiet:
+        # #2989: say what each number counts. "N clusters found" counted every
+        # entity (singletons too) while the Python API's total_clusters counts
+        # only duplicate groups, so the same run read 7 here and 4 there.
         clusters = results.get("clusters", {})
-        console.print(f"Dedupe complete. {len(clusters)} clusters found.")
+        n_records = sum(c.get("size", 0) for c in clusters.values())
+        n_groups = sum(1 for c in clusters.values() if c.get("size", 0) > 1)
+        # soft_wrap: one line whatever the terminal width, so it greps and pipes.
+        console.print(
+            f"Dedupe complete. {n_records} records -> {len(clusters)} entities "
+            f"({n_groups} duplicate groups).",
+            soft_wrap=True,
+        )
 
     # ── Config-suggestion (healer) surface ──
     # ADVISORY and additive: a default run prints a one-line hint when the free

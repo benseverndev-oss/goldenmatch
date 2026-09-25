@@ -468,7 +468,8 @@ class DedupeResult:
     def to_csv(path, which="golden")  # Write results to CSV; which: "golden" | "deduplicated" | "dupes" | "unique" | "all"
     match_rate: float                 # Property: percentage of dupes
     total_records: int                # Property
-    total_clusters: int               # Property
+    total_clusters: int               # Property: duplicate groups (clusters of 2+ records)
+    total_entities: int               # Property: distinct entities = duplicate groups + unmatched records
 ```
 
 Both `DedupeResult` and `MatchResult` have `_repr_html_()` for rich Jupyter display.
