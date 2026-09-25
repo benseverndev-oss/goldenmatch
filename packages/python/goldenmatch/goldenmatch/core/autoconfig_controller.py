@@ -2257,7 +2257,7 @@ class AutoConfigController:
             data=data,
             domain=emitter.domain or DomainProfile(),
             matchkey=emitter.matchkey or MatchkeyProfile(),
-            blocking=emitter.blocking or BlockingProfile(),
+            blocking=emitter.blocking or BlockingProfile(measured=False),
             scoring=scoring,
             cluster=emitter.cluster or ClusterProfile(),
             meta=ProfileMeta(

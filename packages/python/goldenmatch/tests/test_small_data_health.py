@@ -113,3 +113,34 @@ def test_llm_scorer_decoration_needs_llm_auto():
         assert calls == []
         auto_configure_df(df, llm_auto=True)
         assert calls == [True]
+
+
+def test_unmeasured_blocking_is_not_red_but_measured_zero_is():
+    from goldenmatch.core.complexity_profile import BlockingProfile
+
+    assert BlockingProfile(measured=False).red_reason(n_rows=12) is None
+    assert BlockingProfile().red_reason(n_rows=12) == "blocking_no_blocks"
+
+
+def test_cli_panel_on_a_correct_small_run_is_not_red(tmp_path):
+    """The CLI's full-data finalize ran on a route that emits no blocking profile;
+    the all-zero stand-in read `blocking_no_blocks`, so the panel said
+    `health · red` beside `stop · green`."""
+    from goldenmatch.cli.main import app
+    from typer.testing import CliRunner
+
+    path = tmp_path / "customers.csv"
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["name", "email", "phone"])
+        w.writerows([
+            ("Maria Gonzalez", "maria@example.com", "555-201-3344"),
+            ("Maria Gonzales", "maria@example.com", "555-201-3344"),
+            ("James O'Neil", "jim@example.com", "555-883-1200"),
+            ("Jim O'Neill", "jim@example.com", "555-883-1200"),
+            ("Aisha Bello", "aisha@example.com", "555-339-2471"),
+            ("Thomas Baker", "tb@example.com", "555-120-4455"),
+        ])
+    result = CliRunner().invoke(app, ["dedupe", str(path), "--output-dir", str(tmp_path / "o")])
+    assert result.exit_code == 0, result.output
+    assert "health · red" not in result.output
