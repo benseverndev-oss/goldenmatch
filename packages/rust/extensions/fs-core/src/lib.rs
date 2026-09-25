@@ -123,6 +123,59 @@ pub fn name_freq_weighted_sim(a: &str, b: &str, freq: &dyn SurnameFreq) -> f64 {
     jw * weight
 }
 
+/// Per-dataset value frequencies for `name_freq_weighted_jw`'s data-driven
+/// branch (#1207): the `MatchkeyField.tf_freqs` table auto-config builds from
+/// the data being matched, keyed on POST-transform values. Mirrors
+/// `refdata.scorer._tf_rarity` and the `log_ref` it is called with.
+pub struct NameTfRarity {
+    freqs: std::collections::HashMap<String, f64>,
+    /// `-ln(min observed freq)`, so a once-seen value has rarity 1.0; 0.0 when
+    /// the table is empty or its minimum is not positive.
+    log_ref: f64,
+}
+
+impl NameTfRarity {
+    pub fn new(freqs: std::collections::HashMap<String, f64>) -> Self {
+        let min_f = freqs.values().copied().fold(f64::INFINITY, f64::min);
+        let log_ref = if min_f.is_finite() && min_f > 0.0 {
+            -min_f.ln()
+        } else {
+            0.0
+        };
+        NameTfRarity { freqs, log_ref }
+    }
+
+    /// Rarity in `[0, 1]`: 1.0 for an empty, unseen or once-seen value, near 0
+    /// for the most common one.
+    #[inline]
+    pub fn rarity(&self, value: &str) -> f64 {
+        if value.is_empty() || self.log_ref <= 0.0 {
+            return 1.0;
+        }
+        match self.freqs.get(value) {
+            Some(&f) if f > 0.0 => ((1.0 / f).ln() / self.log_ref).clamp(0.0, 1.0),
+            _ => 1.0,
+        }
+    }
+}
+
+/// `name_freq_weighted_jw` with a per-dataset frequency table. Mirrors
+/// `refdata.scorer.NameFreqWeightedJW.score_pair`'s `tf_freqs` branch, which
+/// replaces the static census path entirely: agreement on a common value is
+/// down-weighted across the whole Jaro-Winkler range, with no borderline zone.
+///
+/// ```text
+/// weight = 0.6 + 0.4 * mean(rarity(a), rarity(b))
+/// return JaroWinkler(a, b) * weight
+/// ```
+#[inline]
+pub fn name_freq_tf_weighted_sim(a: &str, b: &str, tf: &NameTfRarity) -> f64 {
+    let jw = score_one(0, a, b);
+    let weight = NFW_COMMON_NAME_FLOOR
+        + (1.0 - NFW_COMMON_NAME_FLOOR) * ((tf.rarity(a) + tf.rarity(b)) / 2.0);
+    jw * weight
+}
+
 /// `given_name_aliased_jw`: Jaro-Winkler with an alias-aware exact bonus.
 /// Mirrors `refdata.scorer.GivenNameAliasedJW.score_pair`:
 ///
@@ -1772,6 +1825,31 @@ mod tests {
                 "rare keeps full jw, got {rare}"
             );
         }
+    }
+
+    #[test]
+    fn name_freq_tf_weight_follows_value_rarity() {
+        // min freq 0.001 -> log_ref = ln(1000); a value seen at 0.001 has
+        // rarity 1.0, one at 0.1 has ln(10)/ln(1000) = 1/3.
+        let tf = NameTfRarity::new(
+            [("smith".to_string(), 0.1), ("zork".to_string(), 0.001)]
+                .into_iter()
+                .collect(),
+        );
+        assert!((tf.rarity("zork") - 1.0).abs() < 1e-12);
+        assert!((tf.rarity("smith") - 1.0 / 3.0).abs() < 1e-12);
+        assert_eq!(tf.rarity("unseen"), 1.0);
+        assert_eq!(tf.rarity(""), 1.0);
+        // Whole JW range, no borderline zone: identical common values are
+        // down-weighted too.
+        let s = name_freq_tf_weighted_sim("smith", "smith", &tf);
+        assert!((s - (0.6 + 0.4 * (1.0 / 3.0))).abs() < 1e-12, "got {s}");
+        let jw = score_one(0, "smith", "zork");
+        let mixed = name_freq_tf_weighted_sim("smith", "zork", &tf);
+        assert!((mixed - jw * (0.6 + 0.4 * ((1.0 / 3.0 + 1.0) / 2.0))).abs() < 1e-12);
+        // An empty table has no reference frequency: every value is rare.
+        let empty = NameTfRarity::new(Default::default());
+        assert_eq!(empty.rarity("smith"), 1.0);
     }
 
     #[test]

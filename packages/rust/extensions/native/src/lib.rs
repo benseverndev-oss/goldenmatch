@@ -94,6 +94,12 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // keeps the pure-Python plugin path (score_one's catch-all would score 15/16
     // as 0.0 otherwise).
     m.add("NATIVE_SUPPORTS_NAME_BUCKET_SCORERS", true)?;
+    // Wheel-skew capability flag: `score_block_pairs_arrow` takes `name_tf=`
+    // (per-field `build_name_tf_table` handles), so bucket id 15 scores the
+    // per-dataset frequency branch of `name_freq_weighted_jw` (#1207) instead
+    // of declining the fast path. Absent on older wheels, which keep the
+    // per-block matrix path for a tf-carrying field.
+    m.add("NATIVE_SUPPORTS_NAME_TF_BUCKET", true)?;
     // Wheel-skew capability flag: the FUSED FS kernel (`match_fused_fs`) now scores
     // each field through fs-core's `field_similarity` (the SAME dispatch the classic
     // block scorer uses), so scorer ids 4/5 (name_freq_weighted / given_name_aliased)
@@ -160,9 +166,11 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(score::score_field_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(score::score_field_pairwise, m)?)?;
     m.add_function(wrap_pyfunction!(score::build_exclude_set, m)?)?;
+    m.add_function(wrap_pyfunction!(score::build_name_tf_table, m)?)?;
     m.add_function(wrap_pyfunction!(score::set_name_reference_data, m)?)?;
     m.add_function(wrap_pyfunction!(score::has_name_reference_data, m)?)?;
     m.add_class::<score::ExcludeSet>()?;
+    m.add_class::<score::NameTfTable>()?;
     m.add_function(wrap_pyfunction!(hash::record_fingerprint, m)?)?;
     m.add_function(wrap_pyfunction!(hash::record_fingerprints_batch, m)?)?;
     m.add_function(wrap_pyfunction!(hash::record_fingerprints_batch_arrow, m)?)?;

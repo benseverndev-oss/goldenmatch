@@ -1027,6 +1027,22 @@ def _resolve_ne_specs(
     return out
 
 
+def _name_tf_native_route(mk: MatchkeyConfig, prepared_df: Any) -> bool:
+    """Whether a ``name_freq_weighted_jw`` field carrying a per-dataset
+    ``tf_freqs`` table (#1207) will be scored by the native bucket kernel: the
+    loaded wheel takes ``name_tf=`` handles (``NATIVE_SUPPORTS_NAME_TF_BUCKET``)
+    and the matchkey takes the native route at all, which negative evidence
+    rules out (the NE branch scores per pair in Python). Otherwise the fast path
+    would score the field per pair in Python, the 19x-slow shape the perf guard
+    declines."""
+    if not native_enabled("block_scoring"):
+        return False
+    mod = native_module()
+    if mod is None or not hasattr(mod, "NATIVE_SUPPORTS_NAME_TF_BUCKET"):
+        return False
+    return not _resolve_ne_specs(mk, prepared_df)
+
+
 def _resolve_fast_path(
     mk: MatchkeyConfig,
     prepared_df: pl.DataFrame,
@@ -1147,7 +1163,10 @@ def _resolve_fast_path(
         for f in mk.fields:
             s = getattr(f, "scorer", None)
             if s == "name_freq_weighted_jw":
-                if not _name_native_ok or getattr(f, "tf_freqs", None):
+                if not _name_native_ok or (
+                    getattr(f, "tf_freqs", None)
+                    and not _name_tf_native_route(mk, prepared_df)
+                ):
                     _name_forces_per_pair.add(s)
             elif s == "given_name_aliased_jw" and not _name_native_ok:
                 _name_forces_per_pair.add(s)
@@ -1736,6 +1755,7 @@ def score_buckets(
     # candidate pairs (~2x emit volume) -- not worth it until measurement
     # demands it.
     native_scorer_ids: list[int] | None = None
+    native_name_tf: list[Any] | None = None
     if fast_path_specs is not None and native_enabled("block_scoring"):
         _, _, _field_specs, _ne_specs = fast_path_specs
         if not _ne_specs:
@@ -1837,6 +1857,23 @@ def score_buckets(
             )
             if all(i is not None for i in ids) and not _skew_block:
                 native_scorer_ids = ids  # type: ignore[assignment]
+                # #3024: per-dataset name tf tables ride into the kernel as
+                # handles built once here. `_resolve_fast_path` admits a tf field
+                # only when the wheel supports it, so `_mod` has the builder.
+                _tf_fields = [
+                    f.tf_freqs
+                    if spec[3] == "name_freq_weighted_jw" and getattr(f, "tf_freqs", None)
+                    else None
+                    for f, spec in zip(mk.fields, _field_specs)
+                ]
+                if any(t is not None for t in _tf_fields):
+                    if _mod is not None and hasattr(_mod, "build_name_tf_table"):
+                        native_name_tf = [
+                            None if t is None else _mod.build_name_tf_table(t)
+                            for t in _tf_fields
+                        ]
+                    else:
+                        native_scorer_ids = None
 
     # #2673: candidate-pair count, accumulated per scored bucket.
     #
@@ -1873,6 +1910,11 @@ def score_buckets(
     # Now: one set built once, every worker call passes the Arc handle.
     # Falls back to None (no exclude) when native isn't available or the
     # build_exclude_set kernel isn't in the loaded native module (older wheel).
+    # Passed only when a field has a tf table, so an older wheel without the
+    # `name_tf` kwarg is never handed one.
+    _name_tf_kwargs: dict[str, Any] = (
+        {"name_tf": native_name_tf} if native_name_tf is not None else {}
+    )
     native_exclude_handle = None
     if native_scorer_ids is not None:
         try:
@@ -2022,6 +2064,7 @@ def score_buckets(
                     row_ids_arrow, field_arrays_arrow, size_list,
                     native_scorer_ids, weights, total_weight, threshold,
                     exclude_set=native_exclude_handle,
+                    **_name_tf_kwargs,
                 )
             else:
                 # Legacy/stale native wheel (pre-#552: no build_exclude_set, so
@@ -2042,6 +2085,7 @@ def score_buckets(
                     row_ids_arrow, field_arrays_arrow, size_list,
                     native_scorer_ids, weights, total_weight, threshold,
                     [],
+                    **_name_tf_kwargs,
                 )
                 if frozen_exclude:
                     pairs = [

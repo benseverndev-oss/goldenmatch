@@ -13,8 +13,8 @@ use arrow::array::{Array, ArrayData, Int64Array, LargeStringArray, StringArray};
 use arrow::datatypes::DataType;
 use arrow::pyarrow::PyArrowType;
 use goldenmatch_fs_core::{
-    given_name_aliased_sim, name_freq_weighted_sim, AliasTable, NameAliases, SurnameFreq,
-    SurnameIdfTable, TfTable,
+    given_name_aliased_sim, name_freq_tf_weighted_sim, name_freq_weighted_sim, AliasTable,
+    NameAliases, NameTfRarity, SurnameFreq, SurnameIdfTable, TfTable,
 };
 use goldenmatch_score_core::score_one;
 use numpy::{IntoPyArray, PyArray1, PyArray2};
@@ -185,17 +185,22 @@ pub const NB_GIVEN_NAME_ALIASED: u8 = 16;
 /// degrades to plain Jaro-Winkler (`score_one(0)`), matching the Python plugin's
 /// `if not is_available(): return jw` — though the Python caller only routes
 /// native once the tables are installed, so this is a defensive fallback.
+///
+/// `name_tf` is the field's per-dataset frequency table (#1207). When present,
+/// id 15 takes the plugin's data-driven branch, which replaces the census path.
 #[inline]
 fn score_bucket_field(
     scorer_id: u8,
     a: &str,
     b: &str,
     name_data: &Option<Arc<NameRefData>>,
+    name_tf: Option<&NameTfRarity>,
 ) -> f64 {
     match scorer_id {
-        NB_NAME_FREQ_WEIGHTED => match name_data {
-            Some(d) => name_freq_weighted_sim(a, b, &d.surnames),
-            None => score_one(0, a, b),
+        NB_NAME_FREQ_WEIGHTED => match (name_tf, name_data) {
+            (Some(tf), _) => name_freq_tf_weighted_sim(a, b, tf),
+            (None, Some(d)) => name_freq_weighted_sim(a, b, &d.surnames),
+            (None, None) => score_one(0, a, b),
         },
         NB_GIVEN_NAME_ALIASED => match name_data {
             Some(d) => given_name_aliased_sim(a, b, &d.aliases),
@@ -248,6 +253,31 @@ pub fn build_exclude_set(pairs: Vec<(i64, i64)>) -> ExcludeSet {
         set.insert(key);
     }
     ExcludeSet { set: Arc::new(set) }
+}
+
+/// A field's per-dataset name-frequency table (`MatchkeyField.tf_freqs`, #1207)
+/// for the weighted bucket kernel. Built once per dedupe via
+/// [`build_name_tf_table`] and passed by handle to every
+/// `score_block_pairs_arrow` call, like [`ExcludeSet`], so the table is not
+/// marshaled per bucket.
+#[pyclass(module = "goldenmatch._native", name = "NameTfTable")]
+pub struct NameTfTable {
+    tf: Arc<NameTfRarity>,
+}
+
+#[pymethods]
+impl NameTfTable {
+    fn __repr__(&self) -> String {
+        "NameTfTable()".to_string()
+    }
+}
+
+/// Build a [`NameTfTable`] from a `{value: frequency}` table.
+#[pyfunction]
+pub fn build_name_tf_table(freqs: std::collections::HashMap<String, f64>) -> NameTfTable {
+    NameTfTable {
+        tf: Arc::new(NameTfRarity::new(freqs)),
+    }
 }
 
 // ---- PyO3 surface (scale matches score_buckets._resolve_score_pair_callable:
@@ -552,7 +582,7 @@ pub fn score_block_pairs(
                                     (&field_values[f][i], &field_values[f][j])
                                 {
                                     score_sum +=
-                                        score_bucket_field(scorer_ids[f], a, b, &name_data)
+                                        score_bucket_field(scorer_ids[f], a, b, &name_data, None)
                                             * weights[f];
                                     weight_sum += weights[f];
                                 }
@@ -903,7 +933,7 @@ impl StrCol {
 #[pyfunction]
 #[pyo3(signature = (
     row_ids, field_arrays, block_sizes, scorer_ids, weights,
-    total_weight, threshold, exclude=None, exclude_set=None,
+    total_weight, threshold, exclude=None, exclude_set=None, name_tf=None,
 ))]
 pub fn score_block_pairs_arrow(
     py: Python<'_>,
@@ -916,6 +946,7 @@ pub fn score_block_pairs_arrow(
     threshold: f64,
     exclude: Option<Vec<(i64, i64)>>,
     exclude_set: Option<PyRef<'_, ExcludeSet>>,
+    name_tf: Option<Vec<Option<PyRef<'_, NameTfTable>>>>,
 ) -> PyResult<Vec<(i64, i64, f64)>> {
     // #weighted-null: unused -- scores renormalize by weight_sum. Param KEPT so
     // the #[pyfunction] signature (and any published wheel) is unchanged.
@@ -976,6 +1007,20 @@ pub fn score_block_pairs_arrow(
     // the name-scorer bucket ids (15/16) reach the census/alias tables inside the
     // shared span closure. `Arc<NameRefData>` is Sync -> safe for the rayon path.
     let name_data = current_name_refdata();
+    // Per-field tf tables (index-aligned with `scorer_ids`), cloned out of the
+    // Python handles so the scoring loop runs without the GIL.
+    let name_tf: Vec<Option<Arc<NameTfRarity>>> = match name_tf {
+        Some(v) => {
+            if v.len() != n_fields {
+                return Err(PyValueError::new_err(format!(
+                    "score_block_pairs_arrow: name_tf has {} entries, expected {n_fields}",
+                    v.len()
+                )));
+            }
+            v.into_iter().map(|h| h.map(|h| Arc::clone(&h.tf))).collect()
+        }
+        None => vec![None; n_fields],
+    };
 
     // Per-block scorer, shared by the sequential and rayon paths so the two can
     // never diverge. Borrows only Sync data (the arrow arrays, the exclude set,
@@ -998,7 +1043,8 @@ pub fn score_block_pairs_arrow(
                     for f in 0..n_fields {
                         if let (Some(a), Some(b)) = (fields[f].get(i), fields[f].get(j)) {
                             score_sum +=
-                                score_bucket_field(scorer_ids[f], a, b, &name_data) * weights[f];
+                                score_bucket_field(scorer_ids[f], a, b, &name_data, name_tf[f].as_deref())
+                                    * weights[f];
                             weight_sum += weights[f];
                         }
                     }
