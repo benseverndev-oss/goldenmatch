@@ -389,7 +389,7 @@ def _identify_failing_subprofile(profile: ComplexityProfile) -> str:  # pyright:
     health_calls = {
         "data": lambda: profile.data.health(),
         "blocking": lambda: profile.blocking.health(n_rows=n_rows),
-        "scoring": lambda: profile.scoring.health(),
+        "scoring": lambda: profile.scoring_health(),
         "matchkey": lambda: profile.matchkey.health(),
         "cluster": lambda: profile.cluster.health(n_rows=n_rows),
     }
@@ -474,7 +474,7 @@ def _first_red_subprofile(profile: ComplexityProfile) -> str:
         ("domain", profile.domain.health()),
         ("matchkey", profile.matchkey.health()),
         ("blocking", profile.blocking.health(n_rows=n_rows)),
-        ("scoring", profile.scoring.health()),
+        ("scoring", profile.scoring_health()),
         ("cluster", profile.cluster.health(n_rows=n_rows)),
     ]
     for name, health in checks:
