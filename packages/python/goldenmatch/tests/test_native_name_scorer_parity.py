@@ -21,10 +21,10 @@ is authoritative. Empirically the two agree to machine epsilon here (name_freq_w
 is `jw * weight`, given_name_aliased is `jw` or `1.0` — no FS-style level banding that
 could amplify a borderline JW delta), so a 1e-9 abs tolerance is comfortable.
 
-The fs-core `name_freq_weighted_sim` ports only the STATIC-census branch (not the
-#1207 per-dataset `tf_freqs` downweight), so this test drives the plugin's static
-branch (no `tf_freqs` passed) — matching how the fast-path guard declines native for
-a tf-carrying name field.
+The #1207 per-dataset `tf_freqs` branch is ported too (fs-core
+`name_freq_tf_weighted_sim`), reached through `score_block_pairs_arrow(name_tf=...)`
+with `build_name_tf_table` handles on wheels exposing `NATIVE_SUPPORTS_NAME_TF_BUCKET`
+(#3024); `test_name_freq_weighted_tf_branch_matches_plugin` holds it to the plugin.
 """
 from __future__ import annotations
 
@@ -185,3 +185,44 @@ def test_name_scorer_arrow_matches_vec_kernel():
         assert vec_map.keys() == arrow_map.keys()
         for k in vec_map:
             assert vec_map[k] == pytest.approx(arrow_map[k], abs=_TOL), f"id{scorer_id} {k}"
+
+
+def test_name_freq_weighted_tf_branch_matches_plugin():
+    """#3024: id 15 with a per-dataset tf table == the plugin's `tf_freqs` branch
+    on every pair, including unseen, empty and most-common values. Before this the
+    fast path declined any tf-carrying name field, sending zero-config person data
+    to per-block matrix scoring (108 s vs 9 s on 50k rows)."""
+    pa = pytest.importorskip("pyarrow")
+    n = _native_loader.native_module()
+    if not _capable(n) or not hasattr(n, "NATIVE_SUPPORTS_NAME_TF_BUCKET"):
+        pytest.skip("native kernel lacks the name tf bucket path")
+    _install(n)
+    tf_freqs = {"Smith": 0.2, "smith": 0.05, "Jones": 0.01, "Nguyen": 0.001, "": 0.3}
+    handle = n.build_name_tf_table(tf_freqs)
+    ref = NameFreqWeightedJW()
+    values = [v for v in _SURNAMES if v]
+    emitted = n.score_block_pairs_arrow(
+        pa.array(list(range(len(values))), type=pa.int64()), [pa.array(values)],
+        [len(values)], [15], [1.0], 1.0, -1.0, name_tf=[handle],
+    )
+    got = {(a, b): s for a, b, s in emitted}
+    for i, j in itertools.combinations(range(len(values)), 2):
+        exp = ref.score_pair(values[i], values[j], tf_freqs=tf_freqs)
+        assert got[(i, j)] == pytest.approx(exp, abs=_TOL), (
+            f"tf {values[i]!r} {values[j]!r}: {got[(i, j)]} vs {exp}"
+        )
+    # The tf table replaces the census branch: identical common values are
+    # pulled below 1.0, which the static branch never does.
+    assert got[(values.index("Smith"), values.index("smith"))] < 1.0
+
+
+def test_name_tf_handles_must_align_with_fields():
+    pa = pytest.importorskip("pyarrow")
+    n = _native_loader.native_module()
+    if n is None or not hasattr(n, "NATIVE_SUPPORTS_NAME_TF_BUCKET"):
+        pytest.skip("native kernel lacks the name tf bucket path")
+    with pytest.raises(ValueError, match="name_tf"):
+        n.score_block_pairs_arrow(
+            pa.array([0, 1], type=pa.int64()), [pa.array(["a", "b"])], [2], [15],
+            [1.0], 1.0, -1.0, name_tf=[],
+        )
