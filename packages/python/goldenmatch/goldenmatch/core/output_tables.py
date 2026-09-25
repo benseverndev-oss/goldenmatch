@@ -110,8 +110,11 @@ def _concat_aligned(first: Any, second: Any) -> Any:
 
 
 #: File input up to this many rows keeps the pre-standardization values by
-#: default (#3003). Above it, `keep_original_values=True` opts in. Chosen from a
-#: measured peak-RSS comparison; see the constant's PR for the numbers.
+#: default (#3003). Above it, `keep_original_values=True` opts in. Measured with
+#: `scripts/bench_original_values_rss.py` on synthetic person data, fresh process
+#: per arm: peak RSS +70 MB (+5.9%) at 250k rows and +0.9 MB at 1M, wall time
+#: unchanged. 1M is the largest size measured, not a cliff: raise it with a
+#: measurement above it.
 ORIGINAL_VALUES_MAX_ROWS = 1_000_000
 
 

@@ -45,6 +45,8 @@ result = goldenmatch.dedupe_df(
 ```python
 result.golden          # pa.Table | None - canonical records with __cluster_id__ (v3: pl.from_arrow(...) for a Polars frame)
 result.deduplicated    # pa.Table | None - one row per entity: golden records + unique records, each with __cluster_id__
+# unique / dupes / deduplicated hold the values as entered (golden stays standardized);
+# keep_original_values=True|False forces it, unset decides by size (always for dedupe_df)
 result.dupes           # pa.Table | None - duplicate records with __row_id__
 result.unique          # pa.Table | None - non-duplicate records
 result.clusters        # dict[int, dict] - {cluster_id: {"members": [row_ids], "pair_scores": {(a,b): score}}}

@@ -6,6 +6,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Changed
+
+- **Unique, duplicate and deduplicated records come back with the values you entered.**
+  Standardization used to leak into them: "14 Oak Street" came back as "14 Oak St",
+  "María González" as "Maria Gonzalez", "555-201-3344" as "5552013344". A list of your
+  records minus the duplicates was no longer your records. These tables now carry the input
+  values, matched back by row id. Golden records stay standardized, since they are
+  synthesized rather than input. In-memory input (`dedupe_df`) always keeps originals. File
+  input keeps them up to 1M rows, where keeping them measured at +70 MB peak memory at 250k
+  rows and +1 MB at 1M, and above that returns standardized values unless asked.
+  `keep_original_values=True/False` on `dedupe`, `dedupe_df` and `dedupe_to_parquet`, or
+  `--original-values/--standardized-values` on the CLI, overrides the default either way.
+  (#3003)
+
 ### Performance
 
 - **Zero-config person dedupe is 18-30x faster.** On person data, auto-config commits a weighted
