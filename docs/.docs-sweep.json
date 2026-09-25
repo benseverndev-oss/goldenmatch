@@ -1,9 +1,9 @@
 {
-  "version": "3.19.0",
-  "commit": "cce593b92",
-  "date": "2026-09-24",
-  "previous_swept_version": "3.18.1",
+  "version": "3.20.0",
+  "commit": "c83b83464",
+  "date": "2026-09-25",
+  "previous_swept_version": "3.19.0",
   "note": "Set by the rollout-docs-sweep skill when a docs sweep completes for a release. The check_docs_sweep.py gate asserts version == current packages/python/goldenmatch version; bump this marker at the END of a docs sweep.",
-  "sweep_scope": "3.19.0 = #3004 (deduplicated output; result tables without pipeline internals; to_csv rejects unknown kinds) + #3001 (GoldenCheck announces once, on stderr). #3004 itself swept the surfaces it changes: cli.mdx (--output-deduplicated, new default), api-quick-reference.mdx and python-api.mdx (result.deduplicated, to_csv kinds), quickstart.mdx x2 and overview.mdx and two runnable examples (the broken result.golden.write_csv), both READMEs' Try it section. config-matrix.mdx regenerated. No GOLDENMATCH_* flag added or removed.",
+  "sweep_scope": "3.20.0 = #3011 (integer identifier columns: zero-config crash + NE silently disabled) + #3013 (CLI summary names entities vs duplicate groups; DedupeResult.total_entities). #3013 updated python-api.mdx; no prose surface claims the old 'N clusters found' wording or integer-column behaviour. No GOLDENMATCH_* flag added or removed.",
   "backlog_note": "NO FULL PROSE SWEEP HAS BEEN PERFORMED FOR 3.4.0..3.16.0. The gate script existed but was wired into no workflow, so the marker sat at 3.3.1 across 13 minor releases while nothing enforced it. It is now wired into cut-goldenmatch-release.yml. The marker was advanced to 3.16.0 to arm the gate rather than to claim those releases were swept, and 3.17.0's scoped sweep (above) does not discharge that backlog either. Delete this key at the first full sweep."
 }
