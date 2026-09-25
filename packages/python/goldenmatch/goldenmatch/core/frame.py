@@ -484,11 +484,18 @@ class PolarsFrame:
     def filter_valid_key(self, col: str) -> PolarsFrame:
         # The blocker sentinel guard VERBATIM (blocker.py ~362-368): drop null
         # keys and the stringified-missing sentinels; keep "" (a real value --
-        # the PR #390 regression). `col` must already be a string column.
+        # the PR #390 regression). A non-string column (an integer phone, a
+        # float with NaN) is compared through its string form, which is what the
+        # blocker's stringified keys see: an int never matches a sentinel, a
+        # float NaN reads "nan" and drops. Calling `.str` on it directly raised.
         return PolarsFrame(
             self._df.filter(
                 pl.col(col).is_not_null()
-                & ~pl.col(col).str.strip_chars().str.to_lowercase().is_in(["nan", "null", "none"])
+                & ~pl.col(col)
+                .cast(pl.Utf8, strict=False)
+                .str.strip_chars()
+                .str.to_lowercase()
+                .is_in(["nan", "null", "none"])
             )
         )
 
@@ -1263,7 +1270,11 @@ class ArrowFrame:
         import pyarrow.compute as pc
 
         c = self._tbl.column(col)
-        normalized = pc.utf8_lower(pc.utf8_trim_whitespace(c))
+        # Non-string keys go through their string form (see PolarsFrame twin):
+        # `utf8_trim_whitespace` has no kernel for int64, so an all-digit phone
+        # column crashed zero-config blocking.
+        as_str = c if pa.types.is_string(c.type) or pa.types.is_large_string(c.type) else pc.cast(c, pa.string())
+        normalized = pc.utf8_lower(pc.utf8_trim_whitespace(as_str))
         sentinel = pc.is_in(normalized, value_set=pa.array(["nan", "null", "none"]))
         keep = pc.and_kleene(pc.is_valid(c), pc.invert(sentinel))
         return ArrowFrame(self._tbl.filter(keep, null_selection_behavior="drop"))
