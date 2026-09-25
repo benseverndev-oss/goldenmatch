@@ -1514,9 +1514,15 @@ class AutoConfigController:
         # Post-iteration: decorate committed config with LLM scorer if appropriate.
         # This runs ONCE, outside the iteration loop, so it never competes with
         # structural rules for the iteration budget.
-        committed_config = self._maybe_decorate_with_llm_scorer(
-            best_entry.config, best_entry.profile,
-        )
+        # #3014: only with the caller's opt-in. `llm_auto` (default False) is the
+        # documented switch for auto-config enabling the LLM scorer; this used to
+        # fire on an API key alone, so anyone with OPENAI_API_KEY set for any
+        # reason got per-pair LLM calls -- and the bill -- without asking.
+        committed_config = best_entry.config
+        if (v0_kwargs or {}).get("llm_auto"):
+            committed_config = self._maybe_decorate_with_llm_scorer(
+                committed_config, best_entry.profile,
+            )
 
         # #2637: write the RESOLVED FS link cutoff onto the committed config.
         self._stamp_resolved_link_thresholds(committed_config)

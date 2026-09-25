@@ -84,3 +84,32 @@ def test_correct_small_run_does_not_warn_red(tmp_path, caplog):
     groups = {tuple(sorted(c["members"])) for c in result.clusters.values() if c["size"] > 1}
     assert groups == {(0, 1, 2), (3, 4), (5, 6), (9, 10)}
     assert "best-effort RED config" not in caplog.text
+
+
+def test_llm_scorer_decoration_needs_llm_auto():
+    """#3014: an API key alone enabled per-pair LLM scoring. `llm_auto` is the
+    documented opt-in, and the decoration now runs only with it."""
+    from unittest.mock import patch
+
+    import pyarrow as pa
+    from goldenmatch.core.autoconfig import auto_configure_df
+    from goldenmatch.core.autoconfig_controller import AutoConfigController
+
+    df = pa.table({
+        "name": ["Ann Lee", "Ann Leigh", "Bo Chan", "Bo Chen", "Cy Diaz", "Di Eve"],
+        "email": ["ann@x.com", "ann@x.com", "bo@x.com", "bo@x.com", "cy@x.com", "di@x.com"],
+    })
+    calls = []
+    real = AutoConfigController._maybe_decorate_with_llm_scorer
+
+    def spy(self, config, profile):
+        calls.append(True)
+        return real(self, config, profile)
+
+    with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-fake"}), patch.object(
+        AutoConfigController, "_maybe_decorate_with_llm_scorer", spy
+    ):
+        auto_configure_df(df, llm_auto=False)
+        assert calls == []
+        auto_configure_df(df, llm_auto=True)
+        assert calls == [True]
