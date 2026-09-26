@@ -4,6 +4,14 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.5.10] - 2026-09-25
+
+### Changed
+
+- **`goldenmatch` floor raised to `>=3.22.0` and `goldenmatch-native` to `>=0.2.3`.** Zero-config
+  person dedupe is 18-30x faster (250k rows: 520 s to 18 s, identical clusters), and the unique,
+  duplicate and deduplicated tables carry the values as entered rather than standardized ones.
+
 ## [0.5.9] - 2026-09-25
 
 ### Changed
