@@ -5,18 +5,18 @@
 [north-star-roadmap.md](./north-star-roadmap.md): *is GoldenMatch becoming the
 tool developers reach for by default?* Trend > snapshot.
 
-**Latest: 2026-09-27** (change vs the previous snapshot)
+**Latest: 2026-09-28** (change vs the previous snapshot)
 
 | Signal | Now | Change | North Star reading |
 |---|---|---|---|
 | **Stranger issues + PRs, ever** | 2 | 2 (▬0) | someone reached for it† |
-| **`goldenmatch` desktop downloads (30d)** | 92 | 92 (▲+5) | people installing it§ |
-| `goldenmatch` downloads (30d) | 1.8k | 1.8k (▼-24) | reach, mostly CI§ |
+| **`goldenmatch` desktop downloads (30d)** | 87 | 87 (▼-5) | people installing it§ |
+| `goldenmatch` downloads (30d) | 1.8k | 1.8k (▲+5) | reach, mostly CI§ |
 | GitHub stars | 132 | 132 (▬0) | discovery momentum |
 | Forks | 15 | 15 (▬0) | intent-to-use |
-| Time-to-first-success | 27.9s · F1 1.00 | ▼-2.8s | zero-config friction‡ |
-| PyPI downloads (30d, whole suite) | 41.0k | 41.0k (▬0) | CI-dominated, not adoption§ |
-| npm downloads (30d, whole suite) | 1.5k | 1.5k (▲+19) | CI-dominated, not adoption§ |
+| Time-to-first-success | 26.9s · F1 1.00 | ▼-1.0s | zero-config friction‡ |
+| PyPI downloads (30d, whole suite) | — | — | CI-dominated, not adoption§ |
+| npm downloads (30d, whole suite) | 1.6k | 1.6k (▲+169) | CI-dominated, not adoption§ |
 | Open issues, non-maintainer | 1 | 1 (▬0) | raw, includes promo accounts |
 
 † Issues and PRs, open or closed, from accounts that are not the maintainer,
@@ -40,6 +40,7 @@ the probe itself did not run. The two are never merged.
 
 | Date | Strangers | GM desktop 30d | GM 30d | Stars | Forks | Suite PyPI 30d | Suite npm 30d | TTFS |
 |---|---|---|---|---|---|---|---|---|
+| 2026-09-28 | 2 | 87 | 1.8k | 132 | 15 | — | 1.6k | 26.9s |
 | 2026-09-27 | 2 | 92 | 1.8k | 132 | 15 | 41.0k | 1.5k | 27.9s |
 | 2026-09-26 | 2 | 87 | 1.8k | 132 | 15 | 41.0k | 1.4k | 30.7s |
 | 2026-09-25 | 2 | 65 | 1.4k | 133 | 15 | — | 1.4k | 30.3s |
@@ -55,7 +56,6 @@ the probe itself did not run. The two are never merged.
 | 2026-09-15 | — | — | — | 131 | 14 | — | 3.0k | 19.6s |
 | 2026-09-14 | — | — | — | 131 | 14 | — | 3.0k | 20.7s |
 | 2026-09-13 | — | — | — | 131 | 13 | 87.7k | 3.0k | 18.6s |
-| 2026-09-12 | — | — | — | 131 | 13 | — | 3.0k | 20.2s |
 
 ## The gates (from the roadmap)
 
