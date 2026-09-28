@@ -28,7 +28,7 @@ ryu = "1"
 # src/columnar.rs. The wasm / pure-logic surfaces never enable this, so the core
 # stays arrow-free for them; native-flow (which already ships arrow) enables it.
 arrow-array = { version = "59", default-features = false, optional = true }
-arrow-buffer = { version = "59", default-features = false, optional = true }
+arrow-buffer = { version = "60", default-features = false, optional = true }
 
 [features]
 arrow = ["dep:arrow-array", "dep:arrow-buffer"]
