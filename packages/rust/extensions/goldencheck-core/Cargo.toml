@@ -38,7 +38,7 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 # default-features = false keeps csv/ipc/json/compute out; we only read array
 # buffers. We deliberately do NOT enable `pyarrow` here (native's shims stay
 # the only place that needs it) -- this crate stays pyo3-free.
-arrow = { version = "59", default-features = false }
+arrow = { version = "60", default-features = false }
 # Pure-Rust CSV tokenizer (no pyo3, WASM-safe) for the owned CSV
 # type-inference kernel (`csv_infer`) -- mirrors the stdlib `csv` module the
 # Python reference uses.
