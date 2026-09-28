@@ -29,7 +29,7 @@ description = "Pyo3-free config-suggestion kernel; ingests run artifacts, applie
 # NOTE: `cargo test` MUST run with `--features arrow` -- the unit + golden tests
 # construct `RecordBatch`es. Bare `cargo test` compiles cleanly (test modules are
 # gated on `feature = "arrow"`) but runs zero arrow tests.
-arrow = { version = "59", default-features = false, optional = true }
+arrow = { version = "60", default-features = false, optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Reuse the existing reduction kernels -- do NOT reimplement histogram/quantile.
