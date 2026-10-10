@@ -6,13 +6,13 @@
 gate fails any PR whose doc drifts from its JSON, so these numbers are the
 current truth, not a stale copy pasted from a case study.
 
-**Run date:** 2026-10-09 &nbsp;·&nbsp; **path:** pure-Python &nbsp;·&nbsp; **planning_effort:** normal &nbsp;·&nbsp; **LLM features:** off
+**Run date:** 2026-10-10 &nbsp;·&nbsp; **path:** pure-Python &nbsp;·&nbsp; **planning_effort:** normal &nbsp;·&nbsp; **LLM features:** off
 
 | Dataset | Domain | F1 | Precision | Recall | Time |
 |---|---|---|---|---|---|
-| Febrl3 | record | 0.9912 | 0.9992 | 0.9833 | 6.19s |
-| NCVR-synthetic | record | 0.9990 | 0.9992 | 0.9988 | 18.88s |
-| DQbench | benchmark-suite | composite=83.45 | — | — | 88.9s |
+| Febrl3 | record | 0.9912 | 0.9992 | 0.9833 | 8.79s |
+| NCVR-synthetic | record | 0.9990 | 0.9992 | 0.9988 | 25.68s |
+| DQbench | benchmark-suite | composite=83.45 | — | — | 114.5s |
 
 ## Reading these numbers
 
