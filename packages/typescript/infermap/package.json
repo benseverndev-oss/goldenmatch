@@ -85,7 +85,7 @@
     "goldencheck-types": "workspace:^"
   },
   "devDependencies": {
-    "@types/node": "^25.9.8",
+    "@types/node": "^25.9.9",
     "goldenmatch": "workspace:*",
     "goldenmatch-wasm-runtime": "workspace:^",
     "rimraf": "^6.1.3",
