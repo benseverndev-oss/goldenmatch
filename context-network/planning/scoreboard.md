@@ -5,18 +5,18 @@
 [north-star-roadmap.md](./north-star-roadmap.md): *is GoldenMatch becoming the
 tool developers reach for by default?* Trend > snapshot.
 
-**Latest: 2026-10-17** (change vs the previous snapshot)
+**Latest: 2026-10-18** (change vs the previous snapshot)
 
 | Signal | Now | Change | North Star reading |
 |---|---|---|---|
 | **Stranger issues + PRs, ever** | 3 | 3 (▬0) | someone reached for it† |
-| **`goldenmatch` desktop downloads (30d)** | 69 | 69 (▼-2) | people installing it§ |
-| `goldenmatch` downloads (30d) | 1.8k | 1.8k (▼-1) | reach, mostly CI§ |
+| **`goldenmatch` desktop downloads (30d)** | 68 | 68 (▼-1) | people installing it§ |
+| `goldenmatch` downloads (30d) | 1.8k | 1.8k (▲+13) | reach, mostly CI§ |
 | GitHub stars | 133 | 133 (▬0) | discovery momentum |
 | Forks | 16 | 16 (▬0) | intent-to-use |
-| Time-to-first-success | 29.1s · F1 1.00 | ▲+1.1s | zero-config friction‡ |
-| PyPI downloads (30d, whole suite) | 27.8k | 27.8k | CI-dominated, not adoption§ |
-| npm downloads (30d, whole suite) | 1.3k | 1.3k (▬0) | CI-dominated, not adoption§ |
+| Time-to-first-success | 20.4s · F1 1.00 | ▼-8.7s | zero-config friction‡ |
+| PyPI downloads (30d, whole suite) | 27.8k | 27.8k (▬0) | CI-dominated, not adoption§ |
+| npm downloads (30d, whole suite) | 1.1k | 1.1k (▼-193) | CI-dominated, not adoption§ |
 | Open issues, non-maintainer | 1 | 1 (▬0) | raw, includes promo accounts |
 
 † Issues and PRs, open or closed, from accounts that are not the maintainer,
@@ -40,6 +40,7 @@ the probe itself did not run. The two are never merged.
 
 | Date | Strangers | GM desktop 30d | GM 30d | Stars | Forks | Suite PyPI 30d | Suite npm 30d | TTFS |
 |---|---|---|---|---|---|---|---|---|
+| 2026-10-18 | 3 | 68 | 1.8k | 133 | 16 | 27.8k | 1.1k | 20.4s |
 | 2026-10-17 | 3 | 69 | 1.8k | 133 | 16 | 27.8k | 1.3k | 29.1s |
 | 2026-10-16 | 3 | 71 | 1.8k | 133 | 16 | — | 1.3k | 28.0s |
 | 2026-10-15 | 3 | 71 | 1.8k | 133 | 16 | 27.8k | 1.3k | 33.4s |
@@ -55,7 +56,6 @@ the probe itself did not run. The two are never merged.
 | 2026-10-05 | 3 | 74 | 1.9k | 132 | 15 | — | 1.5k | 26.6s |
 | 2026-10-04 | 3 | 74 | 1.9k | 132 | 15 | — | 1.5k | 21.8s |
 | 2026-10-03 | 2 | 77 | 1.8k | 132 | 15 | — | 1.5k | 27.6s |
-| 2026-10-02 | 2 | 77 | 1.7k | 132 | 15 | 41.0k | 1.5k | 29.7s |
 
 ## The gates (from the roadmap)
 
