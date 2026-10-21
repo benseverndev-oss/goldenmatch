@@ -151,7 +151,7 @@ jobs:
       # draft: true uploads assets while the release is still MUTABLE; the next
       # step publishes it, which is when an immutable release seals its assets.
       - name: Create draft release + attach signed assets
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v2
         with:
           tag_name: ${{ env.TAG }}
           # target_commitish MUST be a branch name or commit SHA -- never a tag.
