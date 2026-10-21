@@ -92,6 +92,12 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+    groups:
+      # init/autobuild/analyze/upload-sarif must share one version: a
+      # 4.38.x autobuild refuses the config a 4.37.x init wrote (#3060).
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
 
   # Docker — Dockerfile.mcp at repo root + per-package
   - package-ecosystem: "docker"
