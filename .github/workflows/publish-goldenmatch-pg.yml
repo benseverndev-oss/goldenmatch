@@ -46,7 +46,10 @@ jobs:
   build:
     # Tag pushes are already filtered by the `on:` trigger; dispatch builds
     # without releasing.
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: the 26.04 image ships libclang 21, and
+    # pgrx 0.12.9's bindgen (0.70) then emits opaque pg structs ("no field
+    # `t_hoff` on HeapTupleHeaderData"). Unpin when pgrx is bumped.
+    runs-on: ubuntu-24.04
     permissions:
       contents: write      # upload release assets
       id-token: write      # cosign keyless OIDC signing
