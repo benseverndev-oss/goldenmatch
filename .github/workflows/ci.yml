@@ -3606,7 +3606,13 @@ jobs:
       - name: Build + pack a runtime venv for the executors
         run: |
           set -euo pipefail
-          python -m venv /tmp/gmenv
+          # Build from the DRIVER's interpreter, never bare `python`: PySpark
+          # refuses a worker whose minor version differs from the driver's
+          # (PYTHON_VERSION_MISMATCH). uv picks the driver's Python, the runner
+          # image picks `python`, and on ubuntu-26.04 they diverged (3.13 vs
+          # 3.14). sys._base_executable is the real interpreter behind .venv,
+          # so the stdlib venv venv-pack needs is still what gets built.
+          "$(.venv/bin/python -c 'import sys; print(sys._base_executable)')" -m venv /tmp/gmenv
           /tmp/gmenv/bin/pip install --upgrade pip
           # NO PANDAS. The tier's UDFs are `arrow_udf` over `pa.Array`, so the
           # executor needs pyarrow (goldenmatch's own hard dependency) and
@@ -3785,7 +3791,8 @@ jobs:
       - name: Build a deliberately EMPTY executor env
         run: |
           set -euo pipefail
-          python -m venv /tmp/bare-env
+          # Driver's interpreter, for the same minor-version reason as gmenv.
+          "$(.venv/bin/python -c 'import sys; print(sys._base_executable)')" -m venv /tmp/bare-env
           # No goldenmatch, no pyarrow, nothing. Assert the emptiness -- an env
           # that accidentally carried goldenmatch would make the inventory
           # report jar-only support the tier does not have.
