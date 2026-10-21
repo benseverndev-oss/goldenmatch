@@ -35,7 +35,7 @@ class TestProfileTable:
             ) AS t(email, name)
         """)
         result = json.loads(
-            con.sql("SELECT goldenmatch_profile_table('prof_t')").fetchone()[0]
+            con.sql("SELECT goldenmatch_profile_table('prof_t')").fetchall()[0][0]
         )
         # Parity against the core function on the same data.
         import polars as pl
@@ -55,7 +55,7 @@ class TestSuggestThreshold:
         result = con.sql(
             "SELECT goldenmatch_suggest_threshold(?)",
             params=[json.dumps(scores)],
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         from goldenmatch import suggest_threshold
         assert result == pytest.approx(suggest_threshold(scores))
         assert result is not None
@@ -63,7 +63,7 @@ class TestSuggestThreshold:
     def test_too_few_returns_null(self, con):
         result = con.sql(
             "SELECT goldenmatch_suggest_threshold('[0.5]')"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         assert result is None
 
 
@@ -72,7 +72,7 @@ class TestDetectDomain:
         cols = ["product_title", "brand", "sku", "price"]
         result = json.loads(con.sql(
             "SELECT goldenmatch_detect_domain(?)", params=[json.dumps(cols)],
-        ).fetchone()[0])
+        ).fetchall()[0][0])
         from goldenmatch.core.domain import detect_domain
         expected = dataclasses.asdict(detect_domain(cols))
         assert result["name"] == expected["name"] == "product"
@@ -84,7 +84,7 @@ class TestExtractFeatures:
         text = "Sony DSC-T77 Black 10MP Camera"
         result = json.loads(con.sql(
             "SELECT goldenmatch_extract_features(?, 'product')", params=[text],
-        ).fetchone()[0])
+        ).fetchall()[0][0])
         from goldenmatch.core.domain import extract_product_features
         expected = dataclasses.asdict(extract_product_features(text))
         assert result["brand"] == expected["brand"] == "Sony"
@@ -94,7 +94,7 @@ class TestExtractFeatures:
         text = "Microsoft Office 2010 Professional Win"
         result = json.loads(con.sql(
             "SELECT goldenmatch_extract_features(?, 'software')", params=[text],
-        ).fetchone()[0])
+        ).fetchall()[0][0])
         from goldenmatch.core.domain import extract_software_features
         expected = dataclasses.asdict(extract_software_features(text))
         assert result["version"] == expected["version"] == "2010"
@@ -104,7 +104,7 @@ class TestExtractFeatures:
         text = "A Study on Entity Resolution 2019"
         result = json.loads(con.sql(
             "SELECT goldenmatch_extract_features(?, 'biblio')", params=[text],
-        ).fetchone()[0])
+        ).fetchall()[0][0])
         from goldenmatch.core.domain import extract_biblio_features
         assert result == extract_biblio_features(text)
         assert result["year"] == "2019"
@@ -112,7 +112,7 @@ class TestExtractFeatures:
     def test_unknown_kind_returns_error(self, con):
         result = json.loads(con.sql(
             "SELECT goldenmatch_extract_features('x', 'bogus')"
-        ).fetchone()[0])
+        ).fetchall()[0][0])
         assert "error" in result
 
 
@@ -126,7 +126,7 @@ class TestEvaluate:
         result = json.loads(con.sql(
             "SELECT goldenmatch_evaluate(?, ?)",
             params=[json.dumps(predicted), json.dumps(gt)],
-        ).fetchone()[0])
+        ).fetchall()[0][0])
         from goldenmatch import evaluate_pairs
         expected = evaluate_pairs(
             [(0, 1, 0.9), (2, 3, 0.8)], {(0, 1), (4, 5)}
@@ -140,7 +140,7 @@ class TestEvaluate:
         result = json.loads(con.sql(
             "SELECT goldenmatch_evaluate(?, ?)",
             params=[json.dumps(clusters), json.dumps(gt)],
-        ).fetchone()[0])
+        ).fetchall()[0][0])
         from goldenmatch import evaluate_clusters
         expected = evaluate_clusters(
             {0: {"members": [0, 1]}, 1: {"members": [2, 3, 4]}}, {(0, 1), (2, 3)}
@@ -155,7 +155,7 @@ class TestCompareClusters:
         result = json.loads(con.sql(
             "SELECT goldenmatch_compare_clusters(?, ?)",
             params=[json.dumps(a), json.dumps(b)],
-        ).fetchone()[0])
+        ).fetchall()[0][0])
         from goldenmatch import compare_clusters
         expected = compare_clusters(
             {0: {"members": [0, 1]}, 1: {"members": [2, 3]}},
@@ -184,7 +184,7 @@ class TestValidateTable:
         result = json.loads(con.sql(
             "SELECT goldenmatch_validate_table('val_t', ?)",
             params=[json.dumps(rules)],
-        ).fetchone()[0])
+        ).fetchall()[0][0])
 
         import polars as pl
         from goldenmatch.core.validate import ValidationRule, validate_dataframe
@@ -207,7 +207,7 @@ class TestAutofixTable:
             ) AS t(name, email)
         """)
         result = json.loads(
-            con.sql("SELECT goldenmatch_autofix_table('fix_t')").fetchone()[0]
+            con.sql("SELECT goldenmatch_autofix_table('fix_t')").fetchall()[0][0]
         )
         import polars as pl
         from goldenmatch import auto_fix_dataframe
@@ -231,7 +231,7 @@ class TestDetectAnomalies:
         """)
         result = json.loads(con.sql(
             "SELECT goldenmatch_detect_anomalies('anom_t', 'medium')"
-        ).fetchone()[0])
+        ).fetchall()[0][0])
         import polars as pl
         from goldenmatch import detect_anomalies
         expected = detect_anomalies(
@@ -264,7 +264,7 @@ class TestPreflight:
         """)
         result = json.loads(con.sql(
             "SELECT goldenmatch_preflight('pre_t', ?)", params=[_EXACT_CONFIG],
-        ).fetchone()[0])
+        ).fetchall()[0][0])
         import polars as pl
         from goldenmatch.config.schemas import GoldenMatchConfig
         from goldenmatch.core.autoconfig_verify import preflight
@@ -282,7 +282,7 @@ class TestPreflight:
         """)
         result = json.loads(con.sql(
             "SELECT goldenmatch_preflight('pre_bad', ?)", params=[_EXACT_CONFIG],
-        ).fetchone()[0])
+        ).fetchall()[0][0])
         # email column is absent -> preflight should report it.
         assert result["has_errors"] is True
         assert any(f["severity"] == "error" for f in result["findings"])
@@ -300,7 +300,7 @@ class TestPostflight:
         """)
         result = json.loads(con.sql(
             "SELECT goldenmatch_postflight('post_t', ?)", params=[_EXACT_CONFIG],
-        ).fetchone()[0])
+        ).fetchall()[0][0])
         assert "signals" in result
         # Stable PostflightSignals schema keys.
         for key in ("score_histogram", "threshold_overlap_pct",
@@ -335,7 +335,7 @@ class TestProbabilistic:
         em_json = con.sql(
             "SELECT goldenmatch_train_em(?, ?, ?)",
             params=[json.dumps(_PROB_ROWS), _PROB_MK, params],
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         em = json.loads(em_json)
         # EMResult shape.
         for key in ("m_probs", "u_probs", "match_weights",
@@ -346,7 +346,7 @@ class TestProbabilistic:
         pairs_json = con.sql(
             "SELECT goldenmatch_score_probabilistic(?, ?, ?)",
             params=[json.dumps(_PROB_ROWS), _PROB_MK, em_json],
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         pairs = json.loads(pairs_json)
         # Each result is [a, b, score].
         assert all(len(p) == 3 for p in pairs)
@@ -375,11 +375,11 @@ class TestProbabilistic:
         em_json = con.sql(
             "SELECT goldenmatch_train_em(?, ?, ?)",
             params=[json.dumps(_PROB_ROWS), _PROB_MK, params],
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         pairs_json = con.sql(
             "SELECT goldenmatch_score_probabilistic(?, ?, ?)",
             params=[json.dumps(_PROB_ROWS), _PROB_MK, em_json],
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         udf_pairs = [tuple(p) for p in json.loads(pairs_json)]
 
         # Same linked pairs as the in-process core call.
@@ -399,7 +399,7 @@ class TestRecordFingerprint:
         udf = con.sql(
             "SELECT goldenmatch_record_fingerprint(?)",
             params=[json.dumps(record)],
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         # Parity against the core fingerprint on the same record.
         from goldenmatch.core._hashing import record_fingerprint
         assert udf == record_fingerprint(record)
@@ -410,22 +410,22 @@ class TestRecordFingerprint:
         udf = con.sql(
             "SELECT goldenmatch_record_fingerprint(?)",
             params=[json.dumps({"a": "x"})],
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         assert udf == "7381d5ba2dac5be0af49232a3209ab8d0dc2e4ed804a60ce533fdfe5254307e3"
 
     def test_drops_underscore_fields(self, con):
         with_meta = con.sql(
             "SELECT goldenmatch_record_fingerprint(?)",
             params=[json.dumps({"a": 1, "__row_id__": 9})],
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         without = con.sql(
             "SELECT goldenmatch_record_fingerprint(?)",
             params=[json.dumps({"a": 1})],
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         assert with_meta == without
 
     def test_non_object_is_fail_soft(self, con):
         out = con.sql(
             "SELECT goldenmatch_record_fingerprint(?)", params=["[1,2,3]"]
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         assert json.loads(out)["error"]

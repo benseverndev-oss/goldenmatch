@@ -38,7 +38,7 @@ def test_correction_add_pair_level(con, tmp_path: Path):
     sql = (
         "SELECT goldenmatch_correction_add(?, ?, ?, ?)"
     )
-    result_json = con.execute(sql, ["approve", "customers", memory_path, args]).fetchone()[0]
+    result_json = con.execute(sql, ["approve", "customers", memory_path, args]).fetchall()[0][0]
     result = json.loads(result_json)
     assert result["status"] == "ok"
     assert result["id_a"] == 42
@@ -68,7 +68,7 @@ def test_correction_add_field_level(con, tmp_path: Path):
     sql = "SELECT goldenmatch_correction_add(?, ?, ?, ?)"
     result_json = con.execute(
         sql, ["field_correct", "customers", memory_path, args],
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     result = json.loads(result_json)
     assert result["status"] == "ok"
     assert result["cluster_id"] == 42
@@ -91,7 +91,7 @@ def test_correction_add_field_correct_missing_field_name(con, tmp_path: Path):
     sql = "SELECT goldenmatch_correction_add(?, ?, ?, ?)"
     result_json = con.execute(
         sql, ["field_correct", "customers", memory_path, args],
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     result = json.loads(result_json)
     assert "error" in result
     assert "field_name" in result["error"]
@@ -102,7 +102,7 @@ def test_correction_add_invalid_decision(con, tmp_path: Path):
     sql = "SELECT goldenmatch_correction_add(?, ?, ?, ?)"
     result_json = con.execute(
         sql, ["unknown", "customers", memory_path, "{}"],
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     result = json.loads(result_json)
     assert "error" in result
     assert "Invalid decision" in result["error"]
@@ -114,7 +114,7 @@ def test_correction_add_missing_dataset(con, tmp_path: Path):
     args = json.dumps({"id_a": 1, "id_b": 2})
     result_json = con.execute(
         sql, ["approve", "", memory_path, args],
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     result = json.loads(result_json)
     assert "error" in result
     assert "dataset" in result["error"]
@@ -126,17 +126,17 @@ def test_correction_list_round_trip(con, tmp_path: Path):
     con.execute(
         "SELECT goldenmatch_correction_add(?, ?, ?, ?)",
         ["approve", "ds-a", memory_path, json.dumps({"id_a": 1, "id_b": 2})],
-    ).fetchone()
+    ).fetchall()[0]
     con.execute(
         "SELECT goldenmatch_correction_add(?, ?, ?, ?)",
         ["approve", "ds-b", memory_path, json.dumps({"id_a": 3, "id_b": 4})],
-    ).fetchone()
+    ).fetchall()[0]
 
     # List by dataset filter.
     list_json_a = con.execute(
         "SELECT goldenmatch_correction_list(?, ?)",
         ["ds-a", memory_path],
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     rows_a = json.loads(list_json_a)
     assert len(rows_a) == 1
     assert rows_a[0]["dataset"] == "ds-a"
@@ -145,7 +145,7 @@ def test_correction_list_round_trip(con, tmp_path: Path):
     list_json_all = con.execute(
         "SELECT goldenmatch_correction_list(?, ?)",
         ["", memory_path],
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     rows_all = json.loads(list_json_all)
     assert len(rows_all) == 2
 

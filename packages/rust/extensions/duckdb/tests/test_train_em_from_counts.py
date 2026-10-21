@@ -47,7 +47,7 @@ def _train(con, counts, u=U, params="{}", mk=MK):
     (out,) = con.execute(
         "SELECT goldenmatch_train_em_from_counts(?, ?, ?, ?)",
         [mk, json.dumps(counts), u, params],
-    ).fetchone()
+    ).fetchall()[0]
     return json.loads(out)
 
 
@@ -116,11 +116,11 @@ def test_it_trains_from_a_real_GROUP_BY(con):
         "SELECT json_group_array(json_array(g_first, g_last, n)) FROM ("
         "  SELECT g_first, g_last, count(*) AS n FROM gammas"
         "  GROUP BY g_first, g_last)"
-    ).fetchone()
+    ).fetchall()[0]
     (out,) = con.execute(
         "SELECT goldenmatch_train_em_from_counts(?, ?, ?, '{}')",
         [MK, counts_json, U],
-    ).fetchone()
+    ).fetchall()[0]
     em = json.loads(out)
 
     assert "error" not in em, em
