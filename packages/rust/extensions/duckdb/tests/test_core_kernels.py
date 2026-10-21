@@ -21,7 +21,7 @@ def con():
 
 
 def _scalar(con, sql: str) -> str:
-    return con.sql(sql).fetchone()[0]
+    return con.sql(sql).fetchall()[0][0]
 
 
 class TestEmbedLocal:

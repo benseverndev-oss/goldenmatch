@@ -43,7 +43,7 @@ def con():
 class TestAutoconfig:
     def test_returns_committed_config_json(self, con):
         """``goldenmatch_autoconfig`` returns a parseable JSON config."""
-        result = con.sql("SELECT goldenmatch_autoconfig('contacts')").fetchone()[0]
+        result = con.sql("SELECT goldenmatch_autoconfig('contacts')").fetchall()[0][0]
         assert isinstance(result, str)
         config = json.loads(result)
         # Real config has matchkeys (could be `match_settings.matchkeys` or
@@ -58,7 +58,7 @@ class TestAutoconfig:
         """``goldenmatch_autoconfig_telemetry`` includes a StopReason value."""
         result = con.sql(
             "SELECT goldenmatch_autoconfig_telemetry('contacts')"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         telemetry = json.loads(result)
         assert telemetry["available"] is True
         # Controller always sets stop_reason; allow any valid enum value.
@@ -74,13 +74,13 @@ class TestDedupeFull:
         """``goldenmatch_dedupe_full`` accepts the JSON ``autoconfig`` returns."""
         config_json = con.sql(
             "SELECT goldenmatch_autoconfig('contacts')"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         # Round-trip: feed the auto-config output straight into dedupe_full.
         # Expect either golden records JSON or stats JSON — both parse.
         result = con.sql(
             "SELECT goldenmatch_dedupe_full('contacts', ?)",
             params=[config_json],
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         assert isinstance(result, str)
         parsed = json.loads(result)
         # Golden records emit as a list; stats fall through to a dict.
@@ -93,15 +93,15 @@ class TestGmTelemetry:
         con.sql(
             "SELECT gm_configure('j1', ?)",
             params=[json.dumps({"exact": ["email"]})],
-        ).fetchone()
+        ).fetchall()[0]
         telemetry = json.loads(
-            con.sql("SELECT gm_telemetry('j1')").fetchone()[0]
+            con.sql("SELECT gm_telemetry('j1')").fetchall()[0][0]
         )
         assert telemetry["available"] is False
 
     def test_telemetry_unknown_job(self, con):
         """``gm_telemetry`` on a job that doesn't exist also returns unavailable."""
         telemetry = json.loads(
-            con.sql("SELECT gm_telemetry('does-not-exist')").fetchone()[0]
+            con.sql("SELECT gm_telemetry('does-not-exist')").fetchall()[0][0]
         )
         assert telemetry["available"] is False
