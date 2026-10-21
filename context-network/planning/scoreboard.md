@@ -5,16 +5,16 @@
 [north-star-roadmap.md](./north-star-roadmap.md): *is GoldenMatch becoming the
 tool developers reach for by default?* Trend > snapshot.
 
-**Latest: 2026-10-20** (change vs the previous snapshot)
+**Latest: 2026-10-21** (change vs the previous snapshot)
 
 | Signal | Now | Change | North Star reading |
 |---|---|---|---|
 | **Stranger issues + PRs, ever** | 3 | 3 (▬0) | someone reached for it† |
-| **`goldenmatch` desktop downloads (30d)** | 66 | 66 (▼-1) | people installing it§ |
-| `goldenmatch` downloads (30d) | 1.8k | 1.8k (▲+16) | reach, mostly CI§ |
+| **`goldenmatch` desktop downloads (30d)** | 67 | 67 (▲+1) | people installing it§ |
+| `goldenmatch` downloads (30d) | 1.9k | 1.9k (▲+16) | reach, mostly CI§ |
 | GitHub stars | 133 | 133 (▬0) | discovery momentum |
 | Forks | 16 | 16 (▬0) | intent-to-use |
-| Time-to-first-success | 29.2s · F1 1.00 | ▼-2.1s | zero-config friction‡ |
+| Time-to-first-success | 30.4s · F1 1.00 | ▲+1.2s | zero-config friction‡ |
 | PyPI downloads (30d, whole suite) | 27.8k | 27.8k (▬0) | CI-dominated, not adoption§ |
 | npm downloads (30d, whole suite) | 1.1k | 1.1k (▬0) | CI-dominated, not adoption§ |
 | Open issues, non-maintainer | 1 | 1 (▬0) | raw, includes promo accounts |
@@ -40,6 +40,7 @@ the probe itself did not run. The two are never merged.
 
 | Date | Strangers | GM desktop 30d | GM 30d | Stars | Forks | Suite PyPI 30d | Suite npm 30d | TTFS |
 |---|---|---|---|---|---|---|---|---|
+| 2026-10-21 | 3 | 67 | 1.9k | 133 | 16 | 27.8k | 1.1k | 30.4s |
 | 2026-10-20 | 3 | 66 | 1.8k | 133 | 16 | 27.8k | 1.1k | 29.2s |
 | 2026-10-19 | 3 | 67 | 1.8k | 133 | 16 | 27.8k | 1.1k | 31.3s |
 | 2026-10-18 | 3 | 68 | 1.8k | 133 | 16 | 27.8k | 1.1k | 20.4s |
@@ -55,7 +56,6 @@ the probe itself did not run. The two are never merged.
 | 2026-10-08 | 3 | 70 | 1.9k | 132 | 15 | 27.8k | 1.5k | 26.4s |
 | 2026-10-07 | 3 | 70 | 1.9k | 132 | 15 | — | 1.5k | 32.1s |
 | 2026-10-06 | 3 | 74 | 1.9k | 132 | 15 | 27.8k | 1.5k | 32.7s |
-| 2026-10-05 | 3 | 74 | 1.9k | 132 | 15 | — | 1.5k | 26.6s |
 
 ## The gates (from the roadmap)
 
