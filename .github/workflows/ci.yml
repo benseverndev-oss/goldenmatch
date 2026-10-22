@@ -3559,7 +3559,10 @@ jobs:
   spark_connect:
     needs: [changes, spark_jvm_aarch64]
     if: needs.changes.outputs.spark == 'true' || needs.changes.outputs.force_all == 'true'
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: on the 26.04 image this lane's Spark shuffle,
+    # venv-pack zips and tmp_path tests all hit "Disk quota exceeded"
+    # (errno 122). Unpin once the image's disk allowance fits the lane.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
@@ -3606,7 +3609,13 @@ jobs:
       - name: Build + pack a runtime venv for the executors
         run: |
           set -euo pipefail
-          python -m venv /tmp/gmenv
+          # Build from the DRIVER's interpreter, never bare `python`: PySpark
+          # refuses a worker whose minor version differs from the driver's
+          # (PYTHON_VERSION_MISMATCH). uv picks the driver's Python, the runner
+          # image picks `python`, and on ubuntu-26.04 they diverged (3.13 vs
+          # 3.14). sys._base_executable is the real interpreter behind .venv,
+          # so the stdlib venv venv-pack needs is still what gets built.
+          "$(.venv/bin/python -c 'import sys; print(sys._base_executable)')" -m venv /tmp/gmenv
           /tmp/gmenv/bin/pip install --upgrade pip
           # NO PANDAS. The tier's UDFs are `arrow_udf` over `pa.Array`, so the
           # executor needs pyarrow (goldenmatch's own hard dependency) and
@@ -3785,7 +3794,8 @@ jobs:
       - name: Build a deliberately EMPTY executor env
         run: |
           set -euo pipefail
-          python -m venv /tmp/bare-env
+          # Driver's interpreter, for the same minor-version reason as gmenv.
+          "$(.venv/bin/python -c 'import sys; print(sys._base_executable)')" -m venv /tmp/bare-env
           # No goldenmatch, no pyarrow, nothing. Assert the emptiness -- an env
           # that accidentally carried goldenmatch would make the inventory
           # report jar-only support the tier does not have.
@@ -3881,7 +3891,10 @@ jobs:
   rust_pgrx:
     needs: changes
     if: needs.changes.outputs.rust_pgrx == 'true' || needs.changes.outputs.force_all == 'true'
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: the 26.04 image ships libclang 21, and
+    # pgrx 0.12.9's bindgen (0.70) then emits opaque pg structs ("no field
+    # `t_hoff` on HeapTupleHeaderData"). Unpin when pgrx is bumped.
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
       fail-fast: false
