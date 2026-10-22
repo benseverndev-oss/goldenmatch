@@ -24,13 +24,13 @@ def con():
 
 
 def test_callable_with_no_arguments(con):
-    (text,) = con.sql("SELECT goldenmatch_docs()").fetchone()
+    (text,) = con.sql("SELECT goldenmatch_docs()").fetchall()[0]
     assert isinstance(text, str)
     assert text.startswith("# goldenmatch-duckdb")
 
 
 def test_names_the_authoritative_sources(con):
-    (text,) = con.sql("SELECT goldenmatch_docs()").fetchone()
+    (text,) = con.sql("SELECT goldenmatch_docs()").fetchall()[0]
     # The three pointers an agent needs: this surface, the suite index, the repo.
     assert "docs.bensevern.dev/docs/extensions/sql" in text
     assert "docs.bensevern.dev/docs/llms.txt" in text
@@ -61,7 +61,7 @@ def test_registered_by_the_main_register(con):
         from goldenmatch_duckdb.functions import register
 
         register(fresh)
-        (text,) = fresh.sql("SELECT goldenmatch_docs()").fetchone()
+        (text,) = fresh.sql("SELECT goldenmatch_docs()").fetchall()[0]
         assert "goldenmatch" in text
     finally:
         fresh.close()

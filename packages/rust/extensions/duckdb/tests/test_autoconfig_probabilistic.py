@@ -31,19 +31,19 @@ def con():
 
 
 def test_autoconfig_probabilistic_builds_probabilistic_matchkeys(con):
-    cfg = con.sql("SELECT goldenmatch_autoconfig('people', 'probabilistic')").fetchone()[0]
+    cfg = con.sql("SELECT goldenmatch_autoconfig('people', 'probabilistic')").fetchall()[0][0]
     data = json.loads(cfg)
     mks = data.get("matchkeys") or data.get("match_settings", {}).get("matchkeys", [])
     assert any(mk.get("type") == "probabilistic" for mk in mks), cfg
 
 
 def test_autoconfig_one_arg_still_standard(con):
-    cfg = con.sql("SELECT goldenmatch_autoconfig('people')").fetchone()[0]
+    cfg = con.sql("SELECT goldenmatch_autoconfig('people')").fetchall()[0][0]
     assert json.loads(cfg)  # parses; back-compat 1-arg form
 
 
 def test_autoconfig_probabilistic_parity_with_python(con):
-    cfg_sql = json.loads(con.sql("SELECT goldenmatch_autoconfig('people','probabilistic')").fetchone()[0])
+    cfg_sql = json.loads(con.sql("SELECT goldenmatch_autoconfig('people','probabilistic')").fetchall()[0][0])
     from goldenmatch.core.autoconfig import auto_configure_probabilistic_df
     df = con.sql("SELECT * FROM people").pl()
     cfg_py = json.loads(auto_configure_probabilistic_df(df).model_dump_json(exclude_none=True))

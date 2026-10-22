@@ -31,7 +31,7 @@ def _signed(h: int) -> int:
 def _phash(con, flat, ncols):
     return con.execute(
         "SELECT goldenmatch_perceptual_phash(?, ?)", [flat, ncols]
-    ).fetchone()[0]
+    ).fetchall()[0][0]
 
 
 class TestPerceptualPhash:
@@ -56,7 +56,7 @@ class TestPerceptualHamming:
     def _h(self, con, a, b):
         return con.execute(
             "SELECT goldenmatch_perceptual_hamming(?, ?)", [a, b]
-        ).fetchone()[0]
+        ).fetchall()[0][0]
 
     def test_self_distance_zero(self, con):
         assert self._h(con, 42, 42) == 0

@@ -25,7 +25,7 @@ class TestPairDedupColumnar:
         # pairs (2,1,0.5),(1,2,0.9) -> canonical (1,2) with max 0.9, not (2,1)/0.5
         rows = con.execute(
             "SELECT goldenmatch_pair_dedup([2, 1], [1, 2], [0.5, 0.9])"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         # list of STRUCT(a,b,s)
         pairs = {(r["a"], r["b"], r["s"]) for r in rows}
         assert (1, 2, 0.9) in pairs
@@ -35,7 +35,7 @@ class TestPairDedupColumnar:
     def test_str_ids(self, con):
         rows = con.execute(
             "SELECT goldenmatch_pair_dedup_str(['b', 'a'], ['a', 'b'], [0.5, 0.9])"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         # canonical order preserved on the string ids (first-seen -> 'b','a')
         pairs = {(r["a"], r["b"], r["s"]) for r in rows}
         assert len(rows) == 1
@@ -50,7 +50,7 @@ class TestConnectedComponentsColumnar:
         comps = con.execute(
             "SELECT goldenmatch_connected_components("
             "[1, 2], [2, 3], [0.9, 0.8], [1, 2, 3, 4])"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         got = {frozenset(c) for c in comps}
         assert got == {frozenset({1, 2, 3}), frozenset({4})}
 
@@ -59,7 +59,7 @@ class TestConnectedComponentsColumnar:
         comps = con.execute(
             "SELECT goldenmatch_connected_components_str("
             "['x', 'y'], ['y', 'z'], [0.9, 0.8], ['x', 'y', 'z', 'w'])"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         got = {frozenset(c) for c in comps}
         assert got == {frozenset({"x", "y", "z"}), frozenset({"w"})}
 
@@ -69,7 +69,7 @@ class TestConnectedComponentsColumnar:
         comps = con.execute(
             "SELECT goldenmatch_connected_components("
             "[10, 11], [11, 12], [0.9, 0.8], [10, 11, 12, 99])"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         ref = connected_components(
             [(10, 11, 0.9), (11, 12, 0.8)], [10, 11, 12, 99]
         )
