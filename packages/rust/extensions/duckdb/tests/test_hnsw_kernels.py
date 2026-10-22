@@ -26,7 +26,7 @@ def _pairs(con, vectors, k, threshold):
         con.executemany("INSERT INTO v VALUES (?, ?)", rows)
     res = con.sql(
         f"SELECT goldenmatch_hnsw_pairs(list(emb), {k}, {threshold}) FROM v"
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     return res or []
 
 

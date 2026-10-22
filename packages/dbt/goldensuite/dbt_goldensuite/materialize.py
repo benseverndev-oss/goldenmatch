@@ -55,7 +55,7 @@ def run_goldenmatch_dedupe(
     conn = duckdb.connect(database)
 
     # Read input
-    df = conn.execute(f"SELECT * FROM {input_table}").pl()
+    df = conn.sql(f"SELECT * FROM {input_table}").pl()
 
     # Write to temp CSV for GoldenMatch ingest
     import tempfile
@@ -191,7 +191,7 @@ def run_goldenmatch_crosswalk(
             run_goldenmatch_crosswalk(
                 input_table="raw_customers", source_pk="customer_id",
                 output_table="customer_crosswalk",
-                database=session.execute("PRAGMA database_list").fetchone()[2],
+                database=session.execute("PRAGMA database_list").fetchall()[0][2],
                 store_path="/warehouse/.goldenmatch/identity.db",  # durable ids
             )
             return session.sql("SELECT * FROM customer_crosswalk")
@@ -224,7 +224,7 @@ def run_goldenmatch_crosswalk(
         ) from exc
 
     conn = duckdb.connect(database)
-    df = conn.execute(f"SELECT * FROM {input_table}").pl()  # noqa: F841 (used below)
+    df = conn.sql(f"SELECT * FROM {input_table}").pl()  # noqa: F841 (used below)
 
     cfg = load_config(config_path) if config_path else None
     crosswalk = build_resolved_crosswalk(

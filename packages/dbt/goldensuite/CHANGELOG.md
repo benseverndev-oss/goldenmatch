@@ -16,6 +16,10 @@ Suite monorepo and is consumed from there (not published to PyPI).
 - README install instructions: the package is not on PyPI, so `pip install
   dbt-goldensuite` was replaced with the `packages.yml` git-subdirectory install
   (macros) and a `pip install "git+...#subdirectory=..."` for the Python helper.
+- DuckDB 2.0 compatibility: `run_goldenmatch_dedupe` / `run_goldenmatch_crosswalk`
+  read their input with `conn.sql(...).pl()` instead of `conn.execute(...).pl()`
+  (DuckDB 2.0 connections no longer have `.pl()`; relations still do). Works on
+  DuckDB 1.x and 2.x alike.
 
 ### Added
 - **`goldenmatch_key_integrity` macro now conformance-locked to the shared

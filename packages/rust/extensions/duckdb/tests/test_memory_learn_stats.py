@@ -34,13 +34,13 @@ def _add(con, memory_path: str, id_a: int, id_b: int) -> None:
     con.execute(
         "SELECT goldenmatch_correction_add(?, ?, ?, ?)",
         ["approve", "ds", memory_path, args],
-    ).fetchone()
+    ).fetchall()[0]
 
 
 def test_memory_stats_empty(con, tmp_path: Path):
     memory_path = str(tmp_path / "memory.db")
     result = json.loads(
-        con.sql(f"SELECT goldenmatch_memory_stats('{memory_path}')").fetchone()[0]
+        con.sql(f"SELECT goldenmatch_memory_stats('{memory_path}')").fetchall()[0][0]
     )
     assert result["total_corrections"] == 0
     assert result["last_learn_time"] is None
@@ -52,7 +52,7 @@ def test_memory_stats_counts_corrections(con, tmp_path: Path):
     for i in range(3):
         _add(con, memory_path, i, i + 100)
     result = json.loads(
-        con.sql(f"SELECT goldenmatch_memory_stats('{memory_path}')").fetchone()[0]
+        con.sql(f"SELECT goldenmatch_memory_stats('{memory_path}')").fetchall()[0][0]
     )
     assert result["total_corrections"] == 3
 
@@ -62,7 +62,7 @@ def test_memory_learn_below_threshold_returns_empty(con, tmp_path: Path):
     for i in range(3):  # < 10 corrections -> no threshold tuning
         _add(con, memory_path, i, i + 100)
     result = json.loads(
-        con.sql(f"SELECT goldenmatch_memory_learn('', '{memory_path}')").fetchone()[0]
+        con.sql(f"SELECT goldenmatch_memory_learn('', '{memory_path}')").fetchall()[0][0]
     )
     assert result["count"] == 0
     assert result["adjustments"] == []
@@ -73,7 +73,7 @@ def test_memory_learn_returns_structured_result(con, tmp_path: Path):
     for i in range(12):  # >= 10 -> learner may emit an adjustment
         _add(con, memory_path, i, i + 100)
     result = json.loads(
-        con.sql(f"SELECT goldenmatch_memory_learn('mk', '{memory_path}')").fetchone()[0]
+        con.sql(f"SELECT goldenmatch_memory_learn('mk', '{memory_path}')").fetchall()[0][0]
     )
     assert isinstance(result["count"], int)
     assert isinstance(result["adjustments"], list)
@@ -85,6 +85,6 @@ def test_memory_stats_missing_path_is_soft(con, tmp_path: Path):
     # store must not raise — it returns zeroed stats or a soft {"error": ...}.
     out = con.sql(
         f"SELECT goldenmatch_memory_stats('{tmp_path / 'nope.db'}')"
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     parsed = json.loads(out)
     assert "total_corrections" in parsed or "error" in parsed

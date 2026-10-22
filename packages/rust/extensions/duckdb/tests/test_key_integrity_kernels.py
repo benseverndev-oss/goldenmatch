@@ -34,7 +34,7 @@ pytest.importorskip("goldenmatch.semantic", reason="goldenmatch not installed")
 def _certify(con, payload: dict) -> dict:
     row = con.execute(
         "SELECT goldenmatch_certify_structural(?)", [json.dumps(payload)]
-    ).fetchone()
+    ).fetchall()[0]
     assert row is not None
     return json.loads(row[0])
 
@@ -68,7 +68,7 @@ class TestPinned:
     def test_invalid_json_fails_soft(self, con):
         row = con.execute(
             "SELECT goldenmatch_certify_structural('not json')"
-        ).fetchone()
+        ).fetchall()[0]
         assert row is not None
         assert "error" in json.loads(row[0])
 
