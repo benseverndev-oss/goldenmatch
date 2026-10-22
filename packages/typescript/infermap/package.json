@@ -85,12 +85,12 @@
     "goldencheck-types": "workspace:^"
   },
   "devDependencies": {
-    "@types/node": "^25.9.8",
+    "@types/node": "^25.9.9",
     "goldenmatch": "workspace:*",
     "goldenmatch-wasm-runtime": "workspace:^",
     "rimraf": "^6.1.3",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

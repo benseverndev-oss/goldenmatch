@@ -46,7 +46,10 @@ jobs:
   build:
     # Tag pushes are already filtered by the `on:` trigger; dispatch builds
     # without releasing.
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: the 26.04 image ships libclang 21, and
+    # pgrx 0.12.9's bindgen (0.70) then emits opaque pg structs ("no field
+    # `t_hoff` on HeapTupleHeaderData"). Unpin when pgrx is bumped.
+    runs-on: ubuntu-24.04
     permissions:
       contents: write      # upload release assets
       id-token: write      # cosign keyless OIDC signing
@@ -160,7 +163,7 @@ jobs:
 
       - name: Attest build provenance
         id: attest
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         with:
           subject-path: packages/rust/extensions/postgres/${{ env.ASSET }}
 

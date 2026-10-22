@@ -26,7 +26,7 @@ def _pairs(con, texts, mode="char", k=3, num_perms=32, num_bands=8, seed=42):
     res = con.sql(
         f"SELECT goldenmatch_lsh_pairs(list(txt), '{mode}', {k}, "
         f"{num_perms}, {num_bands}, {seed}) FROM t"
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     return {(p["a"], p["b"]) for p in (res or [])}
 
 
