@@ -94,7 +94,10 @@ impl GoldenEmbed {
             {
                 let onnx_bytes = std::fs::read(dir.join("model.onnx"))
                     .with_context(|| format!("reading {}/model.onnx", dir.display()))?;
-                let session = Session::builder()?
+                // ort >= 2.0.0-rc.14 takes the environment explicitly; the
+                // session keeps its own handle, so a local one is enough.
+                let env = ort::init().build()?;
+                let session = Session::builder(&env)?
                     .commit_from_file(dir.join("model.onnx"))
                     .with_context(|| format!("loading {}/model.onnx", dir.display()))?;
                 (Backend::Onnx { session }, digest8(&onnx_bytes))
