@@ -3559,7 +3559,10 @@ jobs:
   spark_connect:
     needs: [changes, spark_jvm_aarch64]
     if: needs.changes.outputs.spark == 'true' || needs.changes.outputs.force_all == 'true'
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: on the 26.04 image this lane's Spark shuffle,
+    # venv-pack zips and tmp_path tests all hit "Disk quota exceeded"
+    # (errno 122). Unpin once the image's disk allowance fits the lane.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
