@@ -18,26 +18,26 @@ class TestScore:
     def test_jaro_winkler(self, con):
         result = con.sql(
             "SELECT goldenmatch_score('John Smith', 'Jon Smyth', 'jaro_winkler')"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         assert isinstance(result, float)
         assert 0.7 < result < 1.0
 
     def test_exact_match(self, con):
         result = con.sql(
             "SELECT goldenmatch_score('hello', 'hello', 'exact')"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         assert result == 1.0
 
     def test_exact_no_match(self, con):
         result = con.sql(
             "SELECT goldenmatch_score('hello', 'world', 'exact')"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         assert result == 0.0
 
     def test_levenshtein(self, con):
         result = con.sql(
             "SELECT goldenmatch_score('kitten', 'sitting', 'levenshtein')"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         assert 0.0 < result < 1.0
 
 
@@ -49,7 +49,7 @@ class TestScorePair:
                 '{"name": "Jon Smyth", "email": "j@x.com"}',
                 '{"fuzzy": {"name": 0.85}, "exact": ["email"]}'
             )
-        """).fetchone()[0]
+        """).fetchall()[0][0]
         assert isinstance(result, float)
         assert result > 0.5
 
@@ -62,7 +62,7 @@ class TestExplain:
                 '{"name": "Jon Smyth", "email": "j@x.com"}',
                 '{"fuzzy": {"name": 0.85}, "exact": ["email"]}'
             )
-        """).fetchone()[0]
+        """).fetchall()[0][0]
         assert isinstance(result, str)
         assert len(result) > 0
 
@@ -77,7 +77,7 @@ class TestDedupeJson:
         config = json.dumps({"exact": ["email"]})
         result = con.sql(f"""
             SELECT goldenmatch_dedupe('{rows}', '{config}')
-        """).fetchone()[0]
+        """).fetchall()[0][0]
         assert isinstance(result, str)
         assert len(result) > 0
 
@@ -94,7 +94,7 @@ class TestDedupeTable:
         """)
         result = con.sql("""
             SELECT goldenmatch_dedupe_table('test_customers', '{"exact": ["email"]}')
-        """).fetchone()[0]
+        """).fetchall()[0][0]
         assert isinstance(result, str)
         assert len(result) > 0
 
@@ -111,7 +111,7 @@ class TestMatchTables:
         """)
         result = con.sql("""
             SELECT goldenmatch_match_tables('test_target', 'test_ref', '{"exact": ["email"]}')
-        """).fetchone()[0]
+        """).fetchall()[0][0]
         assert isinstance(result, str)
 
 
@@ -119,7 +119,7 @@ class TestPipeline:
     def test_configure(self, con):
         result = con.sql("""
             SELECT gm_configure('test_job', '{"exact": ["email"]}')
-        """).fetchone()[0]
+        """).fetchall()[0][0]
         assert "configured" in result
 
     def test_full_pipeline(self, con):
@@ -134,28 +134,28 @@ class TestPipeline:
         """)
 
         # Configure (must fetch to execute the UDF)
-        con.sql("SELECT gm_configure('pipe_test', '{\"exact\": [\"email\"]}')").fetchone()
+        con.sql("SELECT gm_configure('pipe_test', '{\"exact\": [\"email\"]}')").fetchall()[0]
 
         # Run
-        result = con.sql("SELECT gm_run('pipe_test', 'pipeline_customers')").fetchone()[0]
+        result = con.sql("SELECT gm_run('pipe_test', 'pipeline_customers')").fetchall()[0][0]
         stats = json.loads(result)
         assert "total_records" in stats
 
         # List jobs
-        jobs_json = con.sql("SELECT gm_jobs()").fetchone()[0]
+        jobs_json = con.sql("SELECT gm_jobs()").fetchall()[0][0]
         jobs = json.loads(jobs_json)
         assert len(jobs) >= 1
         assert any(j["name"] == "pipe_test" for j in jobs)
 
         # Get golden records
-        golden_json = con.sql("SELECT gm_golden('pipe_test')").fetchone()[0]
+        golden_json = con.sql("SELECT gm_golden('pipe_test')").fetchall()[0][0]
         assert isinstance(golden_json, str)
 
         # Drop
-        result = con.sql("SELECT gm_drop('pipe_test')").fetchone()[0]
+        result = con.sql("SELECT gm_drop('pipe_test')").fetchall()[0][0]
         assert "dropped" in result
 
         # Verify dropped
-        jobs_json = con.sql("SELECT gm_jobs()").fetchone()[0]
+        jobs_json = con.sql("SELECT gm_jobs()").fetchall()[0][0]
         jobs = json.loads(jobs_json)
         assert not any(j["name"] == "pipe_test" for j in jobs)

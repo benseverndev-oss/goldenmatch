@@ -42,7 +42,7 @@ def test_pair_dedup_matches_native_kernel(con: duckdb.DuckDBPyConnection) -> Non
     a, b, s = _cols(EDGES)
     duck = con.execute(
         "SELECT goldenmatch_pair_dedup(?, ?, ?)", [a, b, s]
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     duck_tuples = sorted((r["a"], r["b"], r["s"]) for r in duck)
 
     kernel = sorted(dedup_pairs_max_score([(int(x), int(y), float(z)) for x, y, z in EDGES]))
@@ -57,7 +57,7 @@ def test_connected_components_matches_native_kernel(
     a, b, s = _cols(EDGES)
     duck = con.execute(
         "SELECT goldenmatch_connected_components(?, ?, ?, ?)", [a, b, s, ALL_IDS]
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     duck_groups = sorted(sorted(c) for c in duck)
 
     kernel = connected_components(
@@ -80,7 +80,7 @@ def test_str_variant_matches_int_under_mapping(
 
     duck_str = con.execute(
         "SELECT goldenmatch_connected_components_str(?, ?, ?, ?)", [a, b, s, all_str]
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     str_groups = sorted(sorted(c) for c in duck_str)
 
     inv = {v: k for k, v in label.items()}
@@ -89,7 +89,7 @@ def test_str_variant_matches_int_under_mapping(
     ai, bi, si = _cols(EDGES)
     duck_int = con.execute(
         "SELECT goldenmatch_connected_components(?, ?, ?, ?)", [ai, bi, si, ALL_IDS]
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     int_groups_direct = sorted(sorted(c) for c in duck_int)
 
     assert int_groups == int_groups_direct

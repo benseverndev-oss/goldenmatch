@@ -44,14 +44,14 @@ class TestBenford:
     def test_pinned_histogram(self, con):
         res = con.execute(
             "SELECT goldencheck_benford([1,1,2,11,19,3,100,7,9,9]::DOUBLE[])"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         # 1->{1,1,11,19,100}=5, 2->{2}=1, 3->{3}=1, 7->{7}=1, 9->{9,9}=2
         assert res == [5, 1, 1, 0, 0, 0, 1, 0, 2]
 
     def test_skips_nonpositive_and_nonfinite(self, con):
         res = con.execute(
             "SELECT goldencheck_benford([0, -5, 4, 4, 4]::DOUBLE[])"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         # 0 and -5 skipped; three 4s -> leading digit 4 (index 3).
         assert res == [0, 0, 0, 3, 0, 0, 0, 0, 0]
 
@@ -61,7 +61,7 @@ class TestBenford:
         vals = [12.0, 3.3, 1.0, 250.0, 2000.0, 8.0, 8.0, 90.0, 100.0]
         got = con.execute(
             "SELECT goldencheck_benford(?::DOUBLE[])", [vals]
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         assert got == benford_histogram(vals)
 
 
@@ -70,7 +70,7 @@ class TestNearDuplicates:
         res = con.execute(
             "SELECT goldencheck_near_duplicates("
             "['California','Californa','CALIFORNIA','Texas','texas'], 0.7)"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         assert res == [[0, 1, 2], [3, 4]]
 
     def test_matches_reference(self, con):
@@ -79,7 +79,7 @@ class TestNearDuplicates:
         vals = ["Jon", "John", "Jonh", "Mary", "Marie", "Zed"]
         got = con.execute(
             "SELECT goldencheck_near_duplicates(?, 0.75)", [vals]
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         assert got == near_duplicate_clusters(vals, 0.75)
 
 
@@ -89,7 +89,7 @@ class TestFunctionalDependencies:
         res = con.execute(
             "SELECT goldencheck_discover_fds("
             "[['1','1','2','2'],['A','A','B','B'],['r0','r1','r2','r3']])"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         assert {(d["det"], d["dep"]) for d in res} == {(0, 1), (1, 0)}
 
     def test_matches_reference(self, con):
@@ -100,7 +100,7 @@ class TestFunctionalDependencies:
             ["A", "A", "B", "B", "C", "C"],
             ["x", "y", "z", "w", "u", "v"],
         ]
-        got = con.execute("SELECT goldencheck_discover_fds(?)", [cols]).fetchone()[0]
+        got = con.execute("SELECT goldencheck_discover_fds(?)", [cols]).fetchall()[0][0]
         assert [(d["det"], d["dep"]) for d in got] == list(
             discover_functional_dependencies(cols)
         )
@@ -117,7 +117,7 @@ class TestApproximateFDs:
         cols = [det, dep]
         got = con.execute(
             "SELECT goldencheck_discover_approx_fds(?, 0.5)", [cols]
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         ref = discover_approximate_fds(cols, 0.5)
         assert [(d["det"], d["dep"], d["violations"]) for d in got] == list(ref)
 
@@ -129,7 +129,7 @@ class TestCompositeKeys:
             "SELECT goldencheck_composite_keys("
             "[['o1','o1','o2','o2','o3'],['1','2','1','2','1'],"
             "['mon','mon','tue','tue','wed']], 3)"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         assert [0, 1] in res
 
     def test_matches_reference(self, con):
@@ -142,7 +142,7 @@ class TestCompositeKeys:
         ]
         got = con.execute(
             "SELECT goldencheck_composite_keys(?, 3)", [cols]
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         assert got == composite_key_search(cols, 3)
 
 
@@ -155,7 +155,7 @@ class TestFallbackParity:
         _fallback_env(monkeypatch)
         res = con.execute(
             "SELECT goldencheck_benford([1,1,2,11,19,3,100,7,9,9]::DOUBLE[])"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         assert res == [5, 1, 1, 0, 0, 0, 1, 0, 2]
 
     def test_composite_fallback_pinned(self, con, monkeypatch):
@@ -164,5 +164,5 @@ class TestFallbackParity:
             "SELECT goldencheck_composite_keys("
             "[['o1','o1','o2','o2','o3'],['1','2','1','2','1'],"
             "['mon','mon','tue','tue','wed']], 3)"
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         assert [0, 1] in res

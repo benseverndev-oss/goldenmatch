@@ -56,7 +56,7 @@ class TestIdentityResolve:
         row = con.sql(
             "SELECT goldenmatch_identity_resolve(?, ?)",
             params=["src:1", path],
-        ).fetchone()
+        ).fetchall()[0]
         payload = json.loads(row[0])
         assert payload["entity_id"] == ids["eid1"]
         assert len(payload["records"]) == 2
@@ -67,7 +67,7 @@ class TestIdentityResolve:
         row = con.sql(
             "SELECT goldenmatch_identity_resolve(?, ?)",
             params=["src:missing", path],
-        ).fetchone()
+        ).fetchall()[0]
         assert json.loads(row[0]) == {"found": False}
 
 
@@ -77,7 +77,7 @@ class TestIdentityView:
         row = con.sql(
             "SELECT goldenmatch_identity_view(?, ?)",
             params=[ids["eid1"], path],
-        ).fetchone()
+        ).fetchall()[0]
         payload = json.loads(row[0])
         assert payload["entity_id"] == ids["eid1"]
         assert payload["status"] == "active"
@@ -87,7 +87,7 @@ class TestIdentityView:
         row = con.sql(
             "SELECT goldenmatch_identity_view(?, ?)",
             params=["missing-uuid", path],
-        ).fetchone()
+        ).fetchall()[0]
         assert json.loads(row[0]) == {"found": False}
 
 
@@ -97,7 +97,7 @@ class TestIdentityHistory:
         row = con.sql(
             "SELECT goldenmatch_identity_history(?, ?)",
             params=[ids["eid1"], path],
-        ).fetchone()
+        ).fetchall()[0]
         # No events seeded -> empty array
         assert json.loads(row[0]) == []
 
@@ -108,7 +108,7 @@ class TestIdentityConflicts:
         row = con.sql(
             "SELECT goldenmatch_identity_conflicts(?, ?)",
             params=["d", path],
-        ).fetchone()
+        ).fetchall()[0]
         items = json.loads(row[0])
         assert len(items) == 1
         assert items[0]["record_a_id"] == "src:3"
@@ -120,7 +120,7 @@ class TestIdentityConflicts:
         row = con.sql(
             "SELECT goldenmatch_identity_conflicts(?, ?)",
             params=["", path],
-        ).fetchone()
+        ).fetchall()[0]
         assert len(json.loads(row[0])) == 1
 
 
@@ -130,7 +130,7 @@ class TestIdentityList:
         row = con.sql(
             "SELECT goldenmatch_identity_list(?, ?, ?)",
             params=["d", "active", path],
-        ).fetchone()
+        ).fetchall()[0]
         items = json.loads(row[0])
         assert len(items) == 2
         assert all(i["status"] == "active" for i in items)
@@ -140,5 +140,5 @@ class TestIdentityList:
         row = con.sql(
             "SELECT goldenmatch_identity_list(?, ?, ?)",
             params=["", "", path],
-        ).fetchone()
+        ).fetchall()[0]
         assert len(json.loads(row[0])) == 2
