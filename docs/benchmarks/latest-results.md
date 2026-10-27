@@ -6,16 +6,16 @@
 gate fails any PR whose doc drifts from its JSON, so these numbers are the
 current truth, not a stale copy pasted from a case study.
 
-**Run date:** 2026-10-26 &nbsp;·&nbsp; **path:** pure-Python &nbsp;·&nbsp; **planning_effort:** normal &nbsp;·&nbsp; **LLM features:** off
+**Run date:** 2026-10-27 &nbsp;·&nbsp; **path:** pure-Python &nbsp;·&nbsp; **planning_effort:** normal &nbsp;·&nbsp; **LLM features:** off
 
 | Dataset | Domain | F1 | Precision | Recall | Time |
 |---|---|---|---|---|---|
-| DBLP-ACM | record | 0.9768 | 0.9894 | 0.9645 | 4.23s |
-| Febrl3 | record | 0.9912 | 0.9992 | 0.9833 | 3.75s |
-| NCVR-synthetic | record | 0.9990 | 0.9992 | 0.9988 | 13.25s |
-| DQbench | benchmark-suite | composite=83.45 | — | — | 68.2s |
-| Abt-Buy (linkage) | product | 0.7024 | 0.8529 | 0.5971 | 3.88s |
-| Amazon-Google (linkage) | product | 0.4636 | 0.5961 | 0.3792 | 29.21s |
+| DBLP-ACM | record | 0.9768 | 0.9894 | 0.9645 | 9.8s |
+| Febrl3 | record | 0.9912 | 0.9992 | 0.9833 | 7.91s |
+| NCVR-synthetic | record | 0.9990 | 0.9992 | 0.9988 | 25.59s |
+| DQbench | benchmark-suite | composite=83.45 | — | — | 108.8s |
+| Abt-Buy (linkage) | product | 0.7024 | 0.8529 | 0.5971 | 7.96s |
+| Amazon-Google (linkage) | product | 0.4636 | 0.5961 | 0.3792 | 37.91s |
 
 ## Reading these numbers
 
