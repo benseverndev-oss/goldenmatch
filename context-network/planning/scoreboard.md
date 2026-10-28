@@ -5,18 +5,18 @@
 [north-star-roadmap.md](./north-star-roadmap.md): *is GoldenMatch becoming the
 tool developers reach for by default?* Trend > snapshot.
 
-**Latest: 2026-10-27** (change vs the previous snapshot)
+**Latest: 2026-10-28** (change vs the previous snapshot)
 
 | Signal | Now | Change | North Star reading |
 |---|---|---|---|
 | **Stranger issues + PRs, ever** | 3 | 3 (▬0) | someone reached for it† |
-| **`goldenmatch` desktop downloads (30d)** | 34 | 34 (▼-3) | people installing it§ |
-| `goldenmatch` downloads (30d) | 1.2k | 1.2k (▼-112) | reach, mostly CI§ |
+| **`goldenmatch` desktop downloads (30d)** | 36 | 36 (▲+2) | people installing it§ |
+| `goldenmatch` downloads (30d) | 1.2k | 1.2k (▲+11) | reach, mostly CI§ |
 | GitHub stars | 134 | 134 (▬0) | discovery momentum |
 | Forks | 16 | 16 (▬0) | intent-to-use |
-| Time-to-first-success | 26.6s · F1 1.00 | ▲+7.1s | zero-config friction‡ |
+| Time-to-first-success | 21.6s · F1 1.00 | ▼-5.1s | zero-config friction‡ |
 | PyPI downloads (30d, whole suite) | 27.8k | 27.8k (▬0) | CI-dominated, not adoption§ |
-| npm downloads (30d, whole suite) | 992 | 992 (▼-578) | CI-dominated, not adoption§ |
+| npm downloads (30d, whole suite) | 927 | 927 (▼-65) | CI-dominated, not adoption§ |
 | Open issues, non-maintainer | 1 | 1 (▬0) | raw, includes promo accounts |
 
 † Issues and PRs, open or closed, from accounts that are not the maintainer,
@@ -40,6 +40,7 @@ the probe itself did not run. The two are never merged.
 
 | Date | Strangers | GM desktop 30d | GM 30d | Stars | Forks | Suite PyPI 30d | Suite npm 30d | TTFS |
 |---|---|---|---|---|---|---|---|---|
+| 2026-10-28 | 3 | 36 | 1.2k | 134 | 16 | 27.8k | 927 | 21.6s |
 | 2026-10-27 | 3 | 34 | 1.2k | 134 | 16 | 27.8k | 992 | 26.6s |
 | 2026-10-26 | 3 | 37 | 1.3k | 134 | 16 | 27.8k | 1.6k | 19.5s |
 | 2026-10-25 | 3 | 60 | 1.6k | 134 | 16 | 27.8k | 952 | 32.1s |
@@ -55,7 +56,6 @@ the probe itself did not run. The two are never merged.
 | 2026-10-15 | 3 | 71 | 1.8k | 133 | 16 | 27.8k | 1.3k | 33.4s |
 | 2026-10-14 | 3 | 70 | 1.8k | 133 | 16 | 27.8k | 1.3k | 31.7s |
 | 2026-10-13 | 3 | 66 | 1.8k | 133 | 16 | 27.8k | 1.3k | 25.9s |
-| 2026-10-12 | 3 | 66 | 1.8k | 133 | 16 | 27.8k | 1.4k | 31.6s |
 
 ## The gates (from the roadmap)
 
