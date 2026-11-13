@@ -5,18 +5,18 @@
 [north-star-roadmap.md](./north-star-roadmap.md): *is GoldenMatch becoming the
 tool developers reach for by default?* Trend > snapshot.
 
-**Latest: 2026-11-12** (change vs the previous snapshot)
+**Latest: 2026-11-13** (change vs the previous snapshot)
 
 | Signal | Now | Change | North Star reading |
 |---|---|---|---|
 | **Stranger issues + PRs, ever** | 4 | 4 (▬0) | someone reached for it† |
-| **`goldenmatch` desktop downloads (30d)** | 35 | 35 (▼-1) | people installing it§ |
-| `goldenmatch` downloads (30d) | 1.2k | 1.2k (▼-3) | reach, mostly CI§ |
-| GitHub stars | 138 | 138 (▲+2) | discovery momentum |
+| **`goldenmatch` desktop downloads (30d)** | 33 | 33 (▼-2) | people installing it§ |
+| `goldenmatch` downloads (30d) | 1.2k | 1.2k (▲+10) | reach, mostly CI§ |
+| GitHub stars | 138 | 138 (▬0) | discovery momentum |
 | Forks | 18 | 18 (▬0) | intent-to-use |
-| Time-to-first-success | 22.8s · F1 1.00 | ▼-5.1s | zero-config friction‡ |
-| PyPI downloads (30d, whole suite) | 27.8k | 27.8k (▬0) | CI-dominated, not adoption§ |
-| npm downloads (30d, whole suite) | 960 | 960 (▼-6) | CI-dominated, not adoption§ |
+| Time-to-first-success | 25.5s · F1 1.00 | ▲+2.7s | zero-config friction‡ |
+| PyPI downloads (30d, whole suite) | 13.4k | 13.4k (▼-14391) | CI-dominated, not adoption§ |
+| npm downloads (30d, whole suite) | 956 | 956 (▼-4) | CI-dominated, not adoption§ |
 | Open issues, non-maintainer | 2 | 2 (▬0) | raw, includes promo accounts |
 
 † Issues and PRs, open or closed, from accounts that are not the maintainer,
@@ -40,6 +40,7 @@ the probe itself did not run. The two are never merged.
 
 | Date | Strangers | GM desktop 30d | GM 30d | Stars | Forks | Suite PyPI 30d | Suite npm 30d | TTFS |
 |---|---|---|---|---|---|---|---|---|
+| 2026-11-13 | 4 | 33 | 1.2k | 138 | 18 | 13.4k | 956 | 25.5s |
 | 2026-11-12 | 4 | 35 | 1.2k | 138 | 18 | 27.8k | 960 | 22.8s |
 | 2026-11-11 | 4 | 36 | 1.2k | 136 | 18 | 27.8k | 966 | 27.9s |
 | 2026-11-10 | 3 | 36 | 1.1k | 135 | 18 | 27.8k | 923 | 20.6s |
@@ -55,7 +56,6 @@ the probe itself did not run. The two are never merged.
 | 2026-10-31 | 3 | 30 | 1.2k | 135 | 16 | 27.8k | 924 | 27.7s |
 | 2026-10-30 | 3 | 32 | 1.2k | 134 | 16 | 27.8k | 924 | 28.8s |
 | 2026-10-29 | 3 | 34 | 1.2k | 134 | 16 | 27.8k | 926 | 26.8s |
-| 2026-10-28 | 3 | 36 | 1.2k | 134 | 16 | 27.8k | 927 | 21.6s |
 
 ## The gates (from the roadmap)
 
