@@ -35,7 +35,7 @@
     "sync:refdata": "node scripts/sync_ts_refdata.mjs"
   },
   "dependencies": {
-    "commander": "^15.0.0"
+    "commander": "^15.1.0"
   },
   "peerDependencies": {
     "yaml": "*",
