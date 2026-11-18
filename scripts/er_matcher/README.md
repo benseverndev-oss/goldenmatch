@@ -35,6 +35,7 @@ renders arbitrary fields.
 | `abt_buy`, `amazon_google` | `LeipzigSource` | **CC-BY** (attribution required) | **bundle** | product | yes |
 | `dblp_acm`, `dblp_scholar` | `LeipzigSource` | **CC-BY** (attribution required) | **bundle** | citation | yes |
 | `magellan_*` | `MagellanSource` | cite-only | **fetch** | product/citation | **no — eval-only** |
+| `usorg_bench` | `UsorgBenchSource` | **CC-BY** (attribution required) | **fetch** | organization | **no, eval-only** (the license allows training) |
 | `ncvr` | `NcvrSource` (stub) | public-record (real PII) | **fetch** | person | **no — eval-only, never bundled** |
 
 **License obligations:**
@@ -105,6 +106,7 @@ harness (a later sub-project), not the training build.
 - `sources/negatives.py` — deterministic blocker + bounded hard/easy negative synthesis (optional cross-partition constraint).
 - `sources/csv_tables.py` — shared `read_id_table` (used by leipzig + magellan).
 - `sources/{leipzig,febrl,magellan,ncvr}.py` — the loaders.
+- `sources/usorg_bench.py`: USORG-Bench, pre-labeled organization pairs with the released splits.
 - `sources_config.py` — `sources.yaml` schema, strict validation, the `build_source` factory.
 - `build_corpus.py` — the blend driver → JSONL + manifest.
 

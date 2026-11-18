@@ -1,0 +1,7 @@
+pair_id,left_id,right_id,label,id_type,label_confidence,difficulty,categories,name_sim,split
+p00040c1231eb,r703f0d1d20ac,r91413bf723d8,0,state_filing,high,hard,same_key;form_conflict,100.0,test
+p000ba2879075,r2bd07c2fc9bd,r0fe77ec26cd3,1,uei,high,hard,cross_source;dba_alias,32.0,train
+p0013bc5b0e46,r5405a869b868,r928340cbf034,0,state_filing,high,hard,same_key;form_conflict,100.0,train
+p0049d3f87220,r15e91f3b2a33,rc8574a8470ea,1,uei,high,hard,cross_source;dba_alias,13.6,test
+p00890df774f3,r6acc7a793ea6,r73428454c9ed,0,ccn,medium,hard,same_key;state_differs,100.0,dev
+p009e80618ae6,r083c6cea825a,rba01b2084c42,1,uei,high,hard,cross_source;dba_alias,57.1,dev

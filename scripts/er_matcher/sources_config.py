@@ -21,6 +21,7 @@ from sources.febrl import FebrlSource
 from sources.leipzig import LeipzigSource
 from sources.magellan import MagellanSource
 from sources.ncvr import NcvrSource
+from sources.usorg_bench import UsorgBenchSource
 
 # `synthetic/generate.py` uses FLAT imports (`from corruption import ...`,
 # `from schemas import ...`, `from vocab import Vocab`) rather than
@@ -154,6 +155,8 @@ _BUILDERS: dict[str, Callable[[SourceEntry, int], PairSource]] = {
     "febrl": lambda e, seed: FebrlSource(name=e.name, domain=e.domain, seed=seed, **e.kwargs),
     "magellan": lambda e, seed: MagellanSource(name=e.name, domain=e.domain, **e.kwargs),
     "ncvr": lambda e, seed: NcvrSource(name=e.name, **e.kwargs),
+    # Pre-labeled pairs with released splits, no negative synthesis: no `seed`.
+    "usorg_bench": lambda e, seed: UsorgBenchSource(name=e.name, domain=e.domain, **e.kwargs),
     # SyntheticSource is multi-domain internally (round-robin across
     # crm_contact/organization/business) -- it has no `domain` constructor
     # param, so `entry.domain` (yaml's `domain: multi`) is NOT forwarded.
