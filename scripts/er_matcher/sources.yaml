@@ -71,6 +71,16 @@ sources:
     kwargs:
       root: data/er_matcher/raw/magellan/abt_buy
 
+  usorg_bench:
+    loader: usorg_bench
+    mechanism: fetch
+    license: CC-BY
+    attribution: "USORG-Bench, Tensorust (CC BY 4.0); USAspending, SEC EDGAR, CMS, FCC, USAC, CO/CT/NY/OR registries"
+    eval_only: true
+    domain: organization
+    kwargs:
+      root: data/er_matcher/raw/usorg_bench
+
   ncvr:
     loader: ncvr
     mechanism: fetch

@@ -21,6 +21,7 @@ FIX = Path(__file__).parent / "tests" / "fixtures"
 LEIPZIG_FIX = FIX / "leipzig_mini"
 FEBRL_FIX = FIX / "febrl_mini"
 MAGELLAN_FIX = FIX / "magellan_mini"
+USORG_FIX = FIX / "usorg_mini"
 
 
 # --- load_sources on the real sources.yaml -----------------------------------
@@ -36,6 +37,8 @@ def test_real_yaml_loads_expected_names_loaders_mechanisms():
     assert entries["dblp_scholar"].loader == "leipzig"
     assert entries["magellan_abt_buy"].loader == "magellan"
     assert entries["magellan_abt_buy"].mechanism == "fetch"
+    assert entries["usorg_bench"].loader == "usorg_bench"
+    assert entries["usorg_bench"].mechanism == "fetch"
     assert entries["ncvr"].loader == "ncvr"
     assert entries["ncvr"].mechanism == "fetch"
     assert entries["synthetic"].loader == "synthetic"
@@ -52,6 +55,7 @@ def test_real_yaml_every_ccby_entry_has_attribution():
 def test_real_yaml_eval_only_set_correctly():
     entries = {e.name: e for e in load_sources(REAL_YAML)}
     assert entries["magellan_abt_buy"].eval_only is True
+    assert entries["usorg_bench"].eval_only is True
     assert entries["ncvr"].eval_only is True
     assert entries["febrl"].eval_only is False
     assert entries["abt_buy"].eval_only is False
@@ -67,6 +71,7 @@ def test_real_yaml_names_match_yaml_keys():
         "dblp_acm",
         "dblp_scholar",
         "magellan_abt_buy",
+        "usorg_bench",
         "ncvr",
         "synthetic",
     }
@@ -277,6 +282,23 @@ def test_build_source_magellan_against_mini_fixture_no_seed_needed():
     assert src.eval_only is True
 
 
+def test_build_source_usorg_bench_against_mini_fixture_no_seed_needed():
+    entry = SourceEntry(
+        name="usorg_mini",
+        loader="usorg_bench",
+        mechanism="fetch",
+        license="CC-BY",
+        attribution="USORG-Bench",
+        eval_only=True,
+        domain="organization",
+        kwargs={"root": USORG_FIX},
+    )
+    src = build_source(entry, seed=1)
+    assert src.name == "usorg_mini"
+    rows = [r for split in src.splits().values() for r in split]
+    assert {r["label"] for r in rows} == {"match", "no_match"}
+
+
 def test_build_source_ncvr_stub_raises_not_implemented():
     entry = SourceEntry(
         name="ncvr",
@@ -352,6 +374,14 @@ def test_build_source_name_equals_entry_name_for_every_loader():
             kwargs={"root": MAGELLAN_FIX},
         ),
         SourceEntry(name="n4", loader="ncvr", mechanism="fetch", license="public-record"),
+        SourceEntry(
+            name="n5",
+            loader="usorg_bench",
+            mechanism="fetch",
+            license="CC-BY",
+            attribution="x",
+            kwargs={"root": USORG_FIX},
+        ),
     ]
     for entry in cases:
         src = build_source(entry, seed=0)

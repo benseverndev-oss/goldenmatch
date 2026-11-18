@@ -1,0 +1,13 @@
+record_id,source,name,name_kind,address,city,state,zip5,id_type,entity_id
+r083c6cea825a,usaspending_recipients,"HARMAR MOBILITY, LLC",legal,2075 47TH ST,SARASOTA,FL,34234,uei,e169c3f4cbba9f8
+r0fe77ec26cd3,fpds_contracts,HANGER CLINIC,dba,7324 INDIANAPOLIS BLVD,HAMMOND,IN,46324,uei,e6825a21b85e710
+r15e91f3b2a33,usaspending_recipients,AMERICAN SOCIETY FOR RADIATION ONCOLOGY,legal,251 18TH STREET S.,ARLINGTON,VA,22202,uei,e91068a722fe693
+r2bd07c2fc9bd,usaspending_recipients,"HANGER PROSTHETICS & ORTHOTICS EAST, INC",legal,7324 INDIANAPOLIS BLVD,HAMMOND,IN,46324,uei,e6825a21b85e710
+r5405a869b868,state_registry_ny,ROADWAY SERVICES LLC,legal,2313 W. LAKE COURT,OCEANSIDE,NY,11572,state_filing,e350bf7db262e67
+r6acc7a793ea6,cms_hospitals,JEFFERSON COUNTY HOSPITAL,legal,870 S MAIN,FAYETTE,MS,39069,ccn,e4aeea61c6fc460
+r703f0d1d20ac,state_registry_co,"IPM Products Manufacturing, LLC.",legal,PO Box 102973,Denver,CO,80250,state_filing,ec864888b19e2ec
+r73428454c9ed,cms_hospitals,JEFFERSON COUNTY HOSPITAL,legal,INTERSECTION HYWS 81 & 70,WAURIKA,OK,73573,ccn,e2bd9f84e4d1cc5
+r91413bf723d8,state_registry_co,"IPM Products Manufacturing, Inc.",legal,655 W Evans Ave,Denver,CO,80223,state_filing,ec6acee966c8094
+r928340cbf034,state_registry_ny,"ROADWAY SERVICES, INC.",legal,2313 WEST LAKE COURT,OCEANSIDE,NY,11572,state_filing,e81253655c4aecf
+rba01b2084c42,fpds_contracts,HARMAR,dba,1500 INDEPENDENCE BLVD STE 220,SARASOTA,FL,34234,uei,e169c3f4cbba9f8
+rc8574a8470ea,fpds_contracts,ASTRO,dba,251 18TH STREET S.,ARLINGTON,VA,22202,uei,e91068a722fe693
