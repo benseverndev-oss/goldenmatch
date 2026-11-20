@@ -69,14 +69,11 @@ def _run(tmp_path, tag, monkeypatch, *, mode, chunk, lane):
     monkeypatch.setenv("GOLDENMATCH_IDENTITY_ROW_FILTER", mode)
     monkeypatch.setenv("GOLDENMATCH_IDENTITY_PREP_CHUNK_ROWS", chunk)
     df = pl.DataFrame(_rows())
-    store = IdentityStore(backend="sqlite", path=str(tmp_path / f"{tag}.db"))
-    try:
+    with IdentityStore(backend="sqlite", path=str(tmp_path / f"{tag}.db")) as store:
         s = resolve_clusters(clusters=_clusters(), df=df.to_arrow() if lane == "arrow" else df,
                              store=store, run_name="r", dataset="rf", source_pk_col="pk",
                              emit_singletons=False)
         return vars(s).copy(), _snapshot(store)
-    finally:
-        store.close()
 
 
 @pytest.mark.parametrize("lane", ["polars", "arrow"])
