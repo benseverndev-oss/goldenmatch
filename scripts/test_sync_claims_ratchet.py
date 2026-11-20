@@ -66,9 +66,10 @@ KNOWN_ACTIONABLE: set[tuple[str, str, int]] = {
     # line "no longer reproduces" and the new one is "new and untriaged" --
     # while the finding itself is unchanged. Seen twice on 2026-09-08 alone
     # (203 -> 231 when `_prep_chunk_rows` landed, 231 -> 243 when the
-    # derived-structure views landed). If the failure names this symbol and
-    # only the number differs, update the number; it is not a new gap.
-    ("identity/resolve.py", "_batch_fingerprint_enabled", 243),
+    # derived-structure views landed; 243 -> 275 when the payload-prefetch
+    # knobs landed, #3220). If the failure names this symbol and only the
+    # number differs, update the number; it is not a new gap.
+    ("identity/resolve.py", "_batch_fingerprint_enabled", 275),
     ("identity/snowflake_backend.py", "_rel_expr", 501),
     ("spark/identity.py", "record_id_for_row", 45),
 }
