@@ -6672,6 +6672,7 @@
             "_record_id_candidates",
             "_referenced_row_ids",
             "_resolve_via_index",
+            "_row_filter_per_chunk",
             "_row_to_payload",
             "_survivor_value",
             "apply_batch",

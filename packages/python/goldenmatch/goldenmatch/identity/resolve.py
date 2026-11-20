@@ -256,6 +256,24 @@ def _payload_prefetch_enabled() -> bool:
     ).strip() != "0"
 
 
+def _row_filter_per_chunk() -> bool:
+    """Filter the prep to referenced rows chunk by chunk instead of copying the frame.
+
+    ``identity_prep_row_filter`` used to ``filter_in`` the WHOLE input frame down
+    to the rows a surviving cluster references: a copy of every such row across
+    every pipeline column, resident for the whole resolve while the caller still
+    holds the original. Measured with per-stage current RSS at 2M records it is
+    the largest identity term (+0.97 GB retained); at 14M it is several GB. The
+    prep already walks the frame in chunks, so each chunk is filtered to its
+    referenced rows instead -- same rows, same order, so every derived value is
+    byte-identical -- and the payload prefetch reads the unfiltered frame by row
+    id. ``GOLDENMATCH_IDENTITY_ROW_FILTER=copy`` restores the whole-frame copy.
+    """
+    return os.environ.get(
+        "GOLDENMATCH_IDENTITY_ROW_FILTER", "chunk"
+    ).strip().lower() != "copy"
+
+
 def _payload_prefetch_rows() -> int:
     """Members per prefetch batch (``GOLDENMATCH_IDENTITY_PAYLOAD_PREFETCH_ROWS``).
 
@@ -1001,11 +1019,17 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
     # active, so the default path is unchanged.
     from goldenmatch.core.bench import stage as _stage  # noqa: PLC0415
 
+    # Set when the prep filters each chunk to these row ids instead of the whole
+    # frame being copied down to them (`_row_filter_per_chunk`).
+    _needed_set: set[int] | None = None
     with _stage("identity_prep_row_filter"):
         if "__row_id__" in _fa5.columns:
             _needed = _referenced_row_ids(cluster_items, emit_singletons)
             if len(_needed) < _fa5.height:
-                _fa5 = _fa5.filter_in("__row_id__", sorted(_needed))
+                if _row_filter_per_chunk():
+                    _needed_set = _needed
+                else:
+                    _fa5 = _fa5.filter_in("__row_id__", sorted(_needed))
     # ONE index over the prepped rowids, plus a dense list per derived value.
     # These four were four dicts over an identical key set (every one written
     # unconditionally in the same loop iteration below); see `_OrdinalView`.
@@ -1058,9 +1082,24 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
         _batch_fp = _batch_fingerprint_enabled()
         _total_rows = _fa5.height
         _chunk_rows_n = _prep_chunk_rows() or max(_total_rows, 1)
-        _hash_buf = bytearray(_total_rows * _HASH_BYTES)
+        # Indexed by ordinal, and ordinals never exceed the distinct ids prepped.
+        # With per-chunk filtering the frame keeps every row, so size to the
+        # needed set (a bytearray slice assigned past its end INSERTS rather than
+        # writing at that offset, so this must never be undersized).
+        _hash_buf = bytearray(
+            (len(_needed_set) if _needed_set is not None else _total_rows) * _HASH_BYTES
+        )
         for _off in range(0, max(_total_rows, 1), _chunk_rows_n):
             _chunk = _fa5.slice(_off, _chunk_rows_n)
+            if _needed_set is not None:
+                # Same rows the whole-frame filter_in kept, in the same order:
+                # referenced ids only (null ids drop, as filter_in drops them).
+                _ids = _chunk.column("__row_id__").to_list()
+                _keep = [r for r in _ids if r is not None and int(r) in _needed_set]
+                if not _keep:
+                    continue
+                if len(_keep) < len(_ids):
+                    _chunk = _chunk.filter_in("__row_id__", _keep)
             _crows = _chunk.select_dicts(_cols)
             if not _crows:
                 continue

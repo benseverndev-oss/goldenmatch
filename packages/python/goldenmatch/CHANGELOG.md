@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+
+- **Identity prep no longer copies the input frame.** It restricted itself to rows a surviving
+  cluster references by copying the whole input frame down to them -- every referenced row across
+  every pipeline column, resident for the whole resolve while the caller still held the original.
+  Per-stage current RSS at 2M records put it as the largest identity term (+0.97 GB retained). The
+  prep now filters each chunk to its referenced rows instead; same rows in the same order, so output
+  is byte-identical. `GOLDENMATCH_IDENTITY_ROW_FILTER=copy` restores the old form. The pair-score
+  view build also gets its own stage marker (`identity_pair_score_view`).
+
 ## [3.23.0] - 2026-11-20
 
 <!-- README-callout
