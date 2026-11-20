@@ -2731,11 +2731,16 @@
             "_confidence",
             "_edge_stream_sql",
             "_edges_sql",
+            "_last_wins_edges_sql",
             "_make_context",
             "_pairs_to_arrow",
             "_rollup_sql",
             "_supports_ordered_first_value",
-            "cluster_edges_datafusion"
+            "cluster_edges_datafusion",
+            "cluster_pair_scores_datafusion"
+          ],
+          "imports": [
+            "goldenmatch.core.cluster_pairscores"
           ]
         },
         {
@@ -2744,10 +2749,15 @@
           "purpose": "Lazy per-cluster pair-score view (Phase 2 SP2). Decouples the identity",
           "defines": [
             "ClusterPairScores",
-            "_bucket_pairs"
+            "_as_pair_tuples",
+            "_bucket_pairs",
+            "_datafusion_available",
+            "_pair_score_view_backend",
+            "build_pair_score_view"
           ],
           "imports": [
             "goldenmatch._polars_lazy",
+            "goldenmatch.core",
             "goldenmatch.core.frame"
           ]
         },

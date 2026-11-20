@@ -6306,6 +6306,9 @@
           "GOLDENMATCH_NOISE_AWARE_SCORERS",
           "GOLDENMATCH_NOISE_AWARE_TARGET"
         ],
+        "PAIR": [
+          "GOLDENMATCH_PAIR_SCORE_VIEW"
+        ],
         "PERCEPTUAL": [
           "GOLDENMATCH_PERCEPTUAL_AUTOCONFIG"
         ],

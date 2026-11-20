@@ -5,8 +5,11 @@ path. dict-of-dicts backing; the ``iter_clusters`` interface is frame-ready for 
 future SP that makes the build produce a columnar pair frame natively."""
 from __future__ import annotations
 
+import os
 from collections.abc import Iterable, Iterator
 from typing import Any
+
+import numpy as np
 
 from goldenmatch._polars_lazy import pl
 
@@ -29,13 +32,14 @@ def _bucket_pairs(
 
 
 class ClusterPairScores:
-    __slots__ = ("_by_cid", "_agg_frame", "_cid_to_row")
+    __slots__ = ("_by_cid", "_agg_frame", "_cid_to_row", "_edges")
 
     def __init__(
         self,
         by_cid: dict[int, dict[tuple[int, int], float]] | None = None,
         agg_frame: Any | None = None,
         cid_to_row: dict[int, int] | None = None,
+        edges: tuple | None = None,
     ):
         # Two backings, mutually exclusive in practice:
         #  - _by_cid: legacy resident dict-of-dicts (from_pairs/from_cluster_dict)
@@ -45,10 +49,45 @@ class ClusterPairScores:
         #    (num_clusters entries). Accessors slice the row and build the per-cid
         #    dict on demand, so the global 100M-entry dict-of-dicts is NEVER
         #    resident and no per-cid frame partition is materialized at build time.
-        # __slots__ raises on unset access, so set ALL three every time.
+        #  - _edges: Arrow-native view (`from_sorted_edges`, built by DataFusion in
+        #    `cluster_edges_df.cluster_pair_scores_datafusion`). Flat cid-sorted
+        #    edge arrays plus per-cid run offsets; a cid is found by binary search,
+        #    so not even a cid->row dict is built. Python sees one cluster's edges
+        #    only when a consumer asks for that cluster.
+        # __slots__ raises on unset access, so set ALL of them every time.
         self._by_cid = by_cid
         self._agg_frame = agg_frame
         self._cid_to_row = cid_to_row
+        self._edges = edges
+
+    @classmethod
+    def from_sorted_edges(cls, cid: Any, a: Any, b: Any, score: Any) -> ClusterPairScores:
+        """Arrow-backed view over edges ALREADY in final order: sorted by cid, and
+        within a cid in first-occurrence order, one row per kept ``(a, b)``
+        carrying its last-wins score -- the order and values ``_bucket_pairs``
+        produces. Accepts Arrow (Chunked)Arrays or numpy. Raises if the cid
+        column is not sorted, since every lookup depends on it."""
+        c = np.asarray(cid, dtype=np.int64)
+        av = np.asarray(a, dtype=np.int64)
+        bv = np.asarray(b, dtype=np.int64)
+        sv = np.asarray(score, dtype=np.float64)
+        if c.size:
+            brk = np.flatnonzero(c[1:] != c[:-1]) + 1
+            starts = np.concatenate((np.zeros(1, np.int64), brk))
+            ends = np.concatenate((brk, np.array([c.size], np.int64)))
+            uniq = c[starts]
+            if uniq.size > 1 and not bool(np.all(uniq[1:] > uniq[:-1])):
+                raise ValueError("from_sorted_edges: cid column is not sorted")
+        else:
+            starts = ends = uniq = np.empty(0, np.int64)
+        return cls(edges=(uniq, starts, ends, av, bv, sv))
+
+    def _edge_slice(self, cid: int) -> tuple[int, int] | None:
+        uniq, starts, ends = self._edges[0], self._edges[1], self._edges[2]
+        i = int(np.searchsorted(uniq, cid))
+        if i < uniq.size and uniq[i] == cid:
+            return int(starts[i]), int(ends[i])
+        return None
 
     @classmethod
     def from_cluster_dict(cls, clusters: dict[int, dict]) -> ClusterPairScores:
@@ -206,6 +245,14 @@ class ClusterPairScores:
         return r["a"], r["b"], r["last_s"]
 
     def for_cluster(self, cid: int) -> dict[tuple[int, int], float]:
+        if self._edges is not None:
+            sl = self._edge_slice(cid)
+            if sl is None:
+                return {}
+            lo, hi = sl
+            av, bv, sv = self._edges[3], self._edges[4], self._edges[5]
+            # rows are in first-occurrence order -> dict insertion order matches
+            return dict(zip(zip(av[lo:hi].tolist(), bv[lo:hi].tolist()), sv[lo:hi].tolist()))
         if self._agg_frame is not None:
             row = self._cid_to_row.get(int(cid))
             if row is None:
@@ -217,6 +264,14 @@ class ClusterPairScores:
         return self._by_cid.get(cid, {})
 
     def iter_clusters(self) -> Iterator[tuple[int, Iterable[tuple[int, int, float]]]]:
+        if self._edges is not None:
+            uniq, starts, ends, av, bv, sv = self._edges
+            for k in range(uniq.size):
+                lo, hi = int(starts[k]), int(ends[k])
+                yield int(uniq[k]), list(zip(
+                    av[lo:hi].tolist(), bv[lo:hi].tolist(), sv[lo:hi].tolist()
+                ))
+            return
         if self._agg_frame is not None:
             for cid, al, bl, sl in self._agg_frame.select(
                 "cid", "a", "b", "last_s"
@@ -230,8 +285,64 @@ class ClusterPairScores:
 
     def score_for(self, cid: int, a: int, b: int) -> float | None:
         key = (min(a, b), max(a, b))
-        if self._agg_frame is not None:
+        if self._edges is not None or self._agg_frame is not None:
             # Canonical QUERY key vs AS-GIVEN stored keys: a pair stored (7,3)
             # is intentionally MISSED by score_for(cid, 3, 7) -> None. Preserved.
             return self.for_cluster(cid).get(key)
         return self._by_cid.get(cid, {}).get(key)
+
+
+# ---------------------------------------------------------------------------
+# The one seam that builds identity's pair-score view
+# ---------------------------------------------------------------------------
+def _datafusion_available() -> bool:
+    import importlib.util
+
+    return importlib.util.find_spec("datafusion") is not None
+
+
+def _pair_score_view_backend() -> str:
+    """``GOLDENMATCH_PAIR_SCORE_VIEW``: ``auto`` (default) = the Arrow-native
+    DataFusion view when ``datafusion`` is installed, else the Python view;
+    ``datafusion`` = require it (raise if not installed rather than quietly
+    taking the path that OOMs at scale); ``python`` = the legacy view
+    (kill-switch). Anything else reads as ``auto``."""
+    raw = os.environ.get("GOLDENMATCH_PAIR_SCORE_VIEW", "auto").strip().lower()
+    return raw if raw in ("auto", "datafusion", "python") else "auto"
+
+
+def _as_pair_tuples(pairs: Any) -> Any:
+    """The legacy builders take an iterable of ``(a, b, score)``. An Arrow (or
+    Polars) pair table goes through the same ``to_pydict`` + ``zip`` the pipeline
+    always used, so the Python fallback is unchanged."""
+    if hasattr(pairs, "to_arrow") and not hasattr(pairs, "column_names"):
+        pairs = pairs.to_arrow()
+    if hasattr(pairs, "column_names"):
+        names = pairs.column_names
+        a, b = ("id_a", "id_b") if "id_a" in names else ("a", "b")
+        d = pairs.select([a, b, "score"]).to_pydict()
+        return list(zip(d[a], d[b], d["score"]))
+    return pairs
+
+
+def build_pair_score_view(assignments: Any, pairs: Any) -> ClusterPairScores:
+    """Identity's per-cluster pair-score view from the FINAL ``assignments``
+    frame and the RAW scored pairs (a ``(a, b, score)`` iterable, or an Arrow /
+    Polars pair table with ``id_a``/``id_b``/``score`` or ``a``/``b``/``score``).
+
+    The DataFusion builder (scale-substrate SP1, #695, wired here) takes an
+    Arrow pair table as-is -- no Python object per pair -- and is byte-identical
+    to ``from_frames``: same kept edges, last-wins scores, first-occurrence
+    order. The Python builder round-trips every pair through Python, which at
+    ~30M pairs is a multi-GB transient (the 14M identity-resolve OOM)."""
+    backend = _pair_score_view_backend()
+    if backend == "datafusion" and not _datafusion_available():
+        raise ImportError(
+            "GOLDENMATCH_PAIR_SCORE_VIEW=datafusion but datafusion is not "
+            "installed: pip install 'goldenmatch[datafusion]'"
+        )
+    if backend == "datafusion" or (backend == "auto" and _datafusion_available()):
+        from goldenmatch.core import cluster_edges_df as _ce
+
+        return _ce.cluster_pair_scores_datafusion(pairs, assignments)
+    return ClusterPairScores.from_frames(assignments, _as_pair_tuples(pairs))

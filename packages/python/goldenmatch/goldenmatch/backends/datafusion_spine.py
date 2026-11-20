@@ -336,7 +336,7 @@ def run_spine(
         rebuilds the id_prep view from.
     """
     from goldenmatch.core.cluster import build_cluster_frames
-    from goldenmatch.core.cluster_pairscores import ClusterPairScores
+    from goldenmatch.core.cluster_pairscores import build_pair_score_view
     from goldenmatch.core.golden import build_golden_records_from_frames
 
     # ── Stage D: scale-mode feature gate (error, never silently ignore) ─
@@ -384,9 +384,7 @@ def run_spine(
     # it here so id_prep is a real executed stage on the validated path
     # (the parity test re-derives the same view from the returned
     # assignments + raw pairs and diffs per-cluster edge sets).
-    pair_score_view = ClusterPairScores.from_frames(
-        cluster_frames.assignments, all_pairs
-    )
+    pair_score_view = build_pair_score_view(cluster_frames.assignments, all_pairs)
     logger.info(
         "DataFusion spine: id_prep built ClusterPairScores view over "
         "%d cluster(s)",

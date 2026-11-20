@@ -8,12 +8,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Fixed
 
-- **Identity resolve no longer holds a Python dict for every record.** The prep kept one
+- **Identity's pair-score view is built Arrow-natively.** Right before identity resolve,
+  the frames-out pipeline converted every scored pair in the Arrow pair table to Python
+  (`to_pydict()` + `list(zip(...))`), then re-bucketed them in Python or looped them back
+  into a dataframe -- several GB at ~30M pairs, enough to OOM a 32 GB box at 14M records
+  after scoring and clustering had finished within budget. The view now goes through
+  DataFusion (the scale-substrate edge view from #695, whose identity wiring had been
+  deferred), which takes the Arrow pair table as-is. Byte-identical to the Python view:
+  same kept edges, last-wins scores, first-occurrence order. Measured at 10M pairs: peak
+  3.6-4.4 GB -> 1.8 GB, build 39-70 s -> 6 s. Needs `goldenmatch[datafusion]`; without it
+  the Python view is used. `GOLDENMATCH_PAIR_SCORE_VIEW=python` forces the Python view,
+  `=datafusion` requires DataFusion.
+- **Identity prep no longer holds a Python dict for every record.** The prep kept one
   payload dict per prepped record alive for the whole resolve -- ~742 B/record on an
-  11-column person-shape frame, ~10 GB at 14M records -- which OOM'd a 32 GB box in
-  `identity_prep_record_ids` after scoring and clustering had finished within budget.
-  Payloads are now read from the prepped frame one write-loop batch at a time and released
-  after (`GOLDENMATCH_IDENTITY_PAYLOAD_PREFETCH`, default on;
+  11-column person-shape frame, a multi-GB term at millions of records. Payloads are now
+  read from the prepped frame one write-loop batch at a time and released after
+  (`GOLDENMATCH_IDENTITY_PAYLOAD_PREFETCH`, default on;
   `GOLDENMATCH_IDENTITY_PAYLOAD_PREFETCH_ROWS`, default 250000). Stored payloads, golden
   records and cluster structure are byte-identical. Traced peak during resolve drops ~69%
   once the record count is well above the batch size.
