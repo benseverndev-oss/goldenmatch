@@ -67,9 +67,10 @@ KNOWN_ACTIONABLE: set[tuple[str, str, int]] = {
     # while the finding itself is unchanged. Seen twice on 2026-09-08 alone
     # (203 -> 231 when `_prep_chunk_rows` landed, 231 -> 243 when the
     # derived-structure views landed; 243 -> 275 when the payload-prefetch
-    # knobs landed, #3220). If the failure names this symbol and only the
-    # number differs, update the number; it is not a new gap.
-    ("identity/resolve.py", "_batch_fingerprint_enabled", 275),
+    # knobs landed, #3220; 275 -> 293 when the per-chunk row filter knob
+    # landed). If the failure names this symbol and only the number differs,
+    # update the number; it is not a new gap.
+    ("identity/resolve.py", "_batch_fingerprint_enabled", 293),
     ("identity/snowflake_backend.py", "_rel_expr", 501),
     ("spark/identity.py", "record_id_for_row", 45),
 }
