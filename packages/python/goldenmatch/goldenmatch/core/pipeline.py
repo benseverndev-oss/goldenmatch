@@ -4616,8 +4616,8 @@ def _run_dedupe_pipeline(
         if cluster_frames is None:
             return None
         if not _pair_score_view_cache:
-            from goldenmatch.core.cluster_pairscores import ClusterPairScores
-            _raw_pairs = all_pairs
+            from goldenmatch.core.cluster_pairscores import build_pair_score_view
+            _raw_pairs: Any = all_pairs
             if not _raw_pairs and _use_fs_columnar and _columnar_pairs_df is not None:
                 # B2c: the raw scored pairs live in the Arrow table, not
                 # all_pairs (which B2c never builds). Materialize (a, b, score)
@@ -4628,10 +4628,17 @@ def _run_dedupe_pipeline(
                 # frames-out B2c golden would silently degrade confidence_majority
                 # to count-majority (regression vs the old dict-path B2c, which
                 # carried pair_scores).
-                _d = _columnar_pairs_df.to_pydict()
-                _raw_pairs = list(zip(_d["id_a"], _d["id_b"], _d["score"]))
+                #
+                # Hand the Arrow TABLE itself to the view builder. Identity reads
+                # this view on every identity-enabled frames-out run, so the old
+                # `to_pydict()` + `list(zip(...))` here WAS the hot path: every
+                # scored pair as Python objects (~5 GB at ~30M pairs), the step
+                # that OOM'd a 32 GB box right before identity resolve. With
+                # datafusion installed the view is built Arrow-natively; without
+                # it `build_pair_score_view` falls back to that same conversion.
+                _raw_pairs = _columnar_pairs_df
             _pair_score_view_cache.append(
-                ClusterPairScores.from_frames(cluster_frames.assignments, _raw_pairs)
+                build_pair_score_view(cluster_frames.assignments, _raw_pairs)
             )
         return _pair_score_view_cache[0]
 
@@ -5252,7 +5259,11 @@ def _run_dedupe_pipeline(
     # input pairs (input-order last-wins) against the final cluster membership.
     # On the columnar branch cluster_frames is None and `_pair_score_view()`
     # returns None, so identity falls back to the dict's pair_scores.
-    pair_score_view: ClusterPairScores | None = _pair_score_view()
+    # Its own stage: on a frames-out identity run this builds the per-cluster
+    # edge view over every scored pair, and without a marker its cost lands in
+    # the unmarked gap between `golden` and `identity_prep_row_filter`.
+    with stage("identity_pair_score_view"):
+        pair_score_view: ClusterPairScores | None = _pair_score_view()
     with stage("identity_resolve"):
         identity_summary = _resolve_identities(
             clusters if cluster_frames is None else None,

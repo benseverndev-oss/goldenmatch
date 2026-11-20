@@ -4,6 +4,17 @@ All notable changes to golden-suite are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic
 versioning.
 
+## [0.5.11] - 2026-11-20
+
+### Changed
+
+- **`goldenmatch` floor raised to `>=3.23.0`, now with the `[datafusion]` extra.** Identity's
+  pair-score view is built Arrow-natively in DataFusion instead of converting every scored pair
+  to Python (10M pairs: 6 s instead of 39-70 s, under half the peak memory). The extra is what
+  turns it on -- without it goldenmatch keeps the Python view -- so suite installs now include
+  the `datafusion` wheel. With it, a 14M-record identity resolve that ran out of memory on a
+  32 GB box completes.
+
 ## [0.5.10] - 2026-09-25
 
 ### Changed

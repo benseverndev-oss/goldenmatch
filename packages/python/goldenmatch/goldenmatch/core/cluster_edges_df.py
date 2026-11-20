@@ -48,11 +48,28 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # Arrow ingest helpers
 # ---------------------------------------------------------------------------
-def _pairs_to_arrow(pairs: Iterable[tuple[int, int, float]]) -> pa.Table:
-    """Materialize the RAW pair list into an Arrow table with explicit dtypes.
-    ``a``/``b`` are int64, ``score`` is float64. Pairs are kept AS-GIVEN (no
-    canonicalization)."""
+def _pairs_to_arrow(pairs: Any) -> pa.Table:
+    """The RAW pairs as an Arrow table ``(a int64, b int64, score float64)``,
+    kept AS-GIVEN (no canonicalization).
+
+    An Arrow (or Polars) pair table -- ``id_a``/``id_b``/``score`` as the B2c
+    scorer emits it, or ``a``/``b``/``score`` -- is taken AS-IS: the columns are
+    reused (the casts are no-ops when the dtypes already match), so no Python
+    object is created per pair. Only a genuine ``(a, b, score)`` iterable is
+    walked in Python."""
     import pyarrow as pa
+
+    if hasattr(pairs, "to_arrow") and not hasattr(pairs, "column_names"):
+        pairs = pairs.to_arrow()  # a Polars frame
+    if isinstance(pairs, pa.RecordBatch):
+        pairs = pa.Table.from_batches([pairs])
+    if isinstance(pairs, pa.Table):
+        a_name, b_name = ("id_a", "id_b") if "id_a" in pairs.column_names else ("a", "b")
+        return pa.table({
+            "a": pairs.column(a_name).cast(pa.int64()),
+            "b": pairs.column(b_name).cast(pa.int64()),
+            "score": pairs.column("score").cast(pa.float64()),
+        })
 
     a_col: list[int] = []
     b_col: list[int] = []
@@ -315,3 +332,84 @@ def cluster_edges_datafusion(
 
     edges_stream = ctx.sql(_edge_stream_sql()).execute_stream()
     return edges_stream, rollup_table
+
+
+# ---------------------------------------------------------------------------
+# Identity's pair-score view on the LEGACY contract (scale-substrate SP1's
+# deferred "identity per-pair edge streaming" sub-project)
+# ---------------------------------------------------------------------------
+def _last_wins_edges_sql() -> str:
+    """Same kept edges, values and order as ``cluster_pairscores._bucket_pairs``.
+
+    ``pidx`` is the input row index. Membership: both endpoints map to the same
+    cid. Per ``(cid, a, b)``: the score at the LAST occurrence (max ``pidx``),
+    positioned at the FIRST (min ``pidx``) -- dict-overwrite semantics. The
+    last-wins score is recovered by joining back on ``pidx``, which is unique per
+    input row, so this needs no ordered aggregate. ``ORDER BY cid, first_i`` is a
+    total order: each ``pidx`` belongs to exactly one group."""
+    return """
+        WITH j AS (
+            SELECT aa.cluster_id AS cid, p.a AS a, p.b AS b,
+                   p.score AS score, p.pidx AS pidx
+            FROM pairs p
+            JOIN assignments aa ON p.a = aa.member_id
+            JOIN assignments bb ON p.b = bb.member_id
+            WHERE aa.cluster_id IS NOT NULL
+              AND bb.cluster_id IS NOT NULL
+              AND aa.cluster_id = bb.cluster_id
+        ),
+        g AS (
+            SELECT cid, a, b, min(pidx) AS first_i, max(pidx) AS last_i
+            FROM j
+            GROUP BY cid, a, b
+        )
+        SELECT g.cid AS cid, g.a AS a, g.b AS b, j.score AS score
+        FROM g JOIN j ON j.pidx = g.last_i
+        ORDER BY g.cid, g.first_i
+    """
+
+
+def cluster_pair_scores_datafusion(
+    pairs: Any,
+    assignments: Any,
+    *,
+    memory_limit: int | None = None,
+    target_partitions: int | None = None,
+) -> Any:
+    """Identity's per-cluster pair-score view, computed Arrow-natively.
+
+    Byte-identical to ``ClusterPairScores.from_frames(assignments, pairs)`` --
+    the LEGACY contract (input order, last-wins, keys as given, self-pairs kept,
+    first-occurrence order), not SP1's scale-mode MAX contract that
+    ``cluster_edges_datafusion`` implements. ``from_frames`` round-trips every
+    pair through Python (on the B2c path a ``to_pydict()`` + ``list(zip())`` of
+    the whole pair table, then a per-pair bucket); at ~30M pairs that transient
+    is several GB and OOMs a 32 GB box right before identity resolve. Here the
+    join / membership filter / dedup / ordering run in DataFusion over the Arrow
+    tables, and the result backs ``ClusterPairScores.from_sorted_edges`` --
+    Python sees one cluster's edges only when identity asks for that cluster.
+
+    ``pairs``: RAW pairs -- an Arrow / Polars pair table (taken as-is) or an
+    ``(a, b, score)`` iterable. ``assignments``: FINAL membership
+    (``member_id``, ``cluster_id``).
+    """
+    import numpy as np
+    import pyarrow as pa
+
+    from goldenmatch.core.cluster_pairscores import ClusterPairScores
+
+    ptbl = _pairs_to_arrow(pairs)
+    atbl = _assign_to_arrow(assignments)
+    if ptbl.num_rows == 0 or atbl.num_rows == 0:
+        empty = np.empty(0, np.int64)
+        return ClusterPairScores.from_sorted_edges(empty, empty, empty, np.empty(0, np.float64))
+    ptbl = ptbl.append_column(
+        "pidx", pa.array(np.arange(ptbl.num_rows, dtype=np.int64))
+    )
+    ctx = _make_context(memory_limit=memory_limit, target_partitions=target_partitions)
+    ctx.from_arrow(ptbl, name="pairs")
+    ctx.from_arrow(atbl, name="assignments")
+    out = ctx.sql(_last_wins_edges_sql()).to_arrow_table()
+    return ClusterPairScores.from_sorted_edges(
+        out.column("cid"), out.column("a"), out.column("b"), out.column("score")
+    )

@@ -18,6 +18,11 @@ see [../decisions/0001-gate-reframe-engine-portability.md](../decisions/0001-gat
 ## Done
 - **Step 1 — id_prep plannable (#696).** `ClusterPairScores.from_frames` rewritten as a
   group-by; id_prep 566→34s @100M; end-to-end flips to 2.11×.
+- **Step 1b — identity's pair-score view on the Arrow lane (#3220).** After the Polars
+  eviction the Arrow lane fell back to the Python reference (every scored pair to a
+  Python dict), which OOMed a 14M-record identity resolve on 32 GB. SP1's deferred
+  identity wiring now ships: the view is built in DataFusion by default, byte-identical,
+  and golden-suite bundles the extra. See [../decisions/0067-identity-pair-score-view-in-datafusion.md](../decisions/0067-identity-pair-score-view-in-datafusion.md).
 - **Step 2 — DataFusion spine, Stages A-E.** Merged. Scale-mode contract shipped
   (#702); Stage E spill verdict recorded as HONEST-NULL on one-box survival (#706).
   See [../architecture/datafusion-spine.md](../architecture/datafusion-spine.md).

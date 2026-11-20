@@ -6,6 +6,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.23.0] - 2026-11-20
+
+<!-- README-callout
+**A 14M-record identity resolve that ran out of memory on a 32 GB box now completes.**
+Identity's pair-score view is built in DataFusion straight from the Arrow pair table instead of
+copying every scored pair into Python (10M pairs: 6 s instead of 39-70 s, under half the peak
+memory), and identity prep no longer holds a dict per record or a copy of the input frame. Needs
+`goldenmatch[datafusion]` (golden-suite includes it). Output is byte-identical.
+-->
+
+### Fixed
+
+- **Identity's pair-score view is built Arrow-natively.** Right before identity resolve,
+  the frames-out pipeline converted every scored pair in the Arrow pair table to Python
+  (`to_pydict()` + `list(zip(...))`), then re-bucketed them in Python or looped them back
+  into a dataframe -- several GB at ~30M pairs, enough to OOM a 32 GB box at 14M records
+  after scoring and clustering had finished within budget. The view now goes through
+  DataFusion (the scale-substrate edge view from #695, whose identity wiring had been
+  deferred), which takes the Arrow pair table as-is. Byte-identical to the Python view:
+  same kept edges, last-wins scores, first-occurrence order. Measured at 10M pairs: peak
+  3.6-4.4 GB -> 1.8 GB, build 39-70 s -> 6 s. Needs `goldenmatch[datafusion]`; without it
+  the Python view is used. `GOLDENMATCH_PAIR_SCORE_VIEW=python` forces the Python view,
+  `=datafusion` requires DataFusion.
+- **Identity prep no longer holds a Python dict for every record.** The prep kept one
+  payload dict per prepped record alive for the whole resolve -- ~742 B/record on an
+  11-column person-shape frame, a multi-GB term at millions of records. Payloads are now
+  read from the prepped frame one write-loop batch at a time and released after
+  (`GOLDENMATCH_IDENTITY_PAYLOAD_PREFETCH`, default on;
+  `GOLDENMATCH_IDENTITY_PAYLOAD_PREFETCH_ROWS`, default 250000). Stored payloads, golden
+  records and cluster structure are byte-identical. Traced peak during resolve drops ~69%
+  once the record count is well above the batch size.
+  `GOLDENMATCH_IDENTITY_PAYLOAD_PREFETCH=0` restores the retained list.
+- **Identity prep no longer copies the input frame.** It restricted itself to the rows a
+  surviving cluster references by copying the whole input frame down to them -- every referenced
+  row across every pipeline column, resident for the whole resolve while the caller still held
+  the original. It now filters each prep chunk instead; same rows in the same order, so output is
+  byte-identical. Per-stage current RSS: ~0.27 GB less retained at 2M records; at 14M, the margin
+  a resolve on a 32 GB box was missing. `GOLDENMATCH_IDENTITY_ROW_FILTER=copy` restores the old
+  form. The pair-score view build also gets its own stage marker (`identity_pair_score_view`).
+
 ## [3.22.0] - 2026-09-25
 
 <!-- README-callout

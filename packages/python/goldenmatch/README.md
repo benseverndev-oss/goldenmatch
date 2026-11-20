@@ -36,6 +36,11 @@
 </div>
 
 <!-- README-callouts:start  (auto-synced from CHANGELOG.md by scripts/sync_readme_callouts.py; edit the CHANGELOG, not this block) -->
+> **v3.23.0: A 14M-record identity resolve that ran out of memory on a 32 GB box now completes.** Identity's pair-score view is built in DataFusion straight from the Arrow pair table instead of
+copying every scored pair into Python (10M pairs: 6 s instead of 39-70 s, under half the peak
+memory), and identity prep no longer holds a dict per record or a copy of the input frame. Needs
+`goldenmatch[datafusion]` (golden-suite includes it). Output is byte-identical.
+>
 > **v3.22.0: Zero-config person dedupe is 18-30x faster, and your records come back as you entered
 them.** 250k rows went from 520 s to 18 s with identical clusters (upgrade pulls
 `goldenmatch-native` 0.2.3). The unique, duplicate and deduplicated tables now carry your
@@ -47,13 +52,6 @@ a small file no longer logs RED "output may be low-precision", and auto-config n
 on the (paid) LLM scorer only when you pass `llm_auto=True` -- it used to do so whenever an
 `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` happened to be set. If you relied on that, pass
 `llm_auto=True` or set `llm_scorer` in your config.
->
-> **v3.20.0: Integer ID columns no longer crash zero-config.** A CSV whose phone or account column is
-plain digits (read as int64) made `gm.dedupe(path)` and `goldenmatch dedupe` die with
-`ArrowNotImplementedError` in auto-config's blocking; it now runs, and negative evidence
-on such a column scores instead of silently switching itself off. The CLI summary now says
-what it counts -- `12 records -> 7 entities (4 duplicate groups)` -- and
-`result.total_entities` matches it.
 <!-- README-callouts:end -->
 
 ---

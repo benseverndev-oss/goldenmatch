@@ -43,16 +43,21 @@ def test_the_candidate_set_is_a_minority_of_modules():
     assert 0 < len(cands) < 300
 
 
-def test_real_ast_graph_yields_134_unimported() -> None:
-    """Verify the production AST graph passes validation and yields exactly 134.
+def test_real_ast_graph_yields_133_unimported() -> None:
+    """Verify the production AST graph passes validation and yields exactly 133.
 
-    134 (down from the codemap-backed source's 176) is the measured effect of
+    134 (down from the codemap-backed source's 176) was the measured effect of
     switching sources: 42 of the codemap's 176 were false candidates -- modules
     the AST graph already knows are imported via `from <pkg> import
     <submodule>`, which the codemap under-records.
+
+    133: `goldenmatch.core.cluster_edges_df` left the set when identity's
+    pair-score view started building through it (#3220, ADR 0067). It was
+    scale-substrate SP1's edge view, built in #695 with its identity wiring
+    deferred, so it had no importer until then.
     """
     cands = unimported_modules()
-    assert len(cands) == 134
+    assert len(cands) == 133
 
 
 def test_missing_package_raises() -> None:
