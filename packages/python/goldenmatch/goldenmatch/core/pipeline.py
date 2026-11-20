@@ -5259,7 +5259,11 @@ def _run_dedupe_pipeline(
     # input pairs (input-order last-wins) against the final cluster membership.
     # On the columnar branch cluster_frames is None and `_pair_score_view()`
     # returns None, so identity falls back to the dict's pair_scores.
-    pair_score_view: ClusterPairScores | None = _pair_score_view()
+    # Its own stage: on a frames-out identity run this builds the per-cluster
+    # edge view over every scored pair, and without a marker its cost lands in
+    # the unmarked gap between `golden` and `identity_prep_row_filter`.
+    with stage("identity_pair_score_view"):
+        pair_score_view: ClusterPairScores | None = _pair_score_view()
     with stage("identity_resolve"):
         identity_summary = _resolve_identities(
             clusters if cluster_frames is None else None,
