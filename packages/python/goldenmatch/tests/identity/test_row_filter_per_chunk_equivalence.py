@@ -3,8 +3,8 @@
 ``identity_prep_row_filter`` used to ``filter_in`` the whole input frame down to
 the rows a surviving cluster references -- a copy of every such row across every
 pipeline column, resident for the whole resolve while the caller still held the
-original. Per-stage current RSS at 2M records put it as the largest identity
-term (+0.97 GB retained). The prep now filters each chunk to its referenced
+original. Per-stage current RSS puts it at ~0.27 GB retained at 2M records;
+at 14M it was the margin a resolve on a 32 GB box was missing. The prep now filters each chunk to its referenced
 rows instead (``GOLDENMATCH_IDENTITY_ROW_FILTER``, default ``chunk``; ``copy``
 restores the whole-frame filter).
 

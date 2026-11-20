@@ -9,7 +9,10 @@ Newest first. One entry per meaningful change to the network.
   last-wins contract). 10M pairs: 3.6-4.4 GB / 39-70 s -> 1.8 GB / 6 s. New ADR
   [0067](../decisions/0067-identity-pair-score-view-in-datafusion.md); roadmap Step 1b;
   spine diagram updated.
-- Same PR bounds identity prep's per-record payload dicts to one write-loop batch.
+- Same PR bounds identity prep's per-record payload dicts to one write-loop batch and stops
+  prep copying the input frame (per-chunk row filter). With all three the 14M resolve
+  completes on 32 GB, ~0.1-0.2 GB to spare; next terms (golden +6.6 GB, identity setup
+  +4.3 GB) recorded in ADR 0067.
 - golden-suite 0.5.11 bundles `goldenmatch[datafusion]`.
 
 ## 2026-09-25 -- goldenmatch 3.21.0: no RED on correct small runs; LLM only with llm_auto

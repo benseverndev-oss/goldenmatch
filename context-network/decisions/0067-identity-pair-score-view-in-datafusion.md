@@ -63,6 +63,12 @@ counts were measured and are no better than the two-pass join used.
 - Identity prep's payload dicts were a second O(N) term; #3220 also bounds them to one
   write-loop batch. The remaining per-row ids and hashes are pure per-row compute and
   are the natural next Arrow-kernel candidate.
+- #3220 also stops identity prep copying the input frame down to referenced rows (it
+  filters per chunk). With all three, the 14M-record identity resolve that OOMed on 32 GB
+  **completes** (2.03M entities, 9.5M relationship edges, gold F1 0.954) -- but with
+  ~0.1-0.2 GB to spare. Per-stage current RSS at 14M names the next terms: `golden`
+  (+6.6 GB, golden records identity rebuilds from payloads anyway) and the start of
+  identity resolve before `row_filter` exits (+4.3 GB, not yet attributed).
 - **Measurement gotcha:** identity-memory fixes look like no-ops below ~1M records.
   The bulk writer stages up to 250k rows, each pinning its payload until the flush,
   so at small N that window covers most of the data. Measure with the bounded

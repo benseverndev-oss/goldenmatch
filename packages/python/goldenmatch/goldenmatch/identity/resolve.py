@@ -262,8 +262,9 @@ def _row_filter_per_chunk() -> bool:
     ``identity_prep_row_filter`` used to ``filter_in`` the WHOLE input frame down
     to the rows a surviving cluster references: a copy of every such row across
     every pipeline column, resident for the whole resolve while the caller still
-    holds the original. Measured with per-stage current RSS at 2M records it is
-    the largest identity term (+0.97 GB retained); at 14M it is several GB. The
+    holds the original. Measured with per-stage current RSS it is ~0.27 GB
+    retained at 2M records; at 14M it was the margin a resolve on a 32 GB box
+    was missing (the run that OOMed in the write loop completes without it). The
     prep already walks the frame in chunks, so each chunk is filtered to its
     referenced rows instead -- same rows, same order, so every derived value is
     byte-identical -- and the payload prefetch reads the unfiltered frame by row

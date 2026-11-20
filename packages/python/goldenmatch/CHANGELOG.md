@@ -6,24 +6,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
-### Fixed
-
-- **Identity prep no longer copies the input frame.** It restricted itself to rows a surviving
-  cluster references by copying the whole input frame down to them -- every referenced row across
-  every pipeline column, resident for the whole resolve while the caller still held the original.
-  Per-stage current RSS at 2M records put it as the largest identity term (+0.97 GB retained). The
-  prep now filters each chunk to its referenced rows instead; same rows in the same order, so output
-  is byte-identical. `GOLDENMATCH_IDENTITY_ROW_FILTER=copy` restores the old form. The pair-score
-  view build also gets its own stage marker (`identity_pair_score_view`).
-
 ## [3.23.0] - 2026-11-20
 
 <!-- README-callout
-**Identity resolution no longer copies every scored pair into Python.** With
-`goldenmatch[datafusion]` installed (golden-suite now includes it), identity's pair-score view
-is built in DataFusion straight from the Arrow pair table: 10M pairs build in 6 s instead of
-39-70 s with under half the peak memory, and identity prep no longer holds a dict per record.
-Output is byte-identical.
+**A 14M-record identity resolve that ran out of memory on a 32 GB box now completes.**
+Identity's pair-score view is built in DataFusion straight from the Arrow pair table instead of
+copying every scored pair into Python (10M pairs: 6 s instead of 39-70 s, under half the peak
+memory), and identity prep no longer holds a dict per record or a copy of the input frame. Needs
+`goldenmatch[datafusion]` (golden-suite includes it). Output is byte-identical.
 -->
 
 ### Fixed
@@ -48,6 +38,13 @@ Output is byte-identical.
   records and cluster structure are byte-identical. Traced peak during resolve drops ~69%
   once the record count is well above the batch size.
   `GOLDENMATCH_IDENTITY_PAYLOAD_PREFETCH=0` restores the retained list.
+- **Identity prep no longer copies the input frame.** It restricted itself to the rows a
+  surviving cluster references by copying the whole input frame down to them -- every referenced
+  row across every pipeline column, resident for the whole resolve while the caller still held
+  the original. It now filters each prep chunk instead; same rows in the same order, so output is
+  byte-identical. Per-stage current RSS: ~0.27 GB less retained at 2M records; at 14M, the margin
+  a resolve on a 32 GB box was missing. `GOLDENMATCH_IDENTITY_ROW_FILTER=copy` restores the old
+  form. The pair-score view build also gets its own stage marker (`identity_pair_score_view`).
 
 ## [3.22.0] - 2026-09-25
 

@@ -12,7 +12,8 @@ versioning.
   pair-score view is built Arrow-natively in DataFusion instead of converting every scored pair
   to Python (10M pairs: 6 s instead of 39-70 s, under half the peak memory). The extra is what
   turns it on -- without it goldenmatch keeps the Python view -- so suite installs now include
-  the `datafusion` wheel.
+  the `datafusion` wheel. With it, a 14M-record identity resolve that ran out of memory on a
+  32 GB box completes.
 
 ## [0.5.10] - 2026-09-25
 

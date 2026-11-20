@@ -36,11 +36,10 @@
 </div>
 
 <!-- README-callouts:start  (auto-synced from CHANGELOG.md by scripts/sync_readme_callouts.py; edit the CHANGELOG, not this block) -->
-> **v3.23.0: Identity resolution no longer copies every scored pair into Python.** With
-`goldenmatch[datafusion]` installed (golden-suite now includes it), identity's pair-score view
-is built in DataFusion straight from the Arrow pair table: 10M pairs build in 6 s instead of
-39-70 s with under half the peak memory, and identity prep no longer holds a dict per record.
-Output is byte-identical.
+> **v3.23.0: A 14M-record identity resolve that ran out of memory on a 32 GB box now completes.** Identity's pair-score view is built in DataFusion straight from the Arrow pair table instead of
+copying every scored pair into Python (10M pairs: 6 s instead of 39-70 s, under half the peak
+memory), and identity prep no longer holds a dict per record or a copy of the input frame. Needs
+`goldenmatch[datafusion]` (golden-suite includes it). Output is byte-identical.
 >
 > **v3.22.0: Zero-config person dedupe is 18-30x faster, and your records come back as you entered
 them.** 250k rows went from 520 s to 18 s with identical clusters (upgrade pulls
