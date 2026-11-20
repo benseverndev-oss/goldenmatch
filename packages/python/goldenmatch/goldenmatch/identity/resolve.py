@@ -18,7 +18,7 @@ import json
 import logging
 import os
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -240,6 +240,38 @@ def _prep_chunk_rows() -> int:
         return 250_000
 
 
+def _payload_prefetch_enabled() -> bool:
+    """Materialize record payloads per write-loop BATCH instead of retaining all.
+
+    The prep kept one payload dict per prepped record alive for the whole
+    resolve, which is O(N) Python heap -- ~742 B/record measured on a real
+    11-column person frame (dict + the value objects it pins), ~10 GB at 14M
+    records, and the term that OOMs a 32 GB box in `identity_prep_record_ids`.
+    See `_PrefetchedPayloadView`. Default ON; byte-identical output.
+    ``GOLDENMATCH_IDENTITY_PAYLOAD_PREFETCH=0`` restores the retained list
+    (kill-switch).
+    """
+    return os.environ.get(
+        "GOLDENMATCH_IDENTITY_PAYLOAD_PREFETCH", "1"
+    ).strip() != "0"
+
+
+def _payload_prefetch_rows() -> int:
+    """Members per prefetch batch (``GOLDENMATCH_IDENTITY_PAYLOAD_PREFETCH_ROWS``).
+
+    Consecutive clusters are grouped until they total at least this many
+    members; a single larger cluster is its own batch. Default 250k matches the
+    prep chunk and the bulk flush, so a batch's payload working set is the same
+    order as the other two bounded terms. Non-positive / unparsable -> default.
+    """
+    raw = os.environ.get("GOLDENMATCH_IDENTITY_PAYLOAD_PREFETCH_ROWS", "250000")
+    try:
+        n = int(raw.strip())
+    except ValueError:
+        return 250_000
+    return n if n > 0 else 250_000
+
+
 def _batch_fingerprint_enabled() -> bool:
     """Batch fingerprinting for ``resolve_clusters``: no-PK record h1 hashes are
     computed once via ``batch_fingerprints(df)`` (Arrow kernel) instead of per-row
@@ -349,6 +381,106 @@ class _OrdinalView(Mapping):
 
     def __len__(self) -> int:
         return len(self._ord)
+
+
+class _PrefetchedPayloadView(Mapping):
+    """rowid -> payload, materialized one BATCH at a time from the prepped frame.
+
+    `_OrdinalView` over a dense ``_payloads`` list keeps one Python dict per
+    prepped record alive for the whole resolve. That is the duplicate the
+    `_OrdinalView` docstring anticipated: the values already live in the frame.
+    At 14M records it is ~10 GB (see `_payload_prefetch_enabled`).
+
+    Every read of ``rowid_to_payload`` happens in the write loop and is for a
+    member of the cluster being processed, so the loop calls ``prefetch`` before
+    each batch of clusters (`_iter_with_payload_prefetch`) and this view
+    materializes exactly those rows -- through the SAME
+    ``filter_in(...).select_dicts(cols)`` + `_row_to_payload` path the prep
+    uses, so each payload is byte-identical (same keys, order and values).
+    ``filter_in`` is a mask filter, so frame order is kept and a duplicated
+    ``__row_id__`` resolves to its LAST occurrence -- the retained list's
+    overwrite-in-place.
+
+    Membership (``in`` / ``len`` / iteration) comes from the shared ordinal
+    index, so the view is keyed exactly like the map it replaces. A read outside
+    the current batch is served by a one-row fetch: correct but slow, and
+    counted in ``_misses`` so tests can assert the batching never leaks.
+    """
+
+    __slots__ = ("_ord", "_frame", "_cols", "_batch", "_misses")
+
+    def __init__(self, ordinals: dict[int, int], frame: Any, cols: list[str]) -> None:
+        self._ord = ordinals
+        self._frame = frame
+        self._cols = cols
+        self._batch: dict[int, dict[str, Any]] = {}
+        self._misses = 0
+
+    def _materialize(self, row_ids: list[int]) -> dict[int, dict[str, Any]]:
+        out: dict[int, dict[str, Any]] = {}
+        if not row_ids:
+            return out
+        for row in self._frame.filter_in("__row_id__", row_ids).select_dicts(self._cols):
+            rid = row.get("__row_id__")
+            if rid is not None:
+                out[int(rid)] = _row_to_payload(row)  # later rows overwrite: last wins
+        return out
+
+    def prefetch(self, row_ids: Iterable[int]) -> None:
+        # Drop the previous batch BEFORE building the next: the peak is one
+        # batch, not two.
+        self._batch = {}
+        ords = self._ord
+        self._batch = self._materialize(sorted({int(r) for r in row_ids if r in ords}))
+
+    def __getitem__(self, key: int) -> dict[str, Any]:
+        try:
+            return self._batch[key]
+        except KeyError:
+            if key not in self._ord:
+                raise
+        self._misses += 1
+        got = self._materialize([key])
+        if key not in got:  # indexed but absent from the frame -- cannot happen
+            raise KeyError(key)
+        return got[key]
+
+    def get(self, key: int, default: Any = None) -> Any:  # type: ignore[override]
+        return self[key] if key in self._ord else default
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._ord
+
+    def __iter__(self):
+        return iter(self._ord)
+
+    def __len__(self) -> int:
+        return len(self._ord)
+
+
+def _iter_with_payload_prefetch(
+    cluster_items: Iterable[tuple[Any, dict]],
+    view: _PrefetchedPayloadView,
+    batch_rows: int,
+) -> Iterator[tuple[Any, dict]]:
+    """Yield ``(cluster_id, info)`` unchanged, prefetching each batch's payloads.
+
+    Consecutive clusters are grouped until their members total ``batch_rows``
+    (one larger cluster is a batch on its own). The write loop sees the
+    identical sequence; only where ``rowid_to_payload`` reads from changes.
+    """
+    buf: list[tuple[Any, dict]] = []
+    n = 0
+    for item in cluster_items:
+        buf.append(item)
+        n += len(item[1].get("members") or ())
+        if n >= batch_rows:
+            view.prefetch(m for _c, inf in buf for m in (inf.get("members") or ()))
+            yield from buf
+            buf, n = [], 0
+    if buf:
+        view.prefetch(m for _c, inf in buf for m in (inf.get("members") or ()))
+        yield from buf
 
 
 class _HashView(Mapping[int, str]):
@@ -879,6 +1011,11 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
     # unconditionally in the same loop iteration below); see `_OrdinalView`.
     _ord: dict[int, int] = {}
     _primaries: list[str] = []
+    # Retained only on the kill-switch path. With prefetch ON (default) each
+    # payload is built once below for its hash + record-id candidates, then
+    # released with its chunk; the write loop re-reads payloads per batch from
+    # the frame (`_PrefetchedPayloadView`) instead of from an O(N) list.
+    _prefetch = _payload_prefetch_enabled()
     _payloads: list[dict[str, Any]] = []
     # Preallocated to the frame height and truncated once the prepped count is
     # known: appending 32 B five million times makes a bytearray double its way
@@ -968,10 +1105,12 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                 _o = _ord.setdefault(irid, len(_primaries))
                 if _o == len(_primaries):
                     _primaries.append(primary_id)
-                    _payloads.append(_payload)
+                    if not _prefetch:
+                        _payloads.append(_payload)
                 else:
                     _primaries[_o] = primary_id
-                    _payloads[_o] = _payload
+                    if not _prefetch:
+                        _payloads[_o] = _payload
                 _hash_buf[_o * _HASH_BYTES:(_o + 1) * _HASH_BYTES] = _digest
                 if source != _src_default:
                     _src_overrides[irid] = source
@@ -982,7 +1121,10 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
             del _crows, _h1, _chunk
 
     _rowid_primary: Mapping[int, str] = _OrdinalView(_ord, _primaries)
-    rowid_to_payload: Mapping[int, dict[str, Any]] = _OrdinalView(_ord, _payloads)
+    rowid_to_payload: Mapping[int, dict[str, Any]] = (
+        _PrefetchedPayloadView(_ord, _fa5, _cols) if _prefetch
+        else _OrdinalView(_ord, _payloads)
+    )
     del _hash_buf[len(_primaries) * _HASH_BYTES:]
     rowid_to_hash: Mapping[int, str] = _HashView(_ord, _hash_buf)
     rowid_to_source: Mapping[int, str] = _SourceView(
@@ -1218,10 +1360,19 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
     # flushes). Subtracting the store's own wall from this is what separates
     # "time spent deciding and building rows in Python" from "time spent in the
     # backend" -- the split ADR 0064 could only infer.
+    # With prefetch ON, each batch of clusters' payloads is materialized just
+    # before the loop reaches it; the sequence of (cluster_id, info) is unchanged.
+    _cluster_iter: Iterable[tuple[Any, dict]] = (
+        _iter_with_payload_prefetch(
+            cluster_items, rowid_to_payload, _payload_prefetch_rows()  # type: ignore[arg-type]
+        )
+        if _prefetch
+        else cluster_items
+    )
     with _stage("identity_write_loop"), _initial_ctx, store.bulk_writes():
         with store.write_pipeline():
             # 3. Iterate clusters.
-            for cluster_id, info in cluster_items:
+            for cluster_id, info in _cluster_iter:
                 members: list[int] = list(info.get("members") or [])
                 if not members:
                     continue

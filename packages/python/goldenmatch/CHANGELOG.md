@@ -6,6 +6,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+
+- **Identity resolve no longer holds a Python dict for every record.** The prep kept one
+  payload dict per prepped record alive for the whole resolve -- ~742 B/record on an
+  11-column person-shape frame, ~10 GB at 14M records -- which OOM'd a 32 GB box in
+  `identity_prep_record_ids` after scoring and clustering had finished within budget.
+  Payloads are now read from the prepped frame one write-loop batch at a time and released
+  after (`GOLDENMATCH_IDENTITY_PAYLOAD_PREFETCH`, default on;
+  `GOLDENMATCH_IDENTITY_PAYLOAD_PREFETCH_ROWS`, default 250000). Stored payloads, golden
+  records and cluster structure are byte-identical. Traced peak during resolve drops ~69%
+  once the record count is well above the batch size.
+  `GOLDENMATCH_IDENTITY_PAYLOAD_PREFETCH=0` restores the retained list.
+
 ## [3.22.0] - 2026-09-25
 
 <!-- README-callout
