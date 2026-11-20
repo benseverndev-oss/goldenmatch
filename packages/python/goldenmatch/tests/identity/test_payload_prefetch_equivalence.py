@@ -119,8 +119,7 @@ def _run(tmp_path, tag, monkeypatch, *, prefetch: str, batch: str, bulk: str, la
     monkeypatch.setenv("GOLDENMATCH_IDENTITY_PAYLOAD_PREFETCH", prefetch)
     monkeypatch.setenv("GOLDENMATCH_IDENTITY_PAYLOAD_PREFETCH_ROWS", batch)
     monkeypatch.setenv("GOLDENMATCH_IDENTITY_BULK", bulk)
-    store = IdentityStore(backend="sqlite", path=str(tmp_path / f"{tag}.db"))
-    try:
+    with IdentityStore(backend="sqlite", path=str(tmp_path / f"{tag}.db")) as store:
         s1 = resolve_clusters(clusters=_phase1_clusters(), df=_frame(_phase1_rows(), lane),
                               store=store, run_name="r1", dataset="pf", source_pk_col="pk",
                               emit_singletons=False)
@@ -130,8 +129,6 @@ def _run(tmp_path, tag, monkeypatch, *, prefetch: str, batch: str, bulk: str, la
                               run_name="r2", dataset="pf", source_pk_col="pk",
                               emit_singletons=False)
         return (vars(s1).copy(), vars(s2).copy()), snap1, _snapshot(store)
-    finally:
-        store.close()
 
 
 @pytest.mark.parametrize("lane", ["polars", "arrow"])

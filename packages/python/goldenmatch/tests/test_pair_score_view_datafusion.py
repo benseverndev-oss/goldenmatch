@@ -1,7 +1,7 @@
 """The DataFusion (Arrow-native) pair-score view must be byte-identical to the
 Python ``_bucket_pairs`` view it replaces on the identity path.
 
-``ClusterPairScores.from_frames`` built identity's per-cluster edge view by
+``cps.ClusterPairScores.from_frames`` built identity's per-cluster edge view by
 round-tripping every scored pair through Python. On the B2c path that is a
 ``to_pydict()`` + ``list(zip(...))`` of the whole Arrow pair table, then either a
 per-pair dict bucket (arrow lane) or a per-pair loop back into a Polars frame.
@@ -14,7 +14,7 @@ The LEGACY view's contract is kept exactly -- not SP1's scale-mode MAX
 contract: input order, LAST-WINS on a duplicated ``(a, b)``, keys kept as given
 (``(7, 3)`` and ``(3, 7)`` are distinct), self-pairs kept, both endpoints in the
 same cluster, and each cluster's edges in first-occurrence order. Asserted
-against ``ClusterPairScores.from_pairs`` on adversarial and randomized inputs,
+against ``cps.ClusterPairScores.from_pairs`` on adversarial and randomized inputs,
 then at the identity layer (durable evidence edges) and through the real B2c
 pipeline. The loud "datafusion must be installed in CI" guard lives in
 ``test_cluster_edges_df.py``.
@@ -30,12 +30,9 @@ import pytest
 
 pytest.importorskip("datafusion")
 
+from goldenmatch.core import cluster_edges_df as ce  # noqa: E402
+from goldenmatch.core import cluster_pairscores as cps  # noqa: E402
 from goldenmatch.core.cluster import build_clusters  # noqa: E402
-from goldenmatch.core.cluster_edges_df import cluster_pair_scores_datafusion  # noqa: E402
-from goldenmatch.core.cluster_pairscores import (  # noqa: E402
-    ClusterPairScores,
-    build_pair_score_view,
-)
 from goldenmatch.identity import IdentityStore, resolve_clusters  # noqa: E402
 
 
@@ -102,7 +99,7 @@ def _assignments(clusters: dict[int, dict], lane: str):
     return pl.from_arrow(tbl) if lane == "polars" else tbl
 
 
-def _assert_same_view(got: ClusterPairScores, want: ClusterPairScores, clusters) -> int:
+def _assert_same_view(got: cps.ClusterPairScores, want: cps.ClusterPairScores, clusters) -> int:
     n_edges = 0
     for cid in clusters:
         g, w = got.for_cluster(cid), want.for_cluster(cid)
@@ -120,8 +117,8 @@ def _assert_same_view(got: ClusterPairScores, want: ClusterPairScores, clusters)
 @pytest.mark.parametrize("lane", ["arrow", "polars"])
 def test_matches_from_pairs_adversarial(lane):
     pairs, clusters = _adversarial()
-    want = ClusterPairScores.from_pairs(pairs, clusters)
-    got = cluster_pair_scores_datafusion(pairs, _assignments(clusters, lane))
+    want = cps.ClusterPairScores.from_pairs(pairs, clusters)
+    got = ce.cluster_pair_scores_datafusion(pairs, _assignments(clusters, lane))
     assert _assert_same_view(got, want, clusters) > 0
     # the cases above actually landed: last-wins kept first position, reversed
     # key and self-pair survive, foreign / cross-cluster endpoints dropped
@@ -137,8 +134,8 @@ def test_matches_from_pairs_adversarial(lane):
 @pytest.mark.parametrize("seed", range(5))
 def test_matches_from_pairs_randomized(seed, lane):
     pairs, clusters = _randomized(seed)
-    want = ClusterPairScores.from_pairs(pairs, clusters)
-    got = cluster_pair_scores_datafusion(pairs, _assignments(clusters, lane))
+    want = cps.ClusterPairScores.from_pairs(pairs, clusters)
+    got = ce.cluster_pair_scores_datafusion(pairs, _assignments(clusters, lane))
     assert _assert_same_view(got, want, clusters) > 50
 
 
@@ -148,21 +145,21 @@ def test_arrow_table_input_is_taken_as_is():
     tuple-list result."""
     pairs, clusters = _randomized(11)
     asg = _assignments(clusters, "arrow")
-    from_list = cluster_pair_scores_datafusion(pairs, asg)
+    from_list = ce.cluster_pair_scores_datafusion(pairs, asg)
     cols = list(zip(*pairs))
     b2c = pa.table({"id_a": pa.array(cols[0], pa.int64()), "id_b": pa.array(cols[1], pa.int64()),
                     "score": pa.array(cols[2], pa.float64())})
     plain = b2c.rename_columns(["a", "b", "score"])
-    _assert_same_view(cluster_pair_scores_datafusion(b2c, asg), from_list, clusters)
-    _assert_same_view(cluster_pair_scores_datafusion(plain, asg), from_list, clusters)
+    _assert_same_view(ce.cluster_pair_scores_datafusion(b2c, asg), from_list, clusters)
+    _assert_same_view(ce.cluster_pair_scores_datafusion(plain, asg), from_list, clusters)
 
 
 def test_empty_pairs_and_empty_partition():
     _, clusters = _randomized(3)
-    empty = cluster_pair_scores_datafusion([], _assignments(clusters, "arrow"))
+    empty = ce.cluster_pair_scores_datafusion([], _assignments(clusters, "arrow"))
     assert empty.for_cluster(0) == {} and list(empty.iter_clusters()) == []
     assert empty.score_for(0, 1, 2) is None
-    none = cluster_pair_scores_datafusion([(1, 2, 0.9)], _assignments({}, "arrow"))
+    none = ce.cluster_pair_scores_datafusion([(1, 2, 0.9)], _assignments({}, "arrow"))
     assert list(none.iter_clusters()) == []
 
 
@@ -182,15 +179,12 @@ def test_identity_evidence_edges_byte_identical(tmp_path):
     df = pl.DataFrame([{"__row_id__": i, "__source__": "src", "id": str(i), "name": f"n{i}"}
                        for i in ids])
     out = {}
-    for tag, view in (("py", ClusterPairScores.from_pairs(pairs, clusters)),
-                      ("df", cluster_pair_scores_datafusion(pairs, _assignments(clusters, "arrow")))):
-        store = IdentityStore(path=str(tmp_path / f"{tag}.db"))
-        try:
+    for tag, view in (("py", cps.ClusterPairScores.from_pairs(pairs, clusters)),
+                      ("df", ce.cluster_pair_scores_datafusion(pairs, _assignments(clusters, "arrow")))):
+        with IdentityStore(path=str(tmp_path / f"{tag}.db")) as store:
             resolve_clusters(clusters, df, pairs, "wd", store, run_name=f"run-{tag}",
                              source_pk_col="id", pair_score_view=view)
             out[tag] = _normalized_edges(store)
-        finally:
-            store.close()
     assert out["py"], "fixture produced no edges -- the comparison would be vacuous"
     assert out["df"] == out["py"]
 
@@ -199,21 +193,20 @@ def test_backend_knob(monkeypatch):
     pairs, clusters = _randomized(5)
     asg = _assignments(clusters, "arrow")
     monkeypatch.setenv("GOLDENMATCH_PAIR_SCORE_VIEW", "python")
-    py = build_pair_score_view(asg, pairs)
+    py = cps.build_pair_score_view(asg, pairs)
     assert py._edges is None                       # legacy backing
     monkeypatch.setenv("GOLDENMATCH_PAIR_SCORE_VIEW", "datafusion")
-    df = build_pair_score_view(asg, pairs)
+    df = cps.build_pair_score_view(asg, pairs)
     assert df._edges is not None                   # Arrow-backed
     _assert_same_view(df, py, clusters)
     monkeypatch.delenv("GOLDENMATCH_PAIR_SCORE_VIEW")
-    assert build_pair_score_view(asg, pairs)._edges is not None   # auto -> datafusion
+    assert cps.build_pair_score_view(asg, pairs)._edges is not None   # auto -> datafusion
 
-    import goldenmatch.core.cluster_pairscores as cps
     monkeypatch.setattr(cps, "_datafusion_available", lambda: False)
-    assert build_pair_score_view(asg, pairs)._edges is None       # auto falls back
+    assert cps.build_pair_score_view(asg, pairs)._edges is None       # auto falls back
     monkeypatch.setenv("GOLDENMATCH_PAIR_SCORE_VIEW", "datafusion")
     with pytest.raises(ImportError, match="datafusion"):
-        build_pair_score_view(asg, pairs)                          # explicit: refuse silently
+        cps.build_pair_score_view(asg, pairs)                          # explicit: refuse silently
 
 
 def test_pipeline_feeds_the_arrow_pair_table(monkeypatch, tmp_path):
@@ -221,7 +214,6 @@ def test_pipeline_feeds_the_arrow_pair_table(monkeypatch, tmp_path):
     from the Arrow pair table itself (never a Python pair list), and the identity
     store's evidence edges equal the Python-view run."""
     import goldenmatch as gm
-    import goldenmatch.core.cluster_edges_df as ce
     from goldenmatch.config.schemas import (
         BlockingConfig,
         BlockingKeyConfig,
@@ -264,15 +256,14 @@ def test_pipeline_feeds_the_arrow_pair_table(monkeypatch, tmp_path):
                                     source_pk_column="pk"),
         )
         gm.dedupe_df(df, config=cfg, confidence_required=False)
-        store = IdentityStore(path=path)
-        try:
+        with IdentityStore(path=path) as store:
             return _normalized_edges(store)
-        finally:
-            store.close()
 
     py_edges = _resolve("py", "python")
-    assert not seen, "python backend must not touch the DataFusion builder"
+    n_python_calls = len(seen)          # the spy appends to `seen` from inside _resolve
     df_edges = _resolve("df", "datafusion")
-    assert seen and all(t is pa.Table for t in seen), seen
+    df_calls = seen[n_python_calls:]
+    assert n_python_calls == 0, "python backend must not touch the DataFusion builder"
+    assert df_calls and all(t is pa.Table for t in df_calls), df_calls
     assert py_edges, "pipeline produced no evidence edges -- comparison would be vacuous"
     assert df_edges == py_edges
