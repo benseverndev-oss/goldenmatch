@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [3.23.0] - 2026-11-20
+
+<!-- README-callout
+**Identity resolution no longer copies every scored pair into Python.** With
+`goldenmatch[datafusion]` installed (golden-suite now includes it), identity's pair-score view
+is built in DataFusion straight from the Arrow pair table: 10M pairs build in 6 s instead of
+39-70 s with under half the peak memory, and identity prep no longer holds a dict per record.
+Output is byte-identical.
+-->
+
 ### Fixed
 
 - **Identity's pair-score view is built Arrow-natively.** Right before identity resolve,

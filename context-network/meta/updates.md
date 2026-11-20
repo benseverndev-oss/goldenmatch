@@ -2,6 +2,16 @@
 
 Newest first. One entry per meaningful change to the network.
 
+## 2026-11-20 -- goldenmatch 3.23.0: identity's pair-score view is Arrow-native
+- #3220: a 14M-record identity resolve OOMed a 32 GB box after scoring and clustering, in
+  `_pair_score_view` -- every scored pair converted to Python. SP1's (#695) deferred identity
+  wiring now ships: the view is built in DataFusion by default, byte-identical (legacy
+  last-wins contract). 10M pairs: 3.6-4.4 GB / 39-70 s -> 1.8 GB / 6 s. New ADR
+  [0067](../decisions/0067-identity-pair-score-view-in-datafusion.md); roadmap Step 1b;
+  spine diagram updated.
+- Same PR bounds identity prep's per-record payload dicts to one write-loop batch.
+- golden-suite 0.5.11 bundles `goldenmatch[datafusion]`.
+
 ## 2026-09-25 -- goldenmatch 3.21.0: no RED on correct small runs; LLM only with llm_auto
 - #2988: two small-data controller artifacts made a correct 12-record run read RED -- a
   small-frame `cluster_giant` bar (now also needs 10 members) and a scoring profile blind

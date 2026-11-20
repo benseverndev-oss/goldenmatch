@@ -17,7 +17,7 @@ Opt-in behind `mode="scale"`.
    -> RAW scored pairs
 [ mirror the in-memory frames-out tail, Ray-free ]
    build_cluster_frames(RAW pairs, all_ids)  -> assignments + metadata   <-- UF break (NOT relational)
-   ClusterPairScores.from_frames(...)         [id_prep]
+   build_pair_score_view(assignments, pairs)  [id_prep]  Arrow-native in DataFusion (ADR 0067)
    build_golden_records_from_frames(...)      [golden]
 ```
 The UF break collects pairs to the driver — an **in-memory island the spill pool does
