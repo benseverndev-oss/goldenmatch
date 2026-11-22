@@ -114,6 +114,13 @@ dev = [
     # goldenmatch CI job ALSO installs `goldenmatch[snowflake]` explicitly, so
     # the runtime import path is exercised on its own declared extra.
     "fakesnow>=0.11",
+    # Every fakesnow release through 0.12.1 imports snowflake.connector.converter,
+    # which snowflake-connector-python 5.0 removed. With connector 5.x fakesnow
+    # fails to import, so the suites importorskip-SKIP (the same false green as
+    # above) and the goldenmatch coverage floors catch it. Test-only cap: the
+    # `goldenmatch[snowflake]` extra a user installs is unaffected. Lift it when
+    # a fakesnow release imports cleanly on connector 5.
+    "snowflake-connector-python<5",
     # transitive test deps surfaced across workspace packages:
     "httpx>=0.27",  # required by starlette.testclient (used by goldenpipe tests)
 ]
