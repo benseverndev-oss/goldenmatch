@@ -52,6 +52,15 @@ python_root:
   - 'uv.lock'
 python_goldenmatch:
   - 'packages/python/goldenmatch/**'
+  # The root lock and dev group decide which versions goldenmatch's tests run
+  # against (fakesnow and its connector live in the root dev group). python_root
+  # widens only the generic `python` matrix, which never includes goldenmatch, so
+  # a lock-only diff used to skip every goldenmatch lane at PR time AND in the
+  # merge queue: a dependency bump moved snowflake-connector-python to 5.x, the
+  # Snowflake suites importorskip-SKIPped, and main's coverage floors went red
+  # for the next PR that did run them (#3151 -> #3228).
+  - 'pyproject.toml'
+  - 'uv.lock'
   # Stage A: the standalone datafusion-ffi UDF crate is built into
   # the goldenmatch venv in the `python` lane and exercised by
   # tests/test_datafusion_ffi_udf.py. A crate-only change must
