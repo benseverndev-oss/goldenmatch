@@ -6,6 +6,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed
+
+- **A polars input is converted to Arrow once, not twice.** `dedupe_df` moves a polars
+  input onto the Arrow lane, and #3003's original-values capture then converted the same
+  polars frame to Arrow a second time (polars string views widen to `large_string`), a full
+  copy resident for the whole run. The capture now references the Arrow table the pipeline
+  runs on; same columns and values. At 14M records this takes ~2.2 GB off the footprint
+  from the first stage on (11.2 -> 9.0 GB), and the cluster peak drops 24.8 -> 22.5 GB.
+  Ingest steps get their own stage markers (`ingest_cast_all_str`,
+  `ingest_source_and_row_ids`, `ingest_polars_to_arrow_lane`,
+  `ingest_capture_original_input`).
+
+### Correction to 3.23.0
+
+- 3.23.0's headline said a 14M-record identity resolve that ran out of memory on a 32 GB
+  box "now completes". It completed once, with almost no headroom; a repeat run on the same
+  box ran out of memory. The binding peak (~31.3 GB) is in identity resolve after the write
+  loop, which neither 3.23.0 nor the fix above changes, so 14M on 32 GB is still not
+  reliable.
+
 ## [3.23.0] - 2026-11-20
 
 <!-- README-callout

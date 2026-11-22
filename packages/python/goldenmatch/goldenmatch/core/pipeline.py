@@ -4916,16 +4916,7 @@ def _run_dedupe_pipeline(
             # eligible configs anyway, and gating avoids an extra join on the hot
             # fast path. On None, fall back unchanged.
             _fused_golden_df = None
-            # On the Arrow lane the fused kernel is the reference for fast-path-
-            # eligible configs too: run_golden_fused_arrow declines them only on
-            # the polars backend (W2e-3). Gating the attempt on the polars-only
-            # `_frames_fast_eligible` meant the default lane never reached the
-            # kernel and instead fell into build_golden_records_from_frames, which
-            # converts the WHOLE source to polars and joins it there to get a
-            # polars row order -- ~5.7 GB at 14M rows, for an order the kernel
-            # does not need (it sorts members by (__cluster_id__, __row_id__)).
-            from goldenmatch.core.frame import resolve_frame_backend as _rfb_golden
-            if not _frames_fast_eligible or _rfb_golden() == "arrow":
+            if not _frames_fast_eligible:
                 from goldenmatch.core.golden import _multi_df_from_frames
                 # Bench diagnostic: the assignments->source join that assembles
                 # multi_df, timed apart from the fused kernel it feeds.
@@ -4940,16 +4931,6 @@ def _run_dedupe_pipeline(
                     wants_full_provenance=_provenance_on,
                 )
             if _fused_golden_df is not None:
-                if _frames_fast_eligible:
-                    # These configs used to come out of the polars columnar
-                    # builder, which leads with __cluster_id__ +
-                    # __golden_confidence__; keep that column order.
-                    from goldenmatch.core.frame import to_frame as _tf_gorder
-                    _gcols = _tf_gorder(_fused_golden_df).columns
-                    _lead = [c for c in ("__cluster_id__", "__golden_confidence__") if c in _gcols]
-                    _fused_golden_df = _tf_gorder(_fused_golden_df).select(
-                        _lead + [c for c in _gcols if c not in _lead]
-                    ).native
                 golden_df, golden_records = _fused_golden_df, []
                 golden_fused_used = True
             else:
@@ -5545,10 +5526,9 @@ def run_dedupe_df(
     # GC, producing a stale cache HIT (the source of the `test_dedupe_df_empty`
     # `assert 3 == 0` flake under `pytest -n auto`). Height distinguishes them.
     cache_seed = (id(df), frame.height)
-    # Ingest stage markers (2026-11-22): a 14M-row run measured ~8 GB of RSS
-    # growth between the caller's hand-off (0.68 GB frame) and the first pipeline
-    # stage, with nothing marking where. Each ingest step below gets its own
-    # stage so the trace names it.
+    # Ingest stage markers: a 14M-row run grew RSS ~8 GB between the caller's
+    # hand-off (a 0.68 GB polars frame) and the first pipeline stage, with nothing
+    # naming where. Each ingest step gets its own stage so the trace attributes it.
     # Cast all non-`__` columns to string to prevent schema mismatch errors when
     # mixed-type columns (e.g. birth_year inferred as i64 in some rows, str in
     # others) reach blocking/scoring operations. Byte-identical to the pre-flip

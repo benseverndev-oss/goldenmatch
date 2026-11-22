@@ -69,6 +69,16 @@ counts were measured and are no better than the two-pass join used.
   ~0.1-0.2 GB to spare. Per-stage current RSS at 14M names the next terms: `golden`
   (+6.6 GB, golden records identity rebuilds from payloads anyway) and the start of
   identity resolve before `row_filter` exits (+4.3 GB, not yet attributed).
+- **Follow-up (2026-11-22):** a repeat 14M run on 3.23.0 OOMed, so "completes" was one
+  lucky run, not a margin. Ingest stage markers then attributed the pre-stage growth: a
+  polars input was converted to Arrow twice (the lane eviction and the #3003 original-values
+  capture); the capture now references the lane table, -2.2 GB from the first stage and
+  cluster peak 24.8 -> 22.5 GB. That did NOT move the binding peak: both runs re-converge by
+  `identity_pair_score_view` and peak at ~31.3 GB in identity resolve **after the write
+  loop** (+3.9 GB over the loop's 27.4 GB, unmarked). That is the next term to attribute.
+  Routing fast-path golden through the fused Arrow kernel was tried and dropped: no RSS
+  change at 14M (golden still +~5.5 GB), 8 s slower, and it changed
+  `__golden_confidence__` values.
 - **Measurement gotcha:** identity-memory fixes look like no-ops below ~1M records.
   The bulk writer stages up to 250k rows, each pinning its payload until the flush,
   so at small N that window covers most of the data. Measure with the bounded
