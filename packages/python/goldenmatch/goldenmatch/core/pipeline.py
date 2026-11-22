@@ -5508,6 +5508,7 @@ def run_dedupe_df(
     # PolarsFrame, pa.Table/dict -> ArrowFrame, Frame -> itself), so existing
     # polars callers are unchanged.
     from goldenmatch.core.frame import PolarsFrame as _PolarsFrame
+    from goldenmatch.core.frame import is_polars_lazyframe as _is_pl_lazy
     from goldenmatch.core.frame import to_frame as _to_frame
 
     frame = _to_frame(df)
@@ -5525,11 +5526,15 @@ def run_dedupe_df(
     # GC, producing a stale cache HIT (the source of the `test_dedupe_df_empty`
     # `assert 3 == 0` flake under `pytest -n auto`). Height distinguishes them.
     cache_seed = (id(df), frame.height)
+    # Ingest stage markers: a 14M-row run grew RSS ~8 GB between the caller's
+    # hand-off (a 0.68 GB polars frame) and the first pipeline stage, with nothing
+    # naming where. Each ingest step gets its own stage so the trace attributes it.
     # Cast all non-`__` columns to string to prevent schema mismatch errors when
     # mixed-type columns (e.g. birth_year inferred as i64 in some rows, str in
     # others) reach blocking/scoring operations. Byte-identical to the pre-flip
     # `df.cast({c: pl.Utf8 ...})` (PR-1 seam op).
-    frame = frame.cast_all_str()
+    with stage("ingest_cast_all_str"):
+        frame = frame.cast_all_str()
     matchkeys = [] if auto_config else config.get_matchkeys()
     if not auto_config:
         # Column-existence check (was `validate_columns(lf, required)` on the
@@ -5543,15 +5548,9 @@ def run_dedupe_df(
                 f"Missing required columns: {_missing}. "
                 f"Available columns: {_available}"
             )
-    frame = frame.with_literal_column("__source__", source_name)
-    frame = frame.ensure_row_ids(offset=0)
-    # #3003: the caller already holds this table, so the originals are free.
-    _original_input = capture_original_input(
-        frame.native,
-        getattr(config.output, "keep_original_values", None) if config is not None else None,
-        in_memory=True,
-    )
-
+    with stage("ingest_source_and_row_ids"):
+        frame = frame.with_literal_column("__source__", source_name)
+        frame = frame.ensure_row_ids(offset=0)
     # Evict the classic-lazy polars path for the flows the arrow Frame lane fully
     # supports: a polars input is converted to an arrow seam Frame so it runs the
     # SAME correct, polars-free arrow lane as a pa.Table input. The classic-lazy
@@ -5569,11 +5568,27 @@ def run_dedupe_df(
             os.environ.get("GOLDENMATCH_FRAME_LANE", "1") != "0"
             and _arrow_lane_supported(config, auto_config)
         )
-        combined_lf: Any = (
-            _to_frame(frame.to_arrow()) if _evict_ok else frame.native.lazy()
-        )
+        with stage("ingest_polars_to_arrow_lane"):
+            combined_lf: Any = (
+                _to_frame(frame.to_arrow()) if _evict_ok else frame.native.lazy()
+            )
     else:
         combined_lf = frame
+
+    # #3003 keeps the as-entered values. For in-memory input that is meant to be
+    # a free reference -- Arrow buffers are immutable and the caller already holds
+    # the table. It is only free when the table IS Arrow: capturing from a polars
+    # frame converted it to Arrow a second time (polars' string views widen to
+    # large_string), a full copy resident for the whole run. So capture AFTER the
+    # lane eviction, from the Arrow table the pipeline runs on. Same columns, same
+    # values; the classic-lazy decline keeps capturing from the polars frame.
+    _capture_src = frame.native if _is_pl_lazy(combined_lf) else combined_lf.native
+    with stage("ingest_capture_original_input"):
+        _original_input = capture_original_input(
+            _capture_src,
+            getattr(config.output, "keep_original_values", None) if config is not None else None,
+            in_memory=True,
+        )
 
     # Phase 2 stopgap: when prepared_record_store=True and no caller-provided
     # _prep_store (Phase 3's controller will supply one), open our own store
