@@ -776,10 +776,8 @@ where
     if !p.ne_scorer_ids.is_empty() {
         return false;
     }
-    for f in 0..n_fields {
-        if p.scorer_ids[f] == FS_SCORER_EMBEDDING_COSINE {
-            return false;
-        }
+    if p.scorer_ids.contains(&FS_SCORER_EMBEDDING_COSINE) {
+        return false;
     }
     if size < 2 {
         return true;
