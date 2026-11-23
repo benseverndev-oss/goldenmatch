@@ -2306,10 +2306,12 @@ class IdentityStore:
             raise NotImplementedError("reconcile_relationships: not supported on mongo")
         if self._backend == "snowflake":
             return self._sf.reconcile_relationships(dataset, kind, desired)
+        if self._backend == "postgres":
+            return self._reconcile_relationships_pg(dataset, kind, desired)
         from goldenmatch.core.bench import stage  # noqa: PLC0415
 
-        # Split markers: the in-memory diff (Python dict/sets over every desired
-        # edge) and the database write are separately attributable at scale.
+        # SQLite: the Python diff below is the reference the Postgres path is
+        # parity-tested against (test_relationships_reconcile_postgres.py).
         with stage("identity_rel_reconcile_diff"):
             want: dict[tuple, tuple] = {}
             for a, b, k, field, val, _ds in desired:
@@ -2339,39 +2341,98 @@ class IdentityStore:
                 "DELETE FROM identity_relationships WHERE dataset = ? "
                 "AND entity_a_id = ? AND entity_b_id = ? AND kind = ? AND shared_value = ?"
             )
-            if self._backend == "postgres":
-                ins_sql = (
+            ins_sql = (
+                "INSERT OR IGNORE INTO identity_relationships "
+                "(entity_a_id, entity_b_id, kind, field, shared_value, dataset) "
+                "VALUES (?, ?, ?, ?, ?, ?)"
+            )
+            # One transaction (savepoint-safe if already inside one).
+            outer = self._conn.in_transaction
+            if not outer:
+                self._conn.execute("BEGIN")
+            try:
+                if del_rows:
+                    self._conn.executemany(del_sql, del_rows)
+                if ins_rows:
+                    self._conn.executemany(ins_sql, ins_rows)
+                if not outer:
+                    self._conn.execute("COMMIT")
+            except BaseException:
+                if not outer and self._conn.in_transaction:
+                    self._conn.execute("ROLLBACK")
+                raise
+        return (len(ins_keys), len(del_keys), unchanged)
+
+    def _reconcile_relationships_pg(
+        self, dataset: str | None, kind: str, desired: Iterable[tuple],
+    ) -> tuple[int, int, int]:
+        """Postgres ``reconcile_relationships``: COPY the desired edges into a
+        temp table and diff + apply in SQL, in one transaction.
+
+        At scale the Python diff (a dict + two sets over every desired edge) and a
+        per-row ``executemany`` of the inserts were the whole relationship pass --
+        ~680 s and ~1.9 GB for ~9.5M edges. Same contract as the SQLite path:
+        endpoints canonicalized (a < b), self/null edges skipped, the LAST
+        occurrence of a duplicate key wins, deletes and the ``existing`` set scoped
+        to ``dataset`` + ``kind``, and the returned counts computed the same way.
+        """
+        from goldenmatch.core.bench import stage  # noqa: PLC0415
+
+        key_match = (
+            "r.entity_a_id = w.entity_a_id AND r.entity_b_id = w.entity_b_id "
+            "AND r.kind = w.kind AND r.shared_value = w.shared_value"
+        )
+        scope = "r.dataset = %s AND r.kind = %s"
+        conn: Any = self._conn
+        with self.bulk_copy_barrier(), conn.transaction(), conn.cursor() as cur:
+            cur.execute(
+                "CREATE TEMP TABLE _stage_rel (ord BIGINT, entity_a_id TEXT, "
+                "entity_b_id TEXT, kind TEXT, field TEXT, shared_value TEXT) "
+                "ON COMMIT DROP"
+            )
+            with stage("identity_rel_reconcile_copy"), cur.copy(
+                "COPY _stage_rel (ord, entity_a_id, entity_b_id, kind, field, "
+                "shared_value) FROM STDIN"
+            ) as copy:
+                for i, (a, b, k, field, val, _ds) in enumerate(desired):
+                    if a is None or b is None or a == b:
+                        continue
+                    lo, hi = (a, b) if a < b else (b, a)
+                    copy.write_row((i, lo, hi, k, field, val))
+            with stage("identity_rel_reconcile_write"):
+                # Last occurrence of a key wins (the reference builds a dict).
+                cur.execute(
+                    "CREATE TEMP TABLE _want ON COMMIT DROP AS "
+                    "SELECT DISTINCT ON (entity_a_id, entity_b_id, kind, shared_value) "
+                    "entity_a_id, entity_b_id, kind, field, shared_value FROM _stage_rel "
+                    "ORDER BY entity_a_id, entity_b_id, kind, shared_value, ord DESC"
+                )
+                cur.execute("SELECT count(*) FROM _want")
+                n_want = cur.fetchone()[0]
+                cur.execute(
+                    "SELECT count(*) FROM _want w JOIN identity_relationships r "
+                    f"ON {key_match} WHERE {scope}",
+                    (dataset, kind),
+                )
+                unchanged = cur.fetchone()[0]
+                cur.execute(
+                    f"DELETE FROM identity_relationships r WHERE {scope} AND NOT EXISTS "
+                    f"(SELECT 1 FROM _want w WHERE {key_match})",
+                    (dataset, kind),
+                )
+                deleted = cur.rowcount
+                cur.execute(
                     "INSERT INTO identity_relationships "
                     "(entity_a_id, entity_b_id, kind, field, shared_value, dataset) "
-                    "VALUES (%s, %s, %s, %s, %s, %s) "
-                    "ON CONFLICT (entity_a_id, entity_b_id, kind, shared_value) DO NOTHING"
+                    "SELECT w.entity_a_id, w.entity_b_id, w.kind, w.field, "
+                    "w.shared_value, %s FROM _want w WHERE NOT EXISTS "
+                    f"(SELECT 1 FROM identity_relationships r WHERE {scope} "
+                    f"AND {key_match}) "
+                    "ON CONFLICT (entity_a_id, entity_b_id, kind, shared_value) "
+                    "DO NOTHING",
+                    (dataset, dataset, kind),
                 )
-                with self._conn.transaction(), self._conn.cursor() as cur:
-                    if del_rows:
-                        cur.executemany(self._pg_sql(del_sql), del_rows)
-                    if ins_rows:
-                        cur.executemany(ins_sql, ins_rows)
-            else:  # sqlite: one transaction (savepoint-safe if already inside one)
-                ins_sql = (
-                    "INSERT OR IGNORE INTO identity_relationships "
-                    "(entity_a_id, entity_b_id, kind, field, shared_value, dataset) "
-                    "VALUES (?, ?, ?, ?, ?, ?)"
-                )
-                outer = self._conn.in_transaction
-                if not outer:
-                    self._conn.execute("BEGIN")
-                try:
-                    if del_rows:
-                        self._conn.executemany(del_sql, del_rows)
-                    if ins_rows:
-                        self._conn.executemany(ins_sql, ins_rows)
-                    if not outer:
-                        self._conn.execute("COMMIT")
-                except BaseException:
-                    if not outer and self._conn.in_transaction:
-                        self._conn.execute("ROLLBACK")
-                    raise
-        return (len(ins_keys), len(del_keys), unchanged)
+        return (n_want - unchanged, deleted, unchanged)
 
     def get_relationships(self, entity_id: str) -> list[dict[str, Any]]:
         """Every relationship edge touching ``entity_id`` (either endpoint),
