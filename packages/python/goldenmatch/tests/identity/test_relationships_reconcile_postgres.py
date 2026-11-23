@@ -77,13 +77,12 @@ def test_postgres_reconcile_matches_sqlite(
     tmp_path, pg_url: str, monkeypatch, defer_indexes: bool,
 ) -> None:
     import goldenmatch.identity.store as store_mod
-    from goldenmatch.identity.store import IdentityStore
 
     # defer-indexes forces the drop / insert / rebuild branch on every step that
     # inserts (the real threshold is 100k rows); it must not change the result.
     monkeypatch.setattr(store_mod, "_REL_INDEX_DEFER_MIN_ROWS", 1 if defer_indexes else 10**12)
-    sqlite = IdentityStore(path=str(tmp_path / "ref.db"))
-    pg = IdentityStore(backend="postgres", connection=pg_url)
+    sqlite = store_mod.IdentityStore(path=str(tmp_path / "ref.db"))
+    pg = store_mod.IdentityStore(backend="postgres", connection=pg_url)
     try:
         ref = _run(sqlite)
         got = _run(pg)
