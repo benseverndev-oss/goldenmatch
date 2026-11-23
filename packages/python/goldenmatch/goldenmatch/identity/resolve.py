@@ -1342,6 +1342,7 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                     "kind": "utf8",
                     "score": "float64",
                     "matchkey_name": "utf8",
+                    "negative_evidence": "utf8",
                     "controller_snapshot": "utf8",
                     "run_name": "utf8",
                     "dataset": "utf8",
@@ -1432,21 +1433,22 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                 }
                 unique_entities = list(set(existing.values()))
 
-                # 3a'. Bulk fast-path: brand-new cluster on postgres, no weak
-                # conflict edge -> accumulate rows for bulk flush, skip the
-                # per-row writes for this cluster.
+                # 3a'. Bulk fast-path: brand-new cluster -> accumulate rows for
+                # bulk flush, skip the per-row writes for this cluster. A weak
+                # cluster takes it too: its `conflicts_with` bottleneck edge is one
+                # more bulk edge row (3e below). It used to fall back to the
+                # per-row path, which at 14M records with the default threshold
+                # was ~95% of brand-new clusters.
                 cluster_conf_check = _cluster_confidence(info)
+                weak_bottleneck = info.get("bottleneck_pair")
                 is_weak = (
                     weak_confidence_threshold > 0
                     and cluster_conf_check is not None
                     and cluster_conf_check < weak_confidence_threshold
-                    and info.get("bottleneck_pair") is not None
+                    and isinstance(weak_bottleneck, tuple)
+                    and len(weak_bottleneck) == 2
                 )
-                if (
-                    use_bulk_fast_path
-                    and not unique_entities
-                    and not is_weak
-                ):
+                if use_bulk_fast_path and not unique_entities:
                     entity_id = new_entity_id()
                     now = datetime.now()
                     golden = _golden_record_from_payloads(rowid_to_payload, members, field_strategies)
@@ -1508,6 +1510,7 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                             "kind": EdgeKind.SAME_AS.value,
                             "score": float(score),
                             "matchkey_name": matchkey_name,
+                            "negative_evidence": None,
                             # Edge provenance the per-row add_edge records
                             # (controller_snapshot / actor / trust). SQLite users
                             # have contract tests asserting these on edges, so the
@@ -1525,6 +1528,45 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                             "recorded_at": now,
                         })
                         summary.edges_added += 1
+                    # 3e (bulk). The weak-bottleneck `conflicts_with` edge the
+                    # per-row path writes for this cluster -- same canonical pair,
+                    # score / trust and negative_evidence payload.
+                    if is_weak and isinstance(weak_bottleneck, tuple):
+                        ba, bb = weak_bottleneck
+                        cra = rowid_to_recid.get(int(ba))
+                        crb = rowid_to_recid.get(int(bb))
+                        if cra and crb:
+                            b_score = (
+                                pair_score_view.score_for(cluster_id, int(ba), int(bb))
+                                if pair_score_view is not None
+                                else (info.get("pair_scores") or {}).get(
+                                    (min(int(ba), int(bb)), max(int(ba), int(bb))))
+                            )
+                            b_score = float(b_score) if b_score is not None else None
+                            cra, crb = canon_record_pair(cra, crb)
+                            bulk_edge_rows.append({
+                                "entity_id": entity_id,
+                                "record_a_id": cra,
+                                "record_b_id": crb,
+                                "kind": EdgeKind.CONFLICTS_WITH.value,
+                                "score": b_score,
+                                "matchkey_name": matchkey_name,
+                                "negative_evidence": json.dumps({
+                                    "reason": "weak_cluster_bottleneck",
+                                    "cluster_confidence": cluster_conf_check,
+                                    "threshold": weak_confidence_threshold,
+                                }),
+                                "controller_snapshot": (
+                                    json.dumps(controller_snapshot)
+                                    if controller_snapshot else None
+                                ),
+                                "run_name": run_name,
+                                "dataset": dataset,
+                                "actor": actor,
+                                "trust": b_score,
+                                "recorded_at": now,
+                            })
+                            summary.conflicts_flagged += 1
                     bulk_event_rows.append({
                         "entity_id": entity_id,
                         "kind": EventKind.CREATED.value,

@@ -59,8 +59,8 @@ _RECORD_COLS = [
 _RECORD_UPDATE = ["record_hash", "entity_id", "payload", "last_seen_at"]
 _EDGE_COLS = [
     "entity_id", "record_a_id", "record_b_id", "kind", "score",
-    "matchkey_name", "controller_snapshot", "run_name", "dataset",
-    "actor", "trust", "recorded_at",
+    "matchkey_name", "negative_evidence", "controller_snapshot", "run_name",
+    "dataset", "actor", "trust", "recorded_at",
 ]
 _EDGE_KEY = ["entity_id", "record_a_id", "record_b_id", "kind", "run_name"]
 _EVENT_COLS = [
@@ -1173,7 +1173,7 @@ class SnowflakeIdentityStore:
         rows = df.select(_EDGE_COLS).to_dicts()
         stage_and_merge(
             self._conn, "evidence_edges", rows, _EDGE_KEY,
-            update_cols=None, json_cols=["controller_snapshot"],
+            update_cols=None, json_cols=["negative_evidence", "controller_snapshot"],
             database=self._database, schema=self._schema,
         )
 

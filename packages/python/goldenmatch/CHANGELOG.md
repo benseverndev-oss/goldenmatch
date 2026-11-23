@@ -18,6 +18,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   (`protected_key_columns(config)`). Same strip-and-reattach path as `exclude_columns`.
   At 14M rows the two misprofiled id columns also cost ~5 minutes of `phone_e164`.
 
+- **Weak brand-new clusters take the bulk identity write path.** A cluster below
+  `weak_confidence_threshold` gets a `conflicts_with` edge on its bottleneck pair, and
+  that edge existed only on the per-row path, so every weak brand-new cluster fell back
+  to per-row `upsert_identity` / `upsert_record` / `add_edge` writes. With the default
+  threshold (0.6) that was ~95% of brand-new clusters on a 14M-record run (1,928,349 of
+  2,029,154) and most of the ~18-minute identity write loop. The bulk path now writes the
+  same edge, so `bulk_add_edges` carries `negative_evidence` on SQLite, Postgres (staged
+  and initial-load COPY) and Snowflake; a frame without the column writes NULL as before.
+  Store contents and summary counts are locked to the per-row path by a new test on
+  SQLite and Postgres.
+
 - **The Postgres relationship reconcile stages its edges with COPY and diffs them in
   SQL.** `reconcile_relationships` built the desired edge set into a Python dict and two
   sets, read every existing edge back, then inserted with a per-row `executemany`. At

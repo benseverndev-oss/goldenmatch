@@ -1237,24 +1237,24 @@ class IdentityStore:
             # record_b_id, kind, run_name) constraint, matching the per-row
             # ``add_edge`` (which also uses INSERT OR IGNORE). Carries
             # controller_snapshot / actor / trust (SQLite has contract tests
-            # asserting edge provenance); field_scores / negative_evidence stay
-            # NULL because the per-row brand-new same_as edge does not set them
-            # either.
+            # asserting edge provenance) and negative_evidence (the weak-cluster
+            # conflicts_with edge sets it; a frame without the column writes
+            # NULL). field_scores stays NULL: no brand-new edge sets it.
             cols = [
                 "entity_id", "record_a_id", "record_b_id", "kind", "score",
-                "matchkey_name", "controller_snapshot", "run_name", "dataset",
-                "actor", "trust", "recorded_at",
+                "matchkey_name", "negative_evidence", "controller_snapshot",
+                "run_name", "dataset", "actor", "trust", "recorded_at",
             ]
             self._sqlite_stage("_stage_evidence_edges", cols, df)
             self._conn.execute(
                 """
                 INSERT OR IGNORE INTO evidence_edges
                     (entity_id, record_a_id, record_b_id, kind, score,
-                     matchkey_name, controller_snapshot, run_name, dataset,
-                     actor, trust, recorded_at)
+                     matchkey_name, negative_evidence, controller_snapshot,
+                     run_name, dataset, actor, trust, recorded_at)
                 SELECT entity_id, record_a_id, record_b_id, kind, score,
-                       matchkey_name, controller_snapshot, run_name, dataset,
-                       actor, trust, recorded_at
+                       matchkey_name, negative_evidence, controller_snapshot,
+                       run_name, dataset, actor, trust, recorded_at
                 FROM _stage_evidence_edges
                 """
             )
@@ -1270,20 +1270,25 @@ class IdentityStore:
         # path and the per-row ``add_edge`` -- evidence_edges has these columns
         # and the per-row Postgres path writes them, so the bulk path must too or
         # edge provenance is silently lost on the brand-new-cluster route.
+        # negative_evidence (JSONB) is carried for the weak-cluster
+        # conflicts_with edge; a frame without the column writes NULL.
         cols = [
             "entity_id", "record_a_id", "record_b_id", "kind", "score",
-            "matchkey_name", "controller_snapshot", "run_name", "dataset",
-            "actor", "trust", "recorded_at",
+            "matchkey_name", "negative_evidence", "controller_snapshot",
+            "run_name", "dataset", "actor", "trust", "recorded_at",
         ]
         if self._pg_initial_load:
             self._pg_copy_direct(
                 "evidence_edges",
                 "entity_id, record_a_id, record_b_id, kind, score, "
-                "matchkey_name, controller_snapshot, run_name, dataset, "
-                "actor, trust, recorded_at",
+                "matchkey_name, negative_evidence, controller_snapshot, "
+                "run_name, dataset, actor, trust, recorded_at",
                 cols, df,
             )
             return
+        if "negative_evidence" not in df.columns:
+            import polars as pl  # noqa: PLC0415
+            df = df.with_columns(pl.lit(None, pl.Utf8).alias("negative_evidence"))
         conn: Any = self._conn
         with conn.transaction(), conn.cursor() as cur:
             cur.execute(
@@ -1295,6 +1300,7 @@ class IdentityStore:
                     kind TEXT,
                     score DOUBLE PRECISION,
                     matchkey_name TEXT,
+                    negative_evidence JSONB,
                     controller_snapshot JSONB,
                     run_name TEXT,
                     dataset TEXT,
@@ -1307,8 +1313,8 @@ class IdentityStore:
             with cur.copy(
                 "COPY _stage_evidence_edges "
                 "(entity_id, record_a_id, record_b_id, kind, score, "
-                "matchkey_name, controller_snapshot, run_name, dataset, "
-                "actor, trust, recorded_at) FROM STDIN"
+                "matchkey_name, negative_evidence, controller_snapshot, "
+                "run_name, dataset, actor, trust, recorded_at) FROM STDIN"
             ) as copy:
                 for row in df.select(cols).iter_rows():
                     copy.write_row(row)
@@ -1316,11 +1322,11 @@ class IdentityStore:
                 """
                 INSERT INTO evidence_edges
                     (entity_id, record_a_id, record_b_id, kind, score,
-                     matchkey_name, controller_snapshot, run_name, dataset,
-                     actor, trust, recorded_at)
+                     matchkey_name, negative_evidence, controller_snapshot,
+                     run_name, dataset, actor, trust, recorded_at)
                 SELECT entity_id, record_a_id, record_b_id, kind, score,
-                       matchkey_name, controller_snapshot, run_name, dataset,
-                       actor, trust, recorded_at
+                       matchkey_name, negative_evidence, controller_snapshot,
+                       run_name, dataset, actor, trust, recorded_at
                 FROM _stage_evidence_edges
                 ON CONFLICT (entity_id, record_a_id, record_b_id, kind,
                              run_name) DO NOTHING
@@ -2415,6 +2421,14 @@ class IdentityStore:
                     (dataset, kind),
                 )
                 unchanged = cur.fetchone()[0]
+                cur.execute(
+                    f"SELECT count(*) FROM identity_relationships r WHERE {scope}",
+                    (dataset, kind),
+                )
+                if n_want == unchanged == cur.fetchone()[0]:
+                    # Warm re-run with nothing to change: every desired edge
+                    # exists and nothing is stale, so skip both anti-joins.
+                    return (0, 0, unchanged)
                 cur.execute(
                     f"DELETE FROM identity_relationships r WHERE {scope} AND NOT EXISTS "
                     f"(SELECT 1 FROM _want w WHERE {key_match})",
