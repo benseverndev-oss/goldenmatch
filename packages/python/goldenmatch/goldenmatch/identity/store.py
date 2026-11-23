@@ -1295,7 +1295,9 @@ class IdentityStore:
                 cols, df,
             )
             return
-        if "negative_evidence" not in df.columns:
+        from goldenmatch.core.frame import to_frame  # noqa: PLC0415
+
+        if "negative_evidence" not in to_frame(df).columns:
             import polars as pl  # noqa: PLC0415
             df = df.with_columns(pl.lit(None, pl.Utf8).alias("negative_evidence"))
         conn: Any = self._conn

@@ -6623,6 +6623,7 @@
           ],
           "imports": [
             "goldenmatch.config.schemas",
+            "goldenmatch.core.bench",
             "goldenmatch.identity.store"
           ]
         },
@@ -6777,6 +6778,8 @@
             "new_entity_id"
           ],
           "imports": [
+            "goldenmatch.core.bench",
+            "goldenmatch.core.frame",
             "goldenmatch.identity.audit",
             "goldenmatch.identity.model",
             "goldenmatch.identity.mongo_backend",
