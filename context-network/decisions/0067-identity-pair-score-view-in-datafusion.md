@@ -79,6 +79,19 @@ counts were measured and are no better than the two-pass join used.
   Routing fast-path golden through the fused Arrow kernel was tried and dropped: no RSS
   change at 14M (golden still +~5.5 GB), 8 s slower, and it changed
   `__golden_confidence__` values.
+- **Follow-up (2026-11-23):** stage markers after the write loop attributed the rest, and
+  three fixes took the 14M resolve from 2,175 s / 29.3 GB to 1,084 s / 27.6 GB with identical
+  output. (1) The Postgres relationship reconcile diffed ~9.5M edges in Python and inserted
+  them with a per-row `executemany` (678 s, +1.9 GB); it now stages them with COPY and diffs
+  in SQL (169 s, no spike). (2) Weak brand-new clusters (below `weak_confidence_threshold`,
+  ~95% of clusters at the 0.6 default on that data) fell back to the per-row write path
+  because their `conflicts_with` edge only existed there; the bulk path now writes it, and
+  the write loop went 1,101 s to 566 s. (3) Smaller: a shared `most_complete` rule and a
+  relationship index rebuild around large first loads. Two findings for what comes next:
+  the remaining write-loop time is about half per-cluster Python row building, half
+  Postgres; and a run near the 32 GB ceiling slowed Postgres (sharing the box) by ~2x, so
+  memory headroom is also a speed lever. That 95% of clusters count as "weak" at F1 0.954
+  suggests the 0.6 default does not fit probabilistic cluster confidence; not yet acted on.
 - **Measurement gotcha:** identity-memory fixes look like no-ops below ~1M records.
   The bulk writer stages up to 250k rows, each pinning its payload until the flush,
   so at small N that window covers most of the data. Measure with the bounded
