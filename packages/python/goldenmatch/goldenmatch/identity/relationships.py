@@ -37,27 +37,35 @@ def build_relationships(
     values disappeared) still has its stale edges cleared (reconcile-to-empty)."""
     if not rules:
         return (0, 0)
+    from goldenmatch.core.bench import stage  # noqa: PLC0415
+
     by_kind: dict[str, list[tuple]] = {}
     for rule in rules:
-        groups = store.relationship_groups(
-            rule.field, dataset, rule.min_entities, rule.max_fanout,
-            rule.transform,
-        )
-        for value, eids in groups:
-            uniq = sorted({e for e in eids if e})
-            bucket = by_kind.setdefault(rule.kind, [])
-            for i in range(len(uniq)):
-                for j in range(i + 1, len(uniq)):
-                    bucket.append(
-                        (uniq[i], uniq[j], rule.kind, rule.field, value, dataset)
-                    )
+        # Two markers per rule: the store's group query, then the Python
+        # expansion of each group into pairwise edge tuples.
+        with stage("identity_rel_groups_query"):
+            groups = store.relationship_groups(
+                rule.field, dataset, rule.min_entities, rule.max_fanout,
+                rule.transform,
+            )
+        with stage("identity_rel_groups_expand"):
+            for value, eids in groups:
+                uniq = sorted({e for e in eids if e})
+                bucket = by_kind.setdefault(rule.kind, [])
+                for i in range(len(uniq)):
+                    for j in range(i + 1, len(uniq)):
+                        bucket.append(
+                            (uniq[i], uniq[j], rule.kind, rule.field, value, dataset)
+                        )
+            del groups
     # Kinds whose rules produced nothing this run must still reconcile to empty so
     # their prior-run edges get deleted, not left stale.
     for rule in rules:
         by_kind.setdefault(rule.kind, [])
     inserted = deleted = 0
     for kind, desired in by_kind.items():
-        ins, dele, _ = store.reconcile_relationships(dataset, kind, desired)
+        with stage("identity_rel_reconcile"):
+            ins, dele, _ = store.reconcile_relationships(dataset, kind, desired)
         inserted += ins
         deleted += dele
     return (inserted, deleted)

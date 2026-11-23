@@ -1846,13 +1846,16 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
     # relationship pass so edges reconcile onto the merged entities. Entity-level
     # (post-resolve), so it can't cascade probabilistic clusters into giant
     # components the way a pre-cluster record-level merge would. Opt-in; no-op unset.
+    # The two post-passes below each get a stage marker: at scale, everything
+    # identity does after `identity_write_loop` was otherwise unattributed.
     if deterministic_merge_keys:
-        for _dm_field in deterministic_merge_keys:
-            try:
-                _merged, _grps = store.merge_by_shared_field(dataset, _dm_field)
-                summary.deterministic_merged += _merged
-            except Exception as e:  # never fail resolution over the merge
-                log.warning("deterministic merge on %r failed: %s", _dm_field, e)
+        with _stage("identity_deterministic_merge"):
+            for _dm_field in deterministic_merge_keys:
+                try:
+                    _merged, _grps = store.merge_by_shared_field(dataset, _dm_field)
+                    summary.deterministic_merged += _merged
+                except Exception as e:  # never fail resolution over the merge
+                    log.warning("deterministic merge on %r failed: %s", _dm_field, e)
 
     # 3r. Semantic-graph: derive entity<->entity relationship edges from shared
     # non-identity attributes, keyed on the entity_ids just written. A post-pass
@@ -1860,12 +1863,13 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
     # a warm re-resolve does not duplicate. Opt-in via config.identity.relationships.
     if relationships:
         from goldenmatch.identity.relationships import build_relationships
-        try:
-            summary.relationships_added, summary.relationships_deleted = (
-                build_relationships(store, relationships, dataset)
-            )
-        except Exception as e:  # never fail resolution over the relationship pass
-            log.warning("relationship derivation failed: %s", e)
+        with _stage("identity_relationships"):
+            try:
+                summary.relationships_added, summary.relationships_deleted = (
+                    build_relationships(store, relationships, dataset)
+                )
+            except Exception as e:  # never fail resolution over the relationship pass
+                log.warning("relationship derivation failed: %s", e)
 
     # 4. Split detection: records that previously had an entity_id but did
     # NOT appear in any cluster this run should not be retired here -- they

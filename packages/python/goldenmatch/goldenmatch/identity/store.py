@@ -2306,65 +2306,71 @@ class IdentityStore:
             raise NotImplementedError("reconcile_relationships: not supported on mongo")
         if self._backend == "snowflake":
             return self._sf.reconcile_relationships(dataset, kind, desired)
-        want: dict[tuple, tuple] = {}
-        for a, b, k, field, val, _ds in desired:
-            if a is None or b is None or a == b:
-                continue
-            lo, hi = (a, b) if a < b else (b, a)
-            want[(lo, hi, k, val)] = (lo, hi, k, field, val, dataset)
-        existing = {
-            (r["entity_a_id"], r["entity_b_id"], r["kind"], r["shared_value"])
-            for r in self._fetchall(
-                "SELECT entity_a_id, entity_b_id, kind, shared_value "
-                "FROM identity_relationships WHERE dataset = ? AND kind = ?",
-                (dataset, kind),
+        from goldenmatch.core.bench import stage  # noqa: PLC0415
+
+        # Split markers: the in-memory diff (Python dict/sets over every desired
+        # edge) and the database write are separately attributable at scale.
+        with stage("identity_rel_reconcile_diff"):
+            want: dict[tuple, tuple] = {}
+            for a, b, k, field, val, _ds in desired:
+                if a is None or b is None or a == b:
+                    continue
+                lo, hi = (a, b) if a < b else (b, a)
+                want[(lo, hi, k, val)] = (lo, hi, k, field, val, dataset)
+            existing = {
+                (r["entity_a_id"], r["entity_b_id"], r["kind"], r["shared_value"])
+                for r in self._fetchall(
+                    "SELECT entity_a_id, entity_b_id, kind, shared_value "
+                    "FROM identity_relationships WHERE dataset = ? AND kind = ?",
+                    (dataset, kind),
+                )
+            }
+            want_keys = set(want)
+            ins_keys = want_keys - existing
+            del_keys = existing - want_keys
+            unchanged = len(want_keys & existing)
+            if not ins_keys and not del_keys:
+                return (0, 0, unchanged)
+            ins_rows = [want[k] for k in ins_keys]
+            # del key = (a, b, kind, value); DELETE binds (dataset, a, b, kind, value).
+            del_rows = [(dataset, a, b, k, v) for (a, b, k, v) in del_keys]
+        with stage("identity_rel_reconcile_write"):
+            del_sql = (
+                "DELETE FROM identity_relationships WHERE dataset = ? "
+                "AND entity_a_id = ? AND entity_b_id = ? AND kind = ? AND shared_value = ?"
             )
-        }
-        want_keys = set(want)
-        ins_keys = want_keys - existing
-        del_keys = existing - want_keys
-        unchanged = len(want_keys & existing)
-        if not ins_keys and not del_keys:
-            return (0, 0, unchanged)
-        ins_rows = [want[k] for k in ins_keys]
-        # del key = (a, b, kind, value); DELETE binds (dataset, a, b, kind, value).
-        del_rows = [(dataset, a, b, k, v) for (a, b, k, v) in del_keys]
-        del_sql = (
-            "DELETE FROM identity_relationships WHERE dataset = ? "
-            "AND entity_a_id = ? AND entity_b_id = ? AND kind = ? AND shared_value = ?"
-        )
-        if self._backend == "postgres":
-            ins_sql = (
-                "INSERT INTO identity_relationships "
-                "(entity_a_id, entity_b_id, kind, field, shared_value, dataset) "
-                "VALUES (%s, %s, %s, %s, %s, %s) "
-                "ON CONFLICT (entity_a_id, entity_b_id, kind, shared_value) DO NOTHING"
-            )
-            with self._conn.transaction(), self._conn.cursor() as cur:
-                if del_rows:
-                    cur.executemany(self._pg_sql(del_sql), del_rows)
-                if ins_rows:
-                    cur.executemany(ins_sql, ins_rows)
-        else:  # sqlite: one transaction (savepoint-safe if already inside one)
-            ins_sql = (
-                "INSERT OR IGNORE INTO identity_relationships "
-                "(entity_a_id, entity_b_id, kind, field, shared_value, dataset) "
-                "VALUES (?, ?, ?, ?, ?, ?)"
-            )
-            outer = self._conn.in_transaction
-            if not outer:
-                self._conn.execute("BEGIN")
-            try:
-                if del_rows:
-                    self._conn.executemany(del_sql, del_rows)
-                if ins_rows:
-                    self._conn.executemany(ins_sql, ins_rows)
+            if self._backend == "postgres":
+                ins_sql = (
+                    "INSERT INTO identity_relationships "
+                    "(entity_a_id, entity_b_id, kind, field, shared_value, dataset) "
+                    "VALUES (%s, %s, %s, %s, %s, %s) "
+                    "ON CONFLICT (entity_a_id, entity_b_id, kind, shared_value) DO NOTHING"
+                )
+                with self._conn.transaction(), self._conn.cursor() as cur:
+                    if del_rows:
+                        cur.executemany(self._pg_sql(del_sql), del_rows)
+                    if ins_rows:
+                        cur.executemany(ins_sql, ins_rows)
+            else:  # sqlite: one transaction (savepoint-safe if already inside one)
+                ins_sql = (
+                    "INSERT OR IGNORE INTO identity_relationships "
+                    "(entity_a_id, entity_b_id, kind, field, shared_value, dataset) "
+                    "VALUES (?, ?, ?, ?, ?, ?)"
+                )
+                outer = self._conn.in_transaction
                 if not outer:
-                    self._conn.execute("COMMIT")
-            except BaseException:
-                if not outer and self._conn.in_transaction:
-                    self._conn.execute("ROLLBACK")
-                raise
+                    self._conn.execute("BEGIN")
+                try:
+                    if del_rows:
+                        self._conn.executemany(del_sql, del_rows)
+                    if ins_rows:
+                        self._conn.executemany(ins_sql, ins_rows)
+                    if not outer:
+                        self._conn.execute("COMMIT")
+                except BaseException:
+                    if not outer and self._conn.in_transaction:
+                        self._conn.execute("ROLLBACK")
+                    raise
         return (len(ins_keys), len(del_keys), unchanged)
 
     def get_relationships(self, entity_id: str) -> list[dict[str, Any]]:
