@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Fixed
 
+- **The GoldenFlow prep stage no longer rewrites key or internal columns.** Zero-config
+  GoldenFlow profiled a 10-digit NPI key as a phone number and rewrote it to E.164 before
+  matching, which changed the values blocking, deterministic merge and the identity
+  record id are built from; it also ran `category_auto_correct` over GoldenMatch's own
+  `__source__` column. `run_transform` now passes GoldenMatch's `__*__` columns through
+  unchanged, and takes `protect_columns=`, which the pipeline fills with the identity
+  `source_pk_column` and every `deterministic_merge_keys` field
+  (`protected_key_columns(config)`). Same strip-and-reattach path as `exclude_columns`.
+  At 14M rows the two misprofiled id columns also cost ~5 minutes of `phone_e164`.
+
 - **A polars input is converted to Arrow once, not twice.** `dedupe_df` moves a polars
   input onto the Arrow lane, and #3003's original-values capture then converted the same
   polars frame to Arrow a second time (polars string views widen to `large_string`), a full

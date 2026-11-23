@@ -349,3 +349,31 @@ describe("TransformEngine — null propagation", () => {
     expect(result.rows[0]!["name"]).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Identifier columns are never profiled as phones (mirrors the Python
+// test_profiler_bridge identifier tests). A bare 10-digit id matches PHONE_RE,
+// so zero-config used to rewrite every id to E.164.
+// ---------------------------------------------------------------------------
+
+describe("profileDataframe — identifier columns", () => {
+  const ids = ["1234567893", "1659405588", "1902836477", "1487665514", "1003000126"];
+  const typesFor = (names: readonly string[]): Record<string, string> => {
+    const rows: Row[] = ids.map((v) => Object.fromEntries(names.map((n) => [n, v])) as Row);
+    const profile = profileDataframe(rows);
+    return Object.fromEntries(profile.columns.map((c) => [c.name, c.inferredType]));
+  };
+
+  it("demotes phone-shaped values to string when the name is an identifier", () => {
+    const types = typesFor(["npi", "unique_id", "customerId", "account_number", "record-key", "uuid"]);
+    for (const t of Object.values(types)) expect(t).toBe("string");
+  });
+
+  it("keeps phone when the name has a phone token or no identifier token", () => {
+    expect(typesFor(["phone_number", "phone_id", "contact"])).toEqual({
+      phone_number: "phone",
+      phone_id: "phone",
+      contact: "phone",
+    });
+  });
+});

@@ -45,12 +45,43 @@ def _map_goldencheck_semantic_type(semantic_type: str) -> str:
     return _GOLDENCHECK_SEMANTIC_MAP.get(semantic_type, "string")
 
 
+# Name tokens that mark a column as an IDENTIFIER. `_PHONE_RE` accepts any bare
+# 8-20 digit string, so an id column (a 10-digit NPI, an account or record number)
+# profiles as "phone" from its values alone and zero-config rewrites every id to
+# E.164 (`1234567893` -> `+11234567893`). The column name is the only signal that
+# tells them apart.
+_IDENTIFIER_TOKENS = frozenset({
+    "id", "ids", "uid", "uuid", "guid", "key", "pk", "npi", "mrn", "ssn", "ein",
+    "tin", "account", "acct", "sku",
+})
+_PHONE_NAME_TOKENS = frozenset({"phone", "tel", "telephone", "mobile", "cell", "fax"})
+_TOKEN_SPLIT_RE = re.compile(r"[^0-9a-z]+")
+_CAMEL_RE = re.compile(r"([a-z0-9])([A-Z])")
+
+
+def _name_tokens(column_name: str) -> set[str]:
+    """Lowercase word tokens of a column name: split on camelCase and on any
+    non-alphanumeric run (``unique_id`` / ``uniqueId`` / ``unique-id`` -> {unique, id})."""
+    spaced = _CAMEL_RE.sub(r"\1_\2", column_name).lower()
+    return {t for t in _TOKEN_SPLIT_RE.split(spaced) if t}
+
+
+def _is_identifier_name(column_name: str) -> bool:
+    """True when the name carries an identifier token and no phone token."""
+    tokens = _name_tokens(column_name)
+    return bool(tokens & _IDENTIFIER_TOKENS) and not (tokens & _PHONE_NAME_TOKENS)
+
+
 def _override_type_by_column_name(column_name: str, current_type: str) -> str:
     """Override inferred type based on column name heuristics.
 
-    Only overrides when the current type is generic (string/numeric) and the
-    column name strongly suggests a specific semantic type.
+    Overrides a generic type (string/numeric) when the column name strongly
+    suggests a specific semantic type, and demotes a value-inferred ``phone`` to
+    ``string`` when the name says the column is an identifier (see
+    ``_IDENTIFIER_TOKENS``), so ids are never reformatted as phone numbers.
     """
+    if current_type == "phone" and _is_identifier_name(column_name):
+        return "string"
     if current_type not in ("string", "numeric"):
         return current_type  # don't override already-specific types
 

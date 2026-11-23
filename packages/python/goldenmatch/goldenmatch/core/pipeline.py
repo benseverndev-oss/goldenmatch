@@ -3330,11 +3330,14 @@ def _run_dedupe_pipeline(
                 _frame = _tf_lane(_q_out)
 
         if config.transform is None or config.transform.mode != "disabled":
-            from goldenmatch.core.transform import run_transform
+            from goldenmatch.core.transform import protected_key_columns, run_transform
             with stage("pipeline_prep_transform"):
                 # A2: the adapter is dual-rep (lane preserved; goldenflow's
                 # auto-detect engine bridges internally at one call).
-                _t_out, tf_fixes = run_transform(_frame.native, config.transform)
+                _t_out, tf_fixes = run_transform(
+                    _frame.native, config.transform,
+                    protect_columns=protected_key_columns(config),
+                )
                 if tf_fixes:
                     logger.info("GoldenFlow: %d transforms applied", len(tf_fixes))
                 _frame = _tf_lane(_t_out)
@@ -3552,10 +3555,13 @@ def _run_dedupe_pipeline(
                 # Runs after GoldenCheck (validates) and before autofix (remaining cleanup).
                 # Not in _run_match_pipeline -- add there if match pipeline gains a quality step.
                 if config.transform is None or config.transform.mode != "disabled":
-                    from goldenmatch.core.transform import run_transform
+                    from goldenmatch.core.transform import protected_key_columns, run_transform
                     with stage("pipeline_prep_transform"):
                         combined_df_tmp = combined_lf.collect()
-                        combined_df_tmp, gf_fixes = run_transform(combined_df_tmp, config.transform)
+                        combined_df_tmp, gf_fixes = run_transform(
+                            combined_df_tmp, config.transform,
+                            protect_columns=protected_key_columns(config),
+                        )
                         if gf_fixes:
                             logger.info("GoldenFlow: %d transforms applied", len(gf_fixes))
                         combined_lf = combined_df_tmp.lazy()
