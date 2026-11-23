@@ -67,7 +67,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.9.9",
-    "fast-check": "^4.10.2",
+    "fast-check": "^4.10.3",
     "goldenmatch-wasm-runtime": "workspace:^",
     "rimraf": "^6.1.4",
     "tsup": "^8.5.1",
