@@ -1288,6 +1288,14 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
         store.add_edge(e, return_id=False)
 
     def _flush_bulk() -> None:
+        # Stage markers split the write loop: `identity_write_flush` is every
+        # bulk flush (frame build + store writes, with per-table
+        # `identity_flush_*_write` inside); the rest of `identity_write_loop` is
+        # the per-cluster Python that builds the row dicts.
+        with _stage("identity_write_flush"):
+            _flush_bulk_rows()
+
+    def _flush_bulk_rows() -> None:
         """Write the currently-accumulated bulk fast-path rows in one batch each
         (identities -> records -> edges -> events, so the source_records FK is
         satisfied), checkpoint the SQLite WAL, then clear the accumulators. Both
@@ -1314,7 +1322,8 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
             },
             backend="polars",
         ).native
-        store.bulk_upsert_identities(nodes_df)
+        with _stage("identity_flush_nodes_write"):
+            store.bulk_upsert_identities(nodes_df)
         if bulk_record_rows:
             records_df = frame_from_rows(
                 bulk_record_rows,
@@ -1331,7 +1340,8 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                 },
                 backend="polars",
             ).native
-            store.bulk_upsert_records(records_df)
+            with _stage("identity_flush_records_write"):
+                store.bulk_upsert_records(records_df)
         if bulk_edge_rows:
             edges_df = frame_from_rows(
                 bulk_edge_rows,
@@ -1352,7 +1362,8 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                 },
                 backend="polars",
             ).native
-            store.bulk_add_edges(edges_df)
+            with _stage("identity_flush_edges_write"):
+                store.bulk_add_edges(edges_df)
         if bulk_event_rows:
             events_df = frame_from_rows(
                 bulk_event_rows,
@@ -1368,7 +1379,8 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                 },
                 backend="polars",
             ).native
-            store.bulk_emit_events(events_df)
+            with _stage("identity_flush_events_write"):
+                store.bulk_emit_events(events_df)
         # Bound the SQLite WAL across many flushes in one resolve (no-op on
         # Postgres / outside a batch transaction).
         store.bulk_flush_checkpoint()
