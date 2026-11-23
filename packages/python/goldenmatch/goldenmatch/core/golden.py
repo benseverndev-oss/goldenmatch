@@ -76,10 +76,15 @@ def most_complete_value(values: list) -> object:
     index are dropped (the identity rollup tracks neither). Behaviourally
     identical to ``merge_field(values, GoldenFieldRule("most_complete"))[0]``.
     """
-    value, _confidence, _idx = merge_field(
-        values, GoldenFieldRule(strategy="most_complete")
-    )
+    value, _confidence, _idx = merge_field(values, _MOST_COMPLETE_RULE)
     return value
+
+
+# Built once: the identity rollup calls ``most_complete_value`` once per field per
+# cluster, and validating a fresh pydantic model each time was a measurable share
+# of the identity write loop. ``merge_field`` only reads ``rule.strategy`` on the
+# ``most_complete`` route, so sharing one instance cannot change a result.
+_MOST_COMPLETE_RULE = GoldenFieldRule(strategy="most_complete")
 
 
 def merge_field(

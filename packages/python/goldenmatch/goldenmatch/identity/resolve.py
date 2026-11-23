@@ -1548,12 +1548,11 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                         cra = rowid_to_recid.get(int(ba))
                         crb = rowid_to_recid.get(int(bb))
                         if cra and crb:
-                            b_score = (
-                                pair_score_view.score_for(cluster_id, int(ba), int(bb))
-                                if pair_score_view is not None
-                                else (info.get("pair_scores") or {}).get(
-                                    (min(int(ba), int(bb)), max(int(ba), int(bb))))
-                            )
+                            # `pair_scores` is this cluster's view dict, built
+                            # above; `score_for` would rebuild it. Same lookup:
+                            # canonical (min, max) key against as-given keys.
+                            b_score = pair_scores.get(
+                                (min(int(ba), int(bb)), max(int(ba), int(bb))))
                             b_score = float(b_score) if b_score is not None else None
                             cra, crb = canon_record_pair(cra, crb)
                             bulk_edge_rows.append({
