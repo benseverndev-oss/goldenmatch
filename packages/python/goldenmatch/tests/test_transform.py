@@ -179,3 +179,41 @@ def test_do_transform_exception_graceful_degradation():
         result_df, fixes = run_transform(df)
     assert result_df.equals(df)
     assert fixes == []
+
+
+# --- key and internal columns pass through the cleanup unchanged -------------
+# Zero-config GoldenFlow profiled a 10-digit NPI key as a phone and rewrote it to
+# E.164, and ran category_auto_correct over GoldenMatch's own `__source__`.
+
+_IDS = ["1234567893", "1659405588", "1902836477", "1487665514", "1003000126"]
+
+
+def test_run_transform_never_rewrites_internal_or_protected_columns():
+    import pytest
+
+    pytest.importorskip("goldenflow")
+    df = pl.DataFrame({
+        "record": list(_IDS),            # a key column whose name carries no id hint
+        "__source__": ["crm ", "crm", "crm  ", "ehr", "ehr "],
+        "phone": list(_IDS),
+    })
+    out, _ = run_transform(df, None, protect_columns=["record"])
+    assert out.columns == df.columns
+    assert out["record"].to_list() == _IDS
+    assert out["__source__"].to_list() == df["__source__"].to_list()
+    # Unprotected columns are still cleaned.
+    assert out["phone"].to_list() == ["+1" + v for v in _IDS]
+
+
+def test_protected_key_columns_reads_identity_keys():
+    from types import SimpleNamespace
+
+    from goldenmatch.core.transform import protected_key_columns
+
+    cfg = SimpleNamespace(identity=SimpleNamespace(
+        source_pk_column="unique_id",
+        deterministic_merge_keys=["npi", ["dea", "state"]],
+    ))
+    assert protected_key_columns(cfg) == ["unique_id", "npi", "dea", "state"]
+    assert protected_key_columns(SimpleNamespace(identity=None)) == []
+    assert protected_key_columns(SimpleNamespace()) == []

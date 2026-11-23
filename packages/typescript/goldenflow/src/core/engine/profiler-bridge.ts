@@ -24,7 +24,36 @@ const NAME_PATTERNS: Record<string, readonly string[]> = {
   name: ["first_name", "last_name", "fname", "lname", "full_name", "fullname"],
 };
 
+// Name tokens that mark a column as an IDENTIFIER. PHONE_RE accepts any bare
+// 8-20 digit string, so an id column (a 10-digit NPI, an account or record number)
+// profiles as "phone" from its values alone and zero-config rewrites every id to
+// E.164. The column name is the only signal that tells them apart. Mirrors
+// Python `_IDENTIFIER_TOKENS` / `_is_identifier_name` (profiler_bridge.py).
+const IDENTIFIER_TOKENS: ReadonlySet<string> = new Set([
+  "id", "ids", "uid", "uuid", "guid", "key", "pk", "npi", "mrn", "ssn", "ein",
+  "tin", "account", "acct", "sku",
+]);
+const PHONE_NAME_TOKENS: ReadonlySet<string> = new Set([
+  "phone", "tel", "telephone", "mobile", "cell", "fax",
+]);
+
+function nameTokens(columnName: string): Set<string> {
+  const spaced = columnName.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+  return new Set(spaced.split(/[^0-9a-z]+/).filter((t) => t.length > 0));
+}
+
+function isIdentifierName(columnName: string): boolean {
+  const tokens = nameTokens(columnName);
+  let hasId = false;
+  for (const t of tokens) {
+    if (PHONE_NAME_TOKENS.has(t)) return false;
+    if (IDENTIFIER_TOKENS.has(t)) hasId = true;
+  }
+  return hasId;
+}
+
 function overrideTypeByColumnName(columnName: string, currentType: string): string {
+  if (currentType === "phone" && isIdentifierName(columnName)) return "string";
   if (currentType !== "string" && currentType !== "numeric") return currentType;
   const colLower = columnName.toLowerCase().replace(/-/g, "_");
   for (const [semanticType, patterns] of Object.entries(NAME_PATTERNS)) {

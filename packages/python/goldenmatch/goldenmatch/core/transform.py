@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 
 from goldenmatch._polars_lazy import pl
 
@@ -112,11 +113,28 @@ def _columnar_result_to_arrow(columns: dict, source, source_columns: dict):
     return pa.Table.from_arrays(arrays, names=names)
 
 
+def protected_key_columns(config) -> list[str]:
+    """The key columns a GoldenMatch config declares, which a cleanup pass must
+    pass through unchanged: the identity source-pk column and every
+    deterministic merge key (each a field, or a list of fields)."""
+    ident = getattr(config, "identity", None)
+    if ident is None:
+        return []
+    out: list[str] = []
+    pk = getattr(ident, "source_pk_column", None)
+    if pk:
+        out.append(pk)
+    for key in getattr(ident, "deterministic_merge_keys", None) or []:
+        out.extend([key] if isinstance(key, str) else list(key))
+    return out
+
+
 def run_transform(
     df,  # pl.DataFrame | pa.Table (A2: lane preserved; bridge at _do_transform)
     config=None,
     *,
     strict: bool = False,
+    protect_columns: Iterable[str] | None = None,
 ) -> tuple:
     """Run GoldenFlow transform if available.
 
@@ -129,6 +147,9 @@ def run_transform(
         If True, re-raise exceptions instead of silently returning
         unmodified data. Use from MCP/A2A handlers where callers
         explicitly requested transforms.
+    protect_columns : iterable of str, optional
+        Columns passed through byte-for-byte (identity keys, deterministic
+        merge keys). GoldenMatch's own ``__*__`` columns are always protected.
     """
     if not _goldenflow_available():
         if config is not None and getattr(config, "enabled", True):
@@ -190,6 +211,14 @@ def run_transform(
     except Exception:
         # ContextVar lookup is best-effort; pipeline never blocks on it.
         excluded_set = set()
+    # Columns a cleanup must never rewrite: GoldenMatch's own `__*__` columns
+    # (`__source__`, `__row_id__`) and the caller's key columns. Zero-config
+    # profiled a 10-digit NPI key as a phone and rewrote it to E.164, and ran
+    # `category_auto_correct` over `__source__`.
+    excluded_set |= {
+        c for c in _in_frame.columns
+        if (c.startswith("__") and c.endswith("__")) or c in set(protect_columns or ())
+    }
 
     original_columns = list(_in_frame.columns)
     preserved_frame = None

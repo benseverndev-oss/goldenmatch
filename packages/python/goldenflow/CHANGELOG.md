@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Zero-config no longer rewrites identifier columns as phone numbers.** The phone
+  pattern accepts any bare 8-20 digit string, so a column of 10-digit ids (an NPI, an
+  account or record number) profiled as `phone` and every value was reformatted to
+  E.164 (`1234567893` -> `+11234567893`). A value-inferred `phone` is now demoted to
+  `string` when the column name carries an identifier token (`id`, `uid`, `uuid`,
+  `guid`, `key`, `pk`, `npi`, `mrn`, `ssn`, `ein`, `tin`, `account`, `acct`, `sku`;
+  whole words, camelCase split) and no phone token (`phone`, `tel`, `telephone`,
+  `mobile`, `cell`, `fax`). Applies on every profiling path (native, pure Python,
+  GoldenCheck-backed, list/dict) and in the TypeScript port. An explicit config is
+  unaffected.
+
 ## [2.2.0] - 2026-08-15
 
 ### Added

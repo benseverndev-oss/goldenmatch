@@ -5366,6 +5366,7 @@
             "_goldenflow_available",
             "_warn_transform_needs_polars_once",
             "build_transform",
+            "protected_key_columns",
             "run_transform"
           ],
           "imports": [
@@ -11691,8 +11692,10 @@
             "_infer_type",
             "_infer_type_list",
             "_infer_type_list_native_or_pure",
+            "_is_identifier_name",
             "_kernel_profile_dtypes",
             "_map_goldencheck_semantic_type",
+            "_name_tokens",
             "_override_type_by_column_name",
             "_profile_column",
             "_profile_column_native_or_pure",
