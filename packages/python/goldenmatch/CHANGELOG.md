@@ -18,6 +18,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   (`protected_key_columns(config)`). Same strip-and-reattach path as `exclude_columns`.
   At 14M rows the two misprofiled id columns also cost ~5 minutes of `phone_e164`.
 
+- **Weak brand-new clusters take the bulk identity write path.** A cluster below
+  `weak_confidence_threshold` gets a `conflicts_with` edge on its bottleneck pair, and
+  that edge existed only on the per-row path, so every weak brand-new cluster fell back
+  to per-row `upsert_identity` / `upsert_record` / `add_edge` writes. With the default
+  threshold (0.6) that was ~95% of brand-new clusters on a 14M-record run (1,928,349 of
+  2,029,154) and most of the ~18-minute identity write loop. The bulk path now writes the
+  same edge, so `bulk_add_edges` carries `negative_evidence` on SQLite, Postgres (staged
+  and initial-load COPY) and Snowflake; a frame without the column writes NULL as before.
+  Store contents and summary counts are locked to the per-row path by a new test on
+  SQLite and Postgres.
+
+- **The Postgres relationship reconcile stages its edges with COPY and diffs them in
+  SQL.** `reconcile_relationships` built the desired edge set into a Python dict and two
+  sets, read every existing edge back, then inserted with a per-row `executemany`. At
+  14M records (~9.5M relationship edges over three rules) that write was ~680 s, 90% of
+  the relationship pass, and the diff added ~1.9 GB to the post-write-loop peak. It now
+  COPYs the desired edges into a temp table and runs the dedup (last occurrence wins),
+  the unchanged count, the stale delete and the insert as SQL in one transaction. Same
+  contract as before, locked by a new SQLite-vs-Postgres parity test; 2.4x faster on a
+  1M-edge local load, where the remaining cost is index maintenance. SQLite and
+  Snowflake are unchanged. New stage markers split the identity tail:
+  `identity_deterministic_merge`, `identity_relationships`,
+  `identity_rel_groups_query` / `_expand`, `identity_rel_reconcile_copy` / `_write`.
+
 - **A polars input is converted to Arrow once, not twice.** `dedupe_df` moves a polars
   input onto the Arrow lane, and #3003's original-values capture then converted the same
   polars frame to Arrow a second time (polars string views widen to `large_string`), a full

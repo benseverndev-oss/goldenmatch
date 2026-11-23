@@ -1288,6 +1288,14 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
         store.add_edge(e, return_id=False)
 
     def _flush_bulk() -> None:
+        # Stage markers split the write loop: `identity_write_flush` is every
+        # bulk flush (frame build + store writes, with per-table
+        # `identity_flush_*_write` inside); the rest of `identity_write_loop` is
+        # the per-cluster Python that builds the row dicts.
+        with _stage("identity_write_flush"):
+            _flush_bulk_rows()
+
+    def _flush_bulk_rows() -> None:
         """Write the currently-accumulated bulk fast-path rows in one batch each
         (identities -> records -> edges -> events, so the source_records FK is
         satisfied), checkpoint the SQLite WAL, then clear the accumulators. Both
@@ -1314,7 +1322,8 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
             },
             backend="polars",
         ).native
-        store.bulk_upsert_identities(nodes_df)
+        with _stage("identity_flush_nodes_write"):
+            store.bulk_upsert_identities(nodes_df)
         if bulk_record_rows:
             records_df = frame_from_rows(
                 bulk_record_rows,
@@ -1331,7 +1340,8 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                 },
                 backend="polars",
             ).native
-            store.bulk_upsert_records(records_df)
+            with _stage("identity_flush_records_write"):
+                store.bulk_upsert_records(records_df)
         if bulk_edge_rows:
             edges_df = frame_from_rows(
                 bulk_edge_rows,
@@ -1342,6 +1352,7 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                     "kind": "utf8",
                     "score": "float64",
                     "matchkey_name": "utf8",
+                    "negative_evidence": "utf8",
                     "controller_snapshot": "utf8",
                     "run_name": "utf8",
                     "dataset": "utf8",
@@ -1351,7 +1362,8 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                 },
                 backend="polars",
             ).native
-            store.bulk_add_edges(edges_df)
+            with _stage("identity_flush_edges_write"):
+                store.bulk_add_edges(edges_df)
         if bulk_event_rows:
             events_df = frame_from_rows(
                 bulk_event_rows,
@@ -1367,7 +1379,8 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                 },
                 backend="polars",
             ).native
-            store.bulk_emit_events(events_df)
+            with _stage("identity_flush_events_write"):
+                store.bulk_emit_events(events_df)
         # Bound the SQLite WAL across many flushes in one resolve (no-op on
         # Postgres / outside a batch transaction).
         store.bulk_flush_checkpoint()
@@ -1432,21 +1445,22 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                 }
                 unique_entities = list(set(existing.values()))
 
-                # 3a'. Bulk fast-path: brand-new cluster on postgres, no weak
-                # conflict edge -> accumulate rows for bulk flush, skip the
-                # per-row writes for this cluster.
+                # 3a'. Bulk fast-path: brand-new cluster -> accumulate rows for
+                # bulk flush, skip the per-row writes for this cluster. A weak
+                # cluster takes it too: its `conflicts_with` bottleneck edge is one
+                # more bulk edge row (3e below). It used to fall back to the
+                # per-row path, which at 14M records with the default threshold
+                # was ~95% of brand-new clusters.
                 cluster_conf_check = _cluster_confidence(info)
+                weak_bottleneck = info.get("bottleneck_pair")
                 is_weak = (
                     weak_confidence_threshold > 0
                     and cluster_conf_check is not None
                     and cluster_conf_check < weak_confidence_threshold
-                    and info.get("bottleneck_pair") is not None
+                    and isinstance(weak_bottleneck, tuple)
+                    and len(weak_bottleneck) == 2
                 )
-                if (
-                    use_bulk_fast_path
-                    and not unique_entities
-                    and not is_weak
-                ):
+                if use_bulk_fast_path and not unique_entities:
                     entity_id = new_entity_id()
                     now = datetime.now()
                     golden = _golden_record_from_payloads(rowid_to_payload, members, field_strategies)
@@ -1508,6 +1522,7 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                             "kind": EdgeKind.SAME_AS.value,
                             "score": float(score),
                             "matchkey_name": matchkey_name,
+                            "negative_evidence": None,
                             # Edge provenance the per-row add_edge records
                             # (controller_snapshot / actor / trust). SQLite users
                             # have contract tests asserting these on edges, so the
@@ -1525,6 +1540,44 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
                             "recorded_at": now,
                         })
                         summary.edges_added += 1
+                    # 3e (bulk). The weak-bottleneck `conflicts_with` edge the
+                    # per-row path writes for this cluster -- same canonical pair,
+                    # score / trust and negative_evidence payload.
+                    if is_weak and isinstance(weak_bottleneck, tuple):
+                        ba, bb = weak_bottleneck
+                        cra = rowid_to_recid.get(int(ba))
+                        crb = rowid_to_recid.get(int(bb))
+                        if cra and crb:
+                            # `pair_scores` is this cluster's view dict, built
+                            # above; `score_for` would rebuild it. Same lookup:
+                            # canonical (min, max) key against as-given keys.
+                            b_score = pair_scores.get(
+                                (min(int(ba), int(bb)), max(int(ba), int(bb))))
+                            b_score = float(b_score) if b_score is not None else None
+                            cra, crb = canon_record_pair(cra, crb)
+                            bulk_edge_rows.append({
+                                "entity_id": entity_id,
+                                "record_a_id": cra,
+                                "record_b_id": crb,
+                                "kind": EdgeKind.CONFLICTS_WITH.value,
+                                "score": b_score,
+                                "matchkey_name": matchkey_name,
+                                "negative_evidence": json.dumps({
+                                    "reason": "weak_cluster_bottleneck",
+                                    "cluster_confidence": cluster_conf_check,
+                                    "threshold": weak_confidence_threshold,
+                                }),
+                                "controller_snapshot": (
+                                    json.dumps(controller_snapshot)
+                                    if controller_snapshot else None
+                                ),
+                                "run_name": run_name,
+                                "dataset": dataset,
+                                "actor": actor,
+                                "trust": b_score,
+                                "recorded_at": now,
+                            })
+                            summary.conflicts_flagged += 1
                     bulk_event_rows.append({
                         "entity_id": entity_id,
                         "kind": EventKind.CREATED.value,
@@ -1846,13 +1899,16 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
     # relationship pass so edges reconcile onto the merged entities. Entity-level
     # (post-resolve), so it can't cascade probabilistic clusters into giant
     # components the way a pre-cluster record-level merge would. Opt-in; no-op unset.
+    # The two post-passes below each get a stage marker: at scale, everything
+    # identity does after `identity_write_loop` was otherwise unattributed.
     if deterministic_merge_keys:
-        for _dm_field in deterministic_merge_keys:
-            try:
-                _merged, _grps = store.merge_by_shared_field(dataset, _dm_field)
-                summary.deterministic_merged += _merged
-            except Exception as e:  # never fail resolution over the merge
-                log.warning("deterministic merge on %r failed: %s", _dm_field, e)
+        with _stage("identity_deterministic_merge"):
+            for _dm_field in deterministic_merge_keys:
+                try:
+                    _merged, _grps = store.merge_by_shared_field(dataset, _dm_field)
+                    summary.deterministic_merged += _merged
+                except Exception as e:  # never fail resolution over the merge
+                    log.warning("deterministic merge on %r failed: %s", _dm_field, e)
 
     # 3r. Semantic-graph: derive entity<->entity relationship edges from shared
     # non-identity attributes, keyed on the entity_ids just written. A post-pass
@@ -1860,12 +1916,13 @@ def apply_batch(store: IdentityStore, batch: ResolutionBatch) -> ResolveSummary:
     # a warm re-resolve does not duplicate. Opt-in via config.identity.relationships.
     if relationships:
         from goldenmatch.identity.relationships import build_relationships
-        try:
-            summary.relationships_added, summary.relationships_deleted = (
-                build_relationships(store, relationships, dataset)
-            )
-        except Exception as e:  # never fail resolution over the relationship pass
-            log.warning("relationship derivation failed: %s", e)
+        with _stage("identity_relationships"):
+            try:
+                summary.relationships_added, summary.relationships_deleted = (
+                    build_relationships(store, relationships, dataset)
+                )
+            except Exception as e:  # never fail resolution over the relationship pass
+                log.warning("relationship derivation failed: %s", e)
 
     # 4. Split detection: records that previously had an entity_id but did
     # NOT appear in any cluster this run should not be retired here -- they

@@ -54,6 +54,15 @@ SCHEMA_VERSION = 7
 # Relationship field names are interpolated into a JSON path / column expression,
 # so they are validated against this before use (never user free-text at the SQL).
 _SAFE_FIELD = re.compile(r"[A-Za-z0-9_]+")
+# identity_relationships' secondary indexes, as the schema creates them. The
+# Postgres reconcile drops and rebuilds them around an insert at least as large
+# as the table (and at least _REL_INDEX_DEFER_MIN_ROWS rows).
+_REL_SECONDARY_INDEXES = (
+    ("idx_rel_a", "entity_a_id"),
+    ("idx_rel_b", "entity_b_id"),
+    ("idx_rel_kind", "kind"),
+)
+_REL_INDEX_DEFER_MIN_ROWS = 100_000
 
 
 def _rel_value_expr(raw: str, transform: str | None, backend: str) -> str:
@@ -1237,24 +1246,24 @@ class IdentityStore:
             # record_b_id, kind, run_name) constraint, matching the per-row
             # ``add_edge`` (which also uses INSERT OR IGNORE). Carries
             # controller_snapshot / actor / trust (SQLite has contract tests
-            # asserting edge provenance); field_scores / negative_evidence stay
-            # NULL because the per-row brand-new same_as edge does not set them
-            # either.
+            # asserting edge provenance) and negative_evidence (the weak-cluster
+            # conflicts_with edge sets it; a frame without the column writes
+            # NULL). field_scores stays NULL: no brand-new edge sets it.
             cols = [
                 "entity_id", "record_a_id", "record_b_id", "kind", "score",
-                "matchkey_name", "controller_snapshot", "run_name", "dataset",
-                "actor", "trust", "recorded_at",
+                "matchkey_name", "negative_evidence", "controller_snapshot",
+                "run_name", "dataset", "actor", "trust", "recorded_at",
             ]
             self._sqlite_stage("_stage_evidence_edges", cols, df)
             self._conn.execute(
                 """
                 INSERT OR IGNORE INTO evidence_edges
                     (entity_id, record_a_id, record_b_id, kind, score,
-                     matchkey_name, controller_snapshot, run_name, dataset,
-                     actor, trust, recorded_at)
+                     matchkey_name, negative_evidence, controller_snapshot,
+                     run_name, dataset, actor, trust, recorded_at)
                 SELECT entity_id, record_a_id, record_b_id, kind, score,
-                       matchkey_name, controller_snapshot, run_name, dataset,
-                       actor, trust, recorded_at
+                       matchkey_name, negative_evidence, controller_snapshot,
+                       run_name, dataset, actor, trust, recorded_at
                 FROM _stage_evidence_edges
                 """
             )
@@ -1270,20 +1279,27 @@ class IdentityStore:
         # path and the per-row ``add_edge`` -- evidence_edges has these columns
         # and the per-row Postgres path writes them, so the bulk path must too or
         # edge provenance is silently lost on the brand-new-cluster route.
+        # negative_evidence (JSONB) is carried for the weak-cluster
+        # conflicts_with edge; a frame without the column writes NULL.
         cols = [
             "entity_id", "record_a_id", "record_b_id", "kind", "score",
-            "matchkey_name", "controller_snapshot", "run_name", "dataset",
-            "actor", "trust", "recorded_at",
+            "matchkey_name", "negative_evidence", "controller_snapshot",
+            "run_name", "dataset", "actor", "trust", "recorded_at",
         ]
         if self._pg_initial_load:
             self._pg_copy_direct(
                 "evidence_edges",
                 "entity_id, record_a_id, record_b_id, kind, score, "
-                "matchkey_name, controller_snapshot, run_name, dataset, "
-                "actor, trust, recorded_at",
+                "matchkey_name, negative_evidence, controller_snapshot, "
+                "run_name, dataset, actor, trust, recorded_at",
                 cols, df,
             )
             return
+        from goldenmatch.core.frame import to_frame  # noqa: PLC0415
+
+        if "negative_evidence" not in to_frame(df).columns:
+            import polars as pl  # noqa: PLC0415
+            df = df.with_columns(pl.lit(None, pl.Utf8).alias("negative_evidence"))
         conn: Any = self._conn
         with conn.transaction(), conn.cursor() as cur:
             cur.execute(
@@ -1295,6 +1311,7 @@ class IdentityStore:
                     kind TEXT,
                     score DOUBLE PRECISION,
                     matchkey_name TEXT,
+                    negative_evidence JSONB,
                     controller_snapshot JSONB,
                     run_name TEXT,
                     dataset TEXT,
@@ -1307,8 +1324,8 @@ class IdentityStore:
             with cur.copy(
                 "COPY _stage_evidence_edges "
                 "(entity_id, record_a_id, record_b_id, kind, score, "
-                "matchkey_name, controller_snapshot, run_name, dataset, "
-                "actor, trust, recorded_at) FROM STDIN"
+                "matchkey_name, negative_evidence, controller_snapshot, "
+                "run_name, dataset, actor, trust, recorded_at) FROM STDIN"
             ) as copy:
                 for row in df.select(cols).iter_rows():
                     copy.write_row(row)
@@ -1316,11 +1333,11 @@ class IdentityStore:
                 """
                 INSERT INTO evidence_edges
                     (entity_id, record_a_id, record_b_id, kind, score,
-                     matchkey_name, controller_snapshot, run_name, dataset,
-                     actor, trust, recorded_at)
+                     matchkey_name, negative_evidence, controller_snapshot,
+                     run_name, dataset, actor, trust, recorded_at)
                 SELECT entity_id, record_a_id, record_b_id, kind, score,
-                       matchkey_name, controller_snapshot, run_name, dataset,
-                       actor, trust, recorded_at
+                       matchkey_name, negative_evidence, controller_snapshot,
+                       run_name, dataset, actor, trust, recorded_at
                 FROM _stage_evidence_edges
                 ON CONFLICT (entity_id, record_a_id, record_b_id, kind,
                              run_name) DO NOTHING
@@ -2306,51 +2323,47 @@ class IdentityStore:
             raise NotImplementedError("reconcile_relationships: not supported on mongo")
         if self._backend == "snowflake":
             return self._sf.reconcile_relationships(dataset, kind, desired)
-        want: dict[tuple, tuple] = {}
-        for a, b, k, field, val, _ds in desired:
-            if a is None or b is None or a == b:
-                continue
-            lo, hi = (a, b) if a < b else (b, a)
-            want[(lo, hi, k, val)] = (lo, hi, k, field, val, dataset)
-        existing = {
-            (r["entity_a_id"], r["entity_b_id"], r["kind"], r["shared_value"])
-            for r in self._fetchall(
-                "SELECT entity_a_id, entity_b_id, kind, shared_value "
-                "FROM identity_relationships WHERE dataset = ? AND kind = ?",
-                (dataset, kind),
-            )
-        }
-        want_keys = set(want)
-        ins_keys = want_keys - existing
-        del_keys = existing - want_keys
-        unchanged = len(want_keys & existing)
-        if not ins_keys and not del_keys:
-            return (0, 0, unchanged)
-        ins_rows = [want[k] for k in ins_keys]
-        # del key = (a, b, kind, value); DELETE binds (dataset, a, b, kind, value).
-        del_rows = [(dataset, a, b, k, v) for (a, b, k, v) in del_keys]
-        del_sql = (
-            "DELETE FROM identity_relationships WHERE dataset = ? "
-            "AND entity_a_id = ? AND entity_b_id = ? AND kind = ? AND shared_value = ?"
-        )
         if self._backend == "postgres":
-            ins_sql = (
-                "INSERT INTO identity_relationships "
-                "(entity_a_id, entity_b_id, kind, field, shared_value, dataset) "
-                "VALUES (%s, %s, %s, %s, %s, %s) "
-                "ON CONFLICT (entity_a_id, entity_b_id, kind, shared_value) DO NOTHING"
+            return self._reconcile_relationships_pg(dataset, kind, desired)
+        from goldenmatch.core.bench import stage  # noqa: PLC0415
+
+        # SQLite: the Python diff below is the reference the Postgres path is
+        # parity-tested against (test_relationships_reconcile_postgres.py).
+        with stage("identity_rel_reconcile_diff"):
+            want: dict[tuple, tuple] = {}
+            for a, b, k, field, val, _ds in desired:
+                if a is None or b is None or a == b:
+                    continue
+                lo, hi = (a, b) if a < b else (b, a)
+                want[(lo, hi, k, val)] = (lo, hi, k, field, val, dataset)
+            existing = {
+                (r["entity_a_id"], r["entity_b_id"], r["kind"], r["shared_value"])
+                for r in self._fetchall(
+                    "SELECT entity_a_id, entity_b_id, kind, shared_value "
+                    "FROM identity_relationships WHERE dataset = ? AND kind = ?",
+                    (dataset, kind),
+                )
+            }
+            want_keys = set(want)
+            ins_keys = want_keys - existing
+            del_keys = existing - want_keys
+            unchanged = len(want_keys & existing)
+            if not ins_keys and not del_keys:
+                return (0, 0, unchanged)
+            ins_rows = [want[k] for k in ins_keys]
+            # del key = (a, b, kind, value); DELETE binds (dataset, a, b, kind, value).
+            del_rows = [(dataset, a, b, k, v) for (a, b, k, v) in del_keys]
+        with stage("identity_rel_reconcile_write"):
+            del_sql = (
+                "DELETE FROM identity_relationships WHERE dataset = ? "
+                "AND entity_a_id = ? AND entity_b_id = ? AND kind = ? AND shared_value = ?"
             )
-            with self._conn.transaction(), self._conn.cursor() as cur:
-                if del_rows:
-                    cur.executemany(self._pg_sql(del_sql), del_rows)
-                if ins_rows:
-                    cur.executemany(ins_sql, ins_rows)
-        else:  # sqlite: one transaction (savepoint-safe if already inside one)
             ins_sql = (
                 "INSERT OR IGNORE INTO identity_relationships "
                 "(entity_a_id, entity_b_id, kind, field, shared_value, dataset) "
                 "VALUES (?, ?, ?, ?, ?, ?)"
             )
+            # One transaction (savepoint-safe if already inside one).
             outer = self._conn.in_transaction
             if not outer:
                 self._conn.execute("BEGIN")
@@ -2366,6 +2379,105 @@ class IdentityStore:
                     self._conn.execute("ROLLBACK")
                 raise
         return (len(ins_keys), len(del_keys), unchanged)
+
+    def _reconcile_relationships_pg(
+        self, dataset: str | None, kind: str, desired: Iterable[tuple],
+    ) -> tuple[int, int, int]:
+        """Postgres ``reconcile_relationships``: COPY the desired edges into a
+        temp table and diff + apply in SQL, in one transaction.
+
+        At scale the Python diff (a dict + two sets over every desired edge) and a
+        per-row ``executemany`` of the inserts were the whole relationship pass --
+        ~680 s and ~1.9 GB for ~9.5M edges. Same contract as the SQLite path:
+        endpoints canonicalized (a < b), self/null edges skipped, the LAST
+        occurrence of a duplicate key wins, deletes and the ``existing`` set scoped
+        to ``dataset`` + ``kind``, and the returned counts computed the same way.
+        """
+        from goldenmatch.core.bench import stage  # noqa: PLC0415
+
+        key_match = (
+            "r.entity_a_id = w.entity_a_id AND r.entity_b_id = w.entity_b_id "
+            "AND r.kind = w.kind AND r.shared_value = w.shared_value"
+        )
+        scope = "r.dataset = %s AND r.kind = %s"
+        conn: Any = self._conn
+        with self.bulk_copy_barrier(), conn.transaction(), conn.cursor() as cur:
+            cur.execute(
+                "CREATE TEMP TABLE _stage_rel (ord BIGINT, entity_a_id TEXT, "
+                "entity_b_id TEXT, kind TEXT, field TEXT, shared_value TEXT) "
+                "ON COMMIT DROP"
+            )
+            with stage("identity_rel_reconcile_copy"), cur.copy(
+                "COPY _stage_rel (ord, entity_a_id, entity_b_id, kind, field, "
+                "shared_value) FROM STDIN"
+            ) as copy:
+                for i, (a, b, k, field, val, _ds) in enumerate(desired):
+                    if a is None or b is None or a == b:
+                        continue
+                    lo, hi = (a, b) if a < b else (b, a)
+                    copy.write_row((i, lo, hi, k, field, val))
+            with stage("identity_rel_reconcile_write"):
+                # Last occurrence of a key wins (the reference builds a dict).
+                cur.execute(
+                    "CREATE TEMP TABLE _want ON COMMIT DROP AS "
+                    "SELECT DISTINCT ON (entity_a_id, entity_b_id, kind, shared_value) "
+                    "entity_a_id, entity_b_id, kind, field, shared_value FROM _stage_rel "
+                    "ORDER BY entity_a_id, entity_b_id, kind, shared_value, ord DESC"
+                )
+                cur.execute("SELECT count(*) FROM _want")
+                n_want = cur.fetchone()[0]
+                cur.execute(
+                    "SELECT count(*) FROM _want w JOIN identity_relationships r "
+                    f"ON {key_match} WHERE {scope}",
+                    (dataset, kind),
+                )
+                unchanged = cur.fetchone()[0]
+                cur.execute(
+                    f"SELECT count(*) FROM identity_relationships r WHERE {scope}",
+                    (dataset, kind),
+                )
+                if n_want == unchanged == cur.fetchone()[0]:
+                    # Warm re-run with nothing to change: every desired edge
+                    # exists and nothing is stale, so skip both anti-joins.
+                    return (0, 0, unchanged)
+                cur.execute(
+                    f"DELETE FROM identity_relationships r WHERE {scope} AND NOT EXISTS "
+                    f"(SELECT 1 FROM _want w WHERE {key_match})",
+                    (dataset, kind),
+                )
+                deleted = cur.rowcount
+                # A large insert relative to the table (a first load) pays more
+                # to maintain the secondary indexes row by row than to rebuild
+                # them once afterwards: drop, insert, recreate, all inside this
+                # transaction (readers of the table wait on it). Small,
+                # incremental reconciles keep the indexes in place.
+                n_insert = n_want - unchanged
+                defer_indexes = False
+                if n_insert >= _REL_INDEX_DEFER_MIN_ROWS:
+                    cur.execute("SELECT count(*) FROM identity_relationships")
+                    defer_indexes = n_insert >= cur.fetchone()[0]
+                if defer_indexes:
+                    for name, _col in _REL_SECONDARY_INDEXES:
+                        cur.execute(f"DROP INDEX IF EXISTS {name}")
+                cur.execute(
+                    "INSERT INTO identity_relationships "
+                    "(entity_a_id, entity_b_id, kind, field, shared_value, dataset) "
+                    "SELECT w.entity_a_id, w.entity_b_id, w.kind, w.field, "
+                    "w.shared_value, %s FROM _want w WHERE NOT EXISTS "
+                    f"(SELECT 1 FROM identity_relationships r WHERE {scope} "
+                    f"AND {key_match}) "
+                    "ON CONFLICT (entity_a_id, entity_b_id, kind, shared_value) "
+                    "DO NOTHING",
+                    (dataset, dataset, kind),
+                )
+            if defer_indexes:
+                with stage("identity_rel_index_rebuild"):
+                    for name, col in _REL_SECONDARY_INDEXES:
+                        cur.execute(
+                            f"CREATE INDEX IF NOT EXISTS {name} "
+                            f"ON identity_relationships({col})"
+                        )
+        return (n_want - unchanged, deleted, unchanged)
 
     def get_relationships(self, entity_id: str) -> list[dict[str, Any]]:
         """Every relationship edge touching ``entity_id`` (either endpoint),
