@@ -72,17 +72,31 @@ def _run(store) -> list:
     return out
 
 
-def test_postgres_reconcile_matches_sqlite(tmp_path, pg_url: str) -> None:
+@pytest.mark.parametrize("defer_indexes", [False, True], ids=["keep-indexes", "defer-indexes"])
+def test_postgres_reconcile_matches_sqlite(
+    tmp_path, pg_url: str, monkeypatch, defer_indexes: bool,
+) -> None:
+    import goldenmatch.identity.store as store_mod
     from goldenmatch.identity.store import IdentityStore
 
+    # defer-indexes forces the drop / insert / rebuild branch on every step that
+    # inserts (the real threshold is 100k rows); it must not change the result.
+    monkeypatch.setattr(store_mod, "_REL_INDEX_DEFER_MIN_ROWS", 1 if defer_indexes else 10**12)
     sqlite = IdentityStore(path=str(tmp_path / "ref.db"))
     pg = IdentityStore(backend="postgres", connection=pg_url)
     try:
         ref = _run(sqlite)
         got = _run(pg)
+        indexes = {
+            r["indexname"] for r in pg._fetchall(
+                "SELECT indexname FROM pg_indexes WHERE tablename = 'identity_relationships'",
+                (),
+            )
+        }
     finally:
         sqlite.close()
         pg.close()
+    assert {name for name, _ in store_mod._REL_SECONDARY_INDEXES} <= indexes
     assert [r for r, _ in ref][:2] == [(3, 0, 0), (0, 0, 3)]  # sanity on the reference
     for step, ((r_res, r_rows), (g_res, g_rows)) in enumerate(zip(ref, got), 1):
         assert g_res == r_res, f"step {step}: counts {g_res} != {r_res}"

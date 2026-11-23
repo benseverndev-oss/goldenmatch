@@ -54,6 +54,15 @@ SCHEMA_VERSION = 7
 # Relationship field names are interpolated into a JSON path / column expression,
 # so they are validated against this before use (never user free-text at the SQL).
 _SAFE_FIELD = re.compile(r"[A-Za-z0-9_]+")
+# identity_relationships' secondary indexes, as the schema creates them. The
+# Postgres reconcile drops and rebuilds them around an insert at least as large
+# as the table (and at least _REL_INDEX_DEFER_MIN_ROWS rows).
+_REL_SECONDARY_INDEXES = (
+    ("idx_rel_a", "entity_a_id"),
+    ("idx_rel_b", "entity_b_id"),
+    ("idx_rel_kind", "kind"),
+)
+_REL_INDEX_DEFER_MIN_ROWS = 100_000
 
 
 def _rel_value_expr(raw: str, transform: str | None, backend: str) -> str:
@@ -2435,6 +2444,19 @@ class IdentityStore:
                     (dataset, kind),
                 )
                 deleted = cur.rowcount
+                # A large insert relative to the table (a first load) pays more
+                # to maintain the secondary indexes row by row than to rebuild
+                # them once afterwards: drop, insert, recreate, all inside this
+                # transaction (readers of the table wait on it). Small,
+                # incremental reconciles keep the indexes in place.
+                n_insert = n_want - unchanged
+                defer_indexes = False
+                if n_insert >= _REL_INDEX_DEFER_MIN_ROWS:
+                    cur.execute("SELECT count(*) FROM identity_relationships")
+                    defer_indexes = n_insert >= cur.fetchone()[0]
+                if defer_indexes:
+                    for name, _col in _REL_SECONDARY_INDEXES:
+                        cur.execute(f"DROP INDEX IF EXISTS {name}")
                 cur.execute(
                     "INSERT INTO identity_relationships "
                     "(entity_a_id, entity_b_id, kind, field, shared_value, dataset) "
@@ -2446,6 +2468,13 @@ class IdentityStore:
                     "DO NOTHING",
                     (dataset, dataset, kind),
                 )
+            if defer_indexes:
+                with stage("identity_rel_index_rebuild"):
+                    for name, col in _REL_SECONDARY_INDEXES:
+                        cur.execute(
+                            f"CREATE INDEX IF NOT EXISTS {name} "
+                            f"ON identity_relationships({col})"
+                        )
         return (n_want - unchanged, deleted, unchanged)
 
     def get_relationships(self, entity_id: str) -> list[dict[str, Any]]:
