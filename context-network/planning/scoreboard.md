@@ -5,18 +5,18 @@
 [north-star-roadmap.md](./north-star-roadmap.md): *is GoldenMatch becoming the
 tool developers reach for by default?* Trend > snapshot.
 
-**Latest: 2026-11-26** (change vs the previous snapshot)
+**Latest: 2026-11-27** (change vs the previous snapshot)
 
 | Signal | Now | Change | North Star reading |
 |---|---|---|---|
 | **Stranger issues + PRs, ever** | 5 | 5 (▬0) | someone reached for it† |
-| **`goldenmatch` desktop downloads (30d)** | 35 | 35 (▼-1) | people installing it§ |
-| `goldenmatch` downloads (30d) | 1.2k | 1.2k (▼-4) | reach, mostly CI§ |
+| **`goldenmatch` desktop downloads (30d)** | 34 | 34 (▼-1) | people installing it§ |
+| `goldenmatch` downloads (30d) | 1.2k | 1.2k (▼-10) | reach, mostly CI§ |
 | GitHub stars | 140 | 140 (▬0) | discovery momentum |
 | Forks | 18 | 18 (▬0) | intent-to-use |
-| Time-to-first-success | 28.4s · F1 1.00 | ▲+0.3s | zero-config friction‡ |
-| PyPI downloads (30d, whole suite) | 14.3k | 14.3k (▼-373) | CI-dominated, not adoption§ |
-| npm downloads (30d, whole suite) | 1.1k | 1.1k (▲+3) | CI-dominated, not adoption§ |
+| Time-to-first-success | 26.2s · F1 1.00 | ▼-2.2s | zero-config friction‡ |
+| PyPI downloads (30d, whole suite) | — | — | CI-dominated, not adoption§ |
+| npm downloads (30d, whole suite) | 1.0k | 1.0k (▼-29) | CI-dominated, not adoption§ |
 | Open issues, non-maintainer | 2 | 2 (▬0) | raw, includes promo accounts |
 
 † Issues and PRs, open or closed, from accounts that are not the maintainer,
@@ -40,6 +40,7 @@ the probe itself did not run. The two are never merged.
 
 | Date | Strangers | GM desktop 30d | GM 30d | Stars | Forks | Suite PyPI 30d | Suite npm 30d | TTFS |
 |---|---|---|---|---|---|---|---|---|
+| 2026-11-27 | 5 | 34 | 1.2k | 140 | 18 | — | 1.0k | 26.2s |
 | 2026-11-26 | 5 | 35 | 1.2k | 140 | 18 | 14.3k | 1.1k | 28.4s |
 | 2026-11-25 | 5 | 36 | 1.2k | 140 | 18 | 14.7k | 1.0k | 28.1s |
 | 2026-11-24 | 5 | 37 | 1.3k | 139 | 18 | 15.1k | 1.0k | 28.8s |
@@ -55,7 +56,6 @@ the probe itself did not run. The two are never merged.
 | 2026-11-14 | 4 | 32 | 1.2k | 138 | 18 | 13.3k | 1.0k | 27.2s |
 | 2026-11-13 | 4 | 33 | 1.2k | 138 | 18 | 13.4k | 956 | 25.5s |
 | 2026-11-12 | 4 | 35 | 1.2k | 138 | 18 | 27.8k | 960 | 22.8s |
-| 2026-11-11 | 4 | 36 | 1.2k | 136 | 18 | 27.8k | 966 | 27.9s |
 
 ## The gates (from the roadmap)
 
