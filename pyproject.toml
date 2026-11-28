@@ -120,7 +120,7 @@ dev = [
     # above) and the goldenmatch coverage floors catch it. Test-only cap: the
     # `goldenmatch[snowflake]` extra a user installs is unaffected. Lift it when
     # a fakesnow release imports cleanly on connector 5.
-    "snowflake-connector-python<5",
+    "snowflake-connector-python<6",
     # transitive test deps surfaced across workspace packages:
     "httpx>=0.27",  # required by starlette.testclient (used by goldenpipe tests)
 ]
